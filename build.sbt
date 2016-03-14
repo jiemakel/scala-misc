@@ -14,7 +14,8 @@ libraryDependencies ++= Seq(
 "com.typesafe.scala-logging" %% "scala-logging" % "3.1.0",
 "ch.qos.logback" % "logback-classic" % "1.1.3",
 "org.slf4j" % "log4j-over-slf4j" % "1.7.12",
-"cc.mallet" % "mallet" % "2.0.8-RC2"
+"cc.mallet" % "mallet" % "2.0.8-RC2",
+"info.freelibrary" % "freelib-marc4j" % "2.6.6"
 )
 
 resolvers ++= Seq(
