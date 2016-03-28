@@ -23,3 +23,11 @@ resolvers ++= Seq(
 )
 
 fork in run := true
+
+assemblyMergeStrategy in assembly := {
+  case "checkstyle/checkstyle.xml" => MergeStrategy.first
+  case x =>
+    val oldStrategy = (assemblyMergeStrategy in assembly).value
+    oldStrategy(x)
+}
+
