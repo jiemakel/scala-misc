@@ -15,10 +15,15 @@ import scala.collection.mutable.HashMap
 import scala.collection.mutable.HashSet
 import java.io.PrintWriter
 import java.io.File
+import scala.concurrent.Future
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.Await
+import scala.concurrent.duration._
+import scala.xml.pull.EvEntityRef
+import scala.xml.parsing.XhtmlEntities
 
 object METSALTO2Text {
   
-      
   def get(key: String)(implicit attrs: MetaData): Option[String] = {
     if (attrs(key)!=null && attrs(key)(0).text!="") Some(attrs(key)(0).text.trim)
     else None
@@ -35,15 +40,16 @@ object METSALTO2Text {
     f #:: (if (f.isDirectory) f.listFiles().toStream.flatMap(getFileTree) 
       else Stream.empty)
       
-  def main(args: Array[String]): Unit = {
-    for (metsFile <- getFileTree(new File(args(0))) if (metsFile.getName().endsWith("_mets.xml"))) {
-      println("Processing: "+metsFile.getParent)
-      new File(metsFile.getParent+"/extracted").mkdir()
-      val prefix = metsFile.getParent+"/extracted/"+metsFile.getParentFile.getName+'_'
+  def process(directory: File): Future[Unit] = Future {
+      println("Processing: "+directory)
+      new File(directory.getPath+"/extracted").mkdir()
+      val prefix = directory.getPath+"/extracted/"+directory.getName+'_'
       val textBlocks = new HashMap[String,String]
+      val seenTextBlocks = new HashSet[String]
       val composedBlocks = new HashMap[String,HashSet[String]]
+      val seenComposedBlocks = new HashSet[String]
       var break = false
-      for (file <- new File(metsFile.getParent+"/alto").listFiles) {
+      for (file <- new File(directory.getPath+"/alto").listFiles) {
         val xml = new XMLEventReader(Source.fromFile(file,"UTF-8"))
         var composedBlock: Option[HashSet[String]] = None
         while (xml.hasNext) xml.next match {
@@ -70,7 +76,7 @@ object METSALTO2Text {
           case _ =>
         }
       }
-      val xml = new XMLEventReader(Source.fromFile(metsFile,"UTF-8"))
+      val xml = new XMLEventReader(Source.fromFile(directory.getPath+"/"+directory.getName+"_mets.xml","UTF-8"))
       val articleMetadata: HashMap[String,String] = new HashMap
       var advertisements = 0
       var titleSections = 0
@@ -90,6 +96,10 @@ object METSALTO2Text {
               metadata+= indent + "<" + label + attrsToString(attrs) + ">\n"
               indent += "  "
             case EvText(text) => if (text.trim!="") metadata += indent + text.trim + "\n"
+            case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
+              case Some(chr) => metadata += chr
+              case _ => metadata += er.entity
+            }
             case EvElemEnd(_,"mods") => break = true
             case EvElemEnd(_, label) => 
               indent = indent.substring(0,indent.length-2)
@@ -125,11 +135,15 @@ object METSALTO2Text {
               val areaId = attrs("BEGIN")(0).text
               if (textBlocks.contains(areaId)) {
                 pages.add(Integer.parseInt(areaId.substring(1,areaId.indexOf('_'))))
-                pw.println(textBlocks.remove(areaId).get)
-              }
-              else for (block <- composedBlocks.remove(areaId).get) {
-                pages.add(Integer.parseInt(block.substring(1,block.indexOf('_'))))
-                pw.println(textBlocks.remove(block).get)
+                pw.println(textBlocks(areaId))
+                seenTextBlocks.add(areaId)
+              } else {
+                for (block <- composedBlocks(areaId)) {
+                  pages.add(Integer.parseInt(block.substring(1,block.indexOf('_'))))
+                  pw.println(textBlocks(block))
+                  seenTextBlocks.add(block)
+                }
+                seenComposedBlocks.add(areaId)
               }
             }
             case EvElemEnd(_,"div") => depth -= 1
@@ -153,6 +167,7 @@ object METSALTO2Text {
         case _ =>  
       }
       var blocks = 0
+      seenComposedBlocks.foreach(b=>composedBlocks.remove(b))
       for (block <- composedBlocks.values) {
         val pages = new HashSet[Int]
         blocks += 1
@@ -166,6 +181,7 @@ object METSALTO2Text {
         }
         pw.close()
       }
+      seenTextBlocks.foreach(b=>textBlocks.remove(b))
       if (!textBlocks.isEmpty) {
         val pageBlocks = new HashMap[Int,HashSet[String]]
         for (textBlock <- textBlocks.keys) pageBlocks.getOrElseUpdate(Integer.parseInt(textBlock.substring(1,textBlock.indexOf('_'))),new HashSet[String]).add(textBlock)
@@ -178,6 +194,18 @@ object METSALTO2Text {
           pw.close()
         }
       }
-    }
+      directory.getPath
+  }
+      
+  def main(args: Array[String]): Unit = {
+    val f = Future.sequence(for (dir<-args.toSeq;metsFile <- getFileTree(new File(dir)); if (metsFile.getName().endsWith("_mets.xml"))) yield {
+      val f = process(metsFile.getParentFile)
+      f.onFailure { case t => println("An error has occured processing "+metsFile.getParentFile+": " + t.getMessage) }
+      f.onSuccess { case _ => println("Processed: "+metsFile.getParentFile) }
+      f
+    })
+    f.onFailure { case t => println("Processing aborted due to an error.") }
+    f.onSuccess { case _ => println("Successfully processed all files.") }
+    Await.result(f, Duration.Inf)
   }
 }
