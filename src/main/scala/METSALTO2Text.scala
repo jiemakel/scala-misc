@@ -40,7 +40,8 @@ object METSALTO2Text {
     f #:: (if (f.isDirectory) f.listFiles().toStream.flatMap(getFileTree) 
       else Stream.empty)
       
-  def process(directory: File): Future[Unit] = Future {
+  def process(metsFile: File): Future[Unit] = Future {
+      val directory = metsFile.getParentFile
       println("Processing: "+directory)
       new File(directory.getPath+"/extracted").mkdir()
       val prefix = directory.getPath+"/extracted/"+directory.getName+'_'
@@ -50,7 +51,8 @@ object METSALTO2Text {
       val seenComposedBlocks = new HashSet[String]
       var break = false
       for (file <- new File(directory.getPath+"/alto").listFiles) {
-        val xml = new XMLEventReader(Source.fromFile(file,"UTF-8"))
+        val s = Source.fromFile(file,"UTF-8")
+        val xml = new XMLEventReader(s)
         var composedBlock: Option[HashSet[String]] = None
         while (xml.hasNext) xml.next match {
           case EvElemStart(_,"ComposedBlock",attrs,_) => 
@@ -75,8 +77,10 @@ object METSALTO2Text {
             textBlocks.put(textBlock,text)
           case _ =>
         }
+        s.close()
       }
-      val xml = new XMLEventReader(Source.fromFile(directory.getPath+"/"+directory.getName+"_mets.xml","UTF-8"))
+      val s = Source.fromFile(directory.getPath+"/"+directory.getName+"_mets.xml","UTF-8")
+      val xml = new XMLEventReader(s)
       val articleMetadata: HashMap[String,String] = new HashMap
       var advertisements = 0
       var titleSections = 0
@@ -198,12 +202,12 @@ object METSALTO2Text {
           pw.close()
         }
       }
-      directory.getPath
+      s.close()
   }
       
   def main(args: Array[String]): Unit = {
     val f = Future.sequence(for (dir<-args.toSeq;metsFile <- getFileTree(new File(dir)); if (metsFile.getName().endsWith("_mets.xml"))) yield {
-      val f = process(metsFile.getParentFile)
+      val f = process(metsFile)
       f.onFailure { case t => println("An error has occured processing "+metsFile.getParentFile+": " + t.getMessage) }
       f.onSuccess { case _ => println("Processed: "+metsFile.getParentFile) }
       f
