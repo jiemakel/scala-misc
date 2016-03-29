@@ -81,7 +81,7 @@ object METSALTO2Text {
       var advertisements = 0
       var titleSections = 0
       while (xml.hasNext) xml.next match {
-        case EvElemStart(_,"dmdSec", attrs, _) if attrs("ID")(0).text.startsWith("MODSMD_ARTICLE") =>
+        case EvElemStart(_,"dmdSec", attrs, _) if attrs("ID")(0).text.startsWith("MODSMD_ARTICLE") || attrs("ID")(0).text.startsWith("MODSMD_CHAP") || attrs("ID")(0).text.startsWith("MODSMD_LIST") =>
           val article = attrs("ID")(0).text
           break = false
           while (xml.hasNext && !break) xml.next match {
@@ -106,15 +106,18 @@ object METSALTO2Text {
               metadata+=indent + "</"+label+">\n" 
           }
           articleMetadata.put(article,metadata)
-        case EvElemStart(_,"div", attrs, _) if (attrs("TYPE")(0).text=="ARTICLE" || attrs("TYPE")(0).text=="ADVERTISEMENT"|| attrs("TYPE")(0).text=="TITLE_SECTION") => 
+        case EvElemStart(_,"div", attrs, _) if (attrs("TYPE")(0).text=="ARTICLE" || attrs("TYPE")(0).text=="TABLE_OF_CONTENTS" || attrs("TYPE")(0).text=="LIST" || attrs("TYPE")(0).text=="CONTRIBUTION" || attrs("TYPE")(0).text=="CHAPTER" || attrs("TYPE")(0).text=="ILLUSTRATION" || attrs("TYPE")(0).text=="ADVERTISEMENT" || attrs("TYPE")(0).text=="TABLE" || attrs("TYPE")(0).text=="TITLE_SECTION") => 
           val atype = attrs("TYPE")(0).text.toLowerCase
-          val articleNumber = if (atype=="advertisement") {
-            advertisements += 1          
-            ""+advertisements
-          } else if (atype=="title_section") {
-            titleSections += 1          
-            ""+titleSections
-          } else attrs("DMDID")(0).text.substring(14)
+          val articleNumber = atype match {
+            case "advertisement" => 
+              advertisements += 1          
+              ""+advertisements
+            case "title_section" =>
+              titleSections += 1          
+              ""+titleSections
+            case "article" => attrs("DMDID")(0).text.substring(14)
+            case "chapter" | "list" | "table" | "illustration" | "contribution" | "table_of_contents" => attrs("DMDID")(0).text.substring(11)
+          }
           val pw = new PrintWriter(new File(prefix+atype+'_'+articleNumber+".txt"))
           var depth = 1
           val pages = new HashSet[Int]
@@ -123,6 +126,7 @@ object METSALTO2Text {
               depth += 1
               attrs("TYPE")(0).text match {
                 case "TITLE" => pw.append("# ")
+                case "AUTHOR" => pw.append("## ")
                 case "OVERLINE" => 
                   val breakDepth = depth - 1
                   while (xml.hasNext && depth!=breakDepth) xml.next match {
@@ -133,8 +137,8 @@ object METSALTO2Text {
               }
             case EvElemStart(_,"area",attrs,_) => {
               val areaId = attrs("BEGIN")(0).text
+              pages.add(Integer.parseInt(areaId.substring(1,areaId.indexOf('_'))))
               if (textBlocks.contains(areaId)) {
-                pages.add(Integer.parseInt(areaId.substring(1,areaId.indexOf('_'))))
                 pw.println(textBlocks(areaId))
                 seenTextBlocks.add(areaId)
               } else {
@@ -171,14 +175,14 @@ object METSALTO2Text {
       for (block <- composedBlocks.values) {
         val pages = new HashSet[Int]
         blocks += 1
-        var pw = new PrintWriter(new File(prefix+"other_texts_"+blocks+"_metadata.xml"))
-        pw.println("<metadata>\n<blocks>"+block.toSeq.sorted.mkString(",")+"</blocks>\n</metadata>")
-        pw.close()
-        pw = new PrintWriter(new File(prefix+"other_texts_"+blocks+".txt"))
+        var pw = new PrintWriter(new File(prefix+"other_texts_"+blocks+".txt"))
         for (textBlock <- block) {
           pages.add(Integer.parseInt(textBlock.substring(1,textBlock.indexOf('_'))))
           pw.println(textBlocks.remove(textBlock).get)
         }
+        pw.close()
+        pw = new PrintWriter(new File(prefix+"other_texts_"+blocks+"_metadata.xml"))
+        pw.println("<metadata>\n<blocks>"+block.toSeq.sorted.mkString(",")+"</blocks>\n<pages>"+pages.toSeq.sorted.mkString(",")+"</pages>\n</metadata>")
         pw.close()
       }
       seenTextBlocks.foreach(b=>textBlocks.remove(b))
