@@ -79,7 +79,7 @@ object METSALTO2Text {
         }
         s.close()
       }
-      val s = Source.fromFile(directory.getPath+"/"+directory.getName+"_mets.xml","UTF-8")
+      val s = Source.fromFile(metsFile,"UTF-8")
       val xml = new XMLEventReader(s)
       val articleMetadata: HashMap[String,String] = new HashMap
       var advertisements = 0
