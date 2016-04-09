@@ -21,6 +21,8 @@ import scala.concurrent.Await
 import scala.concurrent.duration._
 import scala.xml.pull.EvEntityRef
 import scala.xml.parsing.XhtmlEntities
+import scala.collection.mutable.Buffer
+import scala.collection.mutable.ArrayBuffer
 
 object METSALTO2Text {
   
@@ -57,28 +59,39 @@ object METSALTO2Text {
       val prefix = directory.getPath+"/extracted/"+directory.getName+'_'
       val textBlocks = new HashMap[String,String]
       val imageBlocks = new HashMap[String,Image]
-      val composedBlocks = new HashMap[String,HashSet[String]]
+      val composedBlocks = new HashMap[String,Buffer[String]]
+      val pageBlocks = new HashMap[String,Buffer[String]]
       val seenTextBlocks = new HashSet[String]
       val seenImageBlocks = new HashSet[String]
       val seenComposedBlocks = new HashSet[String]
+      var blocks = 0
+      val blockOrder = new HashMap[String,Int]
+      val altoBlockOrder = new HashMap[String,Int]
       var break = false
       for (file <- new File(directory.getPath+"/alto").listFiles) {
         val s = Source.fromFile(file,"UTF-8")
         val xml = new XMLEventReader(s)
-        var composedBlock: Option[HashSet[String]] = None
-        var page: Option[HashSet[String]] = None
+        var composedBlock: Option[Buffer[String]] = None
+        var page: Option[Buffer[String]] = None
         while (xml.hasNext) xml.next match {
           case EvElemStart(_,"Page",attrs,_) =>
-            page = Some(new HashSet[String])
-            composedBlocks.put(attrs("ID")(0).text,page.get)
+            page = Some(new ArrayBuffer[String])
+            pageBlocks.put(attrs("ID")(0).text,page.get)
+            altoBlockOrder.put(attrs("ID")(0).text,blocks)
+            blocks+=1
           case EvElemStart(_,"ComposedBlock",attrs,_) => 
-            composedBlock = Some(new HashSet[String])
-            page.foreach(_+=attrs("ID")(0).text)
-            composedBlocks.put(attrs("ID")(0).text,composedBlock.get)
+            val composedBlockId = attrs("ID")(0).text
+            composedBlock = Some(new ArrayBuffer[String])
+            page.foreach(_+=composedBlockId)
+            composedBlocks.put(composedBlockId,composedBlock.get)
+            altoBlockOrder.put(composedBlockId,blocks)
+            blocks+=1
           case EvElemStart(_,"GraphicalElement",attrs,_) =>
             val imageBlock = attrs("ID")(0).text
             composedBlock.orElse(page).foreach(_+=imageBlock)
             imageBlocks.put(imageBlock,Image(Integer.parseInt(attrs("HPOS")(0).text),Integer.parseInt(attrs("VPOS")(0).text),Integer.parseInt(attrs("WIDTH")(0).text),Integer.parseInt(attrs("HEIGHT")(0).text)))
+            altoBlockOrder.put(imageBlock,blocks)
+            blocks+=1
           case EvElemEnd(_,"ComposedBlock") =>
             composedBlock = None 
           case EvElemEnd(_,"Page") =>
@@ -98,6 +111,8 @@ object METSALTO2Text {
               case _ =>
             }
             textBlocks.put(textBlock,text)
+            altoBlockOrder.put(textBlock,blocks)
+            blocks+=1
           case _ =>
         }
         s.close()
@@ -106,7 +121,10 @@ object METSALTO2Text {
       val xml = new XMLEventReader(s)
       val articleMetadata: HashMap[String,String] = new HashMap
       var current = Level("","","",new StringBuilder(),false)
+      blocks = 0
       def processArea: (String) => Unit = (areaId: String) => {
+        blockOrder.put(areaId,blocks)
+        blocks+=1
         current.pages.add(Integer.parseInt(areaId.substring(1).replaceFirst("_.*","")))
         if (textBlocks.contains(areaId)) {
           current.content.append(textBlocks(areaId))
@@ -114,12 +132,15 @@ object METSALTO2Text {
         } else if (imageBlocks.contains(areaId)) {
           serializeImage(prefix+current.fileNamePrefix+"_image_"+areaId,imageBlocks(areaId))
           seenImageBlocks.add(areaId)
-        } else {
+        } else if (composedBlocks.contains(areaId)) {
           for (block <- composedBlocks(areaId)) {
             processArea(block)
             current.content.append("\n")
           }
           seenComposedBlocks.add(areaId)
+        } else for (block <- pageBlocks(areaId)) {
+          processArea(block)
+          current.content.append("\n")
         }
       }
       while (xml.hasNext) xml.next match {
@@ -155,10 +176,10 @@ object METSALTO2Text {
             case EvElemStart(_,"div", attrs, _) =>
               val divType =  attrs("TYPE")(0).text.toLowerCase
               divType match {
-                case "title" | "headline" | "title_of_work" => 
+                case "title" | "headline" | "title_of_work" | "continuation_headline" => 
                   current = Level(divType,"",current.fileNamePrefix,current.content,false)
                   current.content.append("# ")
-                case "heading_text" => 
+                case "heading_text" | "subtitle" | "running_title" => 
                   current = Level(divType,"",current.fileNamePrefix,current.content,false)
                   current.content.append("## ")
                 case "author" => 
@@ -167,7 +188,7 @@ object METSALTO2Text {
                 case "item" => 
                   current = Level(divType,"",current.fileNamePrefix,current.content,false)
                   current.content.append(" * ")
-                case "metae_serial" | "paragraph" | "image" | "main" | "caption" | "textblock" | "item_caption" | "heading" | "overline" | "footnote" | "content" | "body_content" | "text" | "newspaper" | "volume" | "issue" | "body" =>
+                case "metae_serial" | "data" | "statement" | "paragraph" | "image" | "main" | "caption" | "textblock" | "item_caption" | "heading" | "overline" | "footnote" | "content" | "body_content" | "text" | "newspaper" | "volume" | "issue" | "body" =>
                   current = Level(divType,"",current.fileNamePrefix,current.content,false)
                 case _ => 
                   val articleNumber = divType match {
@@ -189,7 +210,7 @@ object METSALTO2Text {
               hierarchy = hierarchy.dropRight(1)
               if (hc.element=="paragraph" || hc.element=="textblock") hc.content.append("\n")
               if (hc.serialize) {
-                if (!hc.content.isEmpty) {
+                if (!hc.content.mkString.trim.isEmpty) {
                   val pw = new PrintWriter(new File(prefix+hc.fileNamePrefix+".txt"))
                   pw.append(hc.content)
                   pw.close()
@@ -217,6 +238,18 @@ object METSALTO2Text {
         pw = new PrintWriter(new File(prefix+"other_texts_"+block+"_metadata.xml"))
         pw.println("<metadata>\n<blocks>"+composedBlocks(block).toSeq.sorted.mkString(",")+"</blocks>\n<pages>"+current.pages.toSeq.sorted.mkString(",")+"</pages>\n</metadata>")
         pw.close()
+      }
+      for (page <- pageBlocks.keys) {
+        current = Level("","","",new StringBuilder(),false)
+        pageBlocks.put(page,pageBlocks(page).sortWith((a,b) => if (blockOrder.contains(a) && blockOrder.contains(b)) blockOrder(a)<blockOrder(b) else altoBlockOrder(a)<altoBlockOrder(b)))
+        processArea(page)
+        var pw = new PrintWriter(new File(prefix+"page_"+page+".txt"))
+        pw.append(current.content)
+        pw.close()
+        pw = new PrintWriter(new File(prefix+"page_"+page+"_metadata.xml"))
+        pw.println("<metadata>\n<blocks>"+pageBlocks(page).toSeq.sorted.mkString(",")+"</blocks>\n</metadata>")
+        pw.close()
+        
       }
       seenTextBlocks.foreach(b=>textBlocks.remove(b))
       if (!textBlocks.isEmpty) {
