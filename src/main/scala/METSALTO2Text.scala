@@ -66,20 +66,27 @@ object METSALTO2Text {
         val s = Source.fromFile(file,"UTF-8")
         val xml = new XMLEventReader(s)
         var composedBlock: Option[HashSet[String]] = None
+        var page: Option[HashSet[String]] = None
         while (xml.hasNext) xml.next match {
+          case EvElemStart(_,"Page",attrs,_) =>
+            page = Some(new HashSet[String])
+            composedBlocks.put(attrs("ID")(0).text,page.get)
           case EvElemStart(_,"ComposedBlock",attrs,_) => 
             composedBlock = Some(new HashSet[String])
+            page.foreach(_+=attrs("ID")(0).text)
             composedBlocks.put(attrs("ID")(0).text,composedBlock.get)
           case EvElemStart(_,"GraphicalElement",attrs,_) =>
             val imageBlock = attrs("ID")(0).text
-            composedBlock.foreach(_+=imageBlock)
+            composedBlock.orElse(page).foreach(_+=imageBlock)
             imageBlocks.put(imageBlock,Image(Integer.parseInt(attrs("HPOS")(0).text),Integer.parseInt(attrs("VPOS")(0).text),Integer.parseInt(attrs("WIDTH")(0).text),Integer.parseInt(attrs("HEIGHT")(0).text)))
           case EvElemEnd(_,"ComposedBlock") =>
             composedBlock = None 
+          case EvElemEnd(_,"Page") =>
+            page = None 
           case EvElemStart(_,"TextBlock",attrs,_) => 
             var text = ""
             val textBlock = attrs("ID")(0).text 
-            composedBlock.foreach(_+=textBlock)
+            composedBlock.orElse(page).foreach(_+=textBlock)
             break = false
             while (xml.hasNext && !break) xml.next match {
               case EvElemStart(_,"String",attrs,_) if (attrs("SUBS_TYPE")!=null && attrs("SUBS_TYPE")(0).text=="HypPart1") => text+=attrs("SUBS_CONTENT")(0).text
@@ -98,6 +105,23 @@ object METSALTO2Text {
       val s = Source.fromFile(metsFile,"UTF-8")
       val xml = new XMLEventReader(s)
       val articleMetadata: HashMap[String,String] = new HashMap
+      var current = Level("","","",new StringBuilder(),false)
+      def processArea: (String) => Unit = (areaId: String) => {
+        current.pages.add(Integer.parseInt(areaId.substring(1).replaceFirst("_.*","")))
+        if (textBlocks.contains(areaId)) {
+          current.content.append(textBlocks(areaId))
+          seenTextBlocks.add(areaId)
+        } else if (imageBlocks.contains(areaId)) {
+          serializeImage(prefix+current.fileNamePrefix+"_image_"+areaId,imageBlocks(areaId))
+          seenImageBlocks.add(areaId)
+        } else {
+          for (block <- composedBlocks(areaId)) {
+            processArea(block)
+            current.content.append("\n")
+          }
+          seenComposedBlocks.add(areaId)
+        }
+      }
       while (xml.hasNext) xml.next match {
         case EvElemStart(_,"dmdSec", attrs, _) =>
           val entity = attrs("ID")(0).text
@@ -125,9 +149,7 @@ object METSALTO2Text {
           }
           articleMetadata.put(entity,metadata)
         case EvElemStart(_,"structMap", attrs, _) if (attrs("TYPE")(0).text=="LOGICAL") => 
-          var advertisements = 0
-          var titleSections =  0
-          var current = Level("","","",new StringBuilder(),false)
+          val counts = new HashMap[String,Int]
           var hierarchy = Seq(current)
           while (xml.hasNext) xml.next match {
             case EvElemStart(_,"div", attrs, _) =>
@@ -149,42 +171,19 @@ object METSALTO2Text {
                   current = Level(divType,"",current.fileNamePrefix,current.content,false)
                 case _ => 
                   val articleNumber = divType match {
-                    case "advertisement" => 
-                      advertisements += 1          
-                      "_"+advertisements
-                    case "title_section" =>
-                      titleSections += 1          
-                      "_"+titleSections
                     case "front" => ""
                     case "back" => ""
                     case _ if attrs("DMDID")!=null => "_"+attrs("DMDID")(0).text.replaceFirst("^[^\\d]*","")
-                    case _ => ""
+                    case _ =>
+                      val n = counts.get(divType).getOrElse(0)+1
+                      counts.put(divType,n)
+                      "_"+n
                   }
                   current = Level(divType,if (attrs("DMDID")!=null) attrs("DMDID")(0).text else "",(if (current.fileNamePrefix!="") current.fileNamePrefix+"_" else "")+divType+articleNumber, new StringBuilder(),true)
               }
               hierarchy = hierarchy :+ current 
-            case EvElemStart(_,"area",attrs,_) =>
-              val areaId = attrs("BEGIN")(0).text
-              current.pages.add(Integer.parseInt(areaId.substring(1,areaId.indexOf('_'))))
-              if (textBlocks.contains(areaId)) {
-                current.content.append(textBlocks(areaId))
-                seenTextBlocks.add(areaId)
-              } else if (imageBlocks.contains(areaId)) {
-                serializeImage(prefix+current.fileNamePrefix+"_image_"+areaId,imageBlocks(areaId))
-                seenImageBlocks.add(areaId)
-              } else {
-                for (block <- composedBlocks(areaId)) {
-                  current.pages.add(Integer.parseInt(block.substring(1,block.indexOf('_'))))
-                  if (imageBlocks.contains(block)) {
-                    serializeImage(prefix+current.fileNamePrefix+"_image_"+block,imageBlocks(block))
-                    seenImageBlocks.add(block)
-                  } else {
-                    current.content.append(textBlocks(block))
-                    seenTextBlocks.add(block)
-                  }
-                }
-                seenComposedBlocks.add(areaId)
-              }
+            case EvElemStart(_,"area",attrs,_) => 
+              processArea(attrs("BEGIN")(0).text)
             case EvElemEnd(_,"div") =>
               val hc = hierarchy.last
               hierarchy = hierarchy.dropRight(1)
@@ -209,19 +208,14 @@ object METSALTO2Text {
           }
         case _ =>  
       }
-      var blocks = 0
-      seenComposedBlocks.foreach(b=>composedBlocks.remove(b))
-      for (block <- composedBlocks.values) {
-        val pages = new HashSet[Int]
-        blocks += 1
-        var pw = new PrintWriter(new File(prefix+"other_texts_"+blocks+".txt"))
-        for (textBlock <- block) {
-          pages.add(Integer.parseInt(textBlock.substring(1,textBlock.indexOf('_'))))
-          pw.println(textBlocks.remove(textBlock).get)
-        }
+      for (block <- composedBlocks.keys;if !seenComposedBlocks.contains(block)) {
+        current = Level("","","",new StringBuilder(),false)
+        processArea(block)
+        var pw = new PrintWriter(new File(prefix+"other_texts_"+block+".txt"))
+        pw.append(current.content)
         pw.close()
-        pw = new PrintWriter(new File(prefix+"other_texts_"+blocks+"_metadata.xml"))
-        pw.println("<metadata>\n<blocks>"+block.toSeq.sorted.mkString(",")+"</blocks>\n<pages>"+pages.toSeq.sorted.mkString(",")+"</pages>\n</metadata>")
+        pw = new PrintWriter(new File(prefix+"other_texts_"+block+"_metadata.xml"))
+        pw.println("<metadata>\n<blocks>"+composedBlocks(block).toSeq.sorted.mkString(",")+"</blocks>\n<pages>"+current.pages.toSeq.sorted.mkString(",")+"</pages>\n</metadata>")
         pw.close()
       }
       seenTextBlocks.foreach(b=>textBlocks.remove(b))
