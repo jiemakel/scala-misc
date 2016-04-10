@@ -271,7 +271,8 @@ object METSALTO2Text {
         current = Level("","","",new StringBuilder(),false)
         var (refBlocks,unrefBlocks) = pageBlocks(page).partition(blockOrder.contains(_))
         refBlocks = refBlocks.sortWith(blockOrder(_)<blockOrder(_))
-        unrefBlocks.sortWith(altoBlockOrder(_)<altoBlockOrder(_)).foreach( b => {
+        if (refBlocks.isEmpty) refBlocks = unrefBlocks.sortWith(altoBlockOrder(_)<altoBlockOrder(_))
+        else unrefBlocks.sortWith(altoBlockOrder(_)<altoBlockOrder(_)).foreach( b => {
           val myBlockOrder = altoBlockOrder(b)-1
           var i = 0
           while (i<refBlocks.length-1 && myBlockOrder!=altoBlockOrder(refBlocks(i))) i+=1
