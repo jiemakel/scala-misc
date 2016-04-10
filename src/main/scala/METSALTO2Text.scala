@@ -26,21 +26,18 @@ import scala.collection.mutable.ArrayBuffer
 
 object METSALTO2Text {
   
-  def get(key: String)(implicit attrs: MetaData): Option[String] = {
-    if (attrs(key)!=null && attrs(key)(0).text!="") Some(attrs(key)(0).text.trim)
-    else None
-  }
-  
+  /** helper function to get a recursive stream of files for a directory */
+  def getFileTree(f: File): Stream[File] =
+    f #:: (if (f.isDirectory) f.listFiles().toStream.flatMap(getFileTree) 
+      else Stream.empty)
+
+  /** helper function to turn XML attrs back into text */
   def attrsToString(attrs:MetaData) = {
     attrs.length match {
       case 0 => ""
       case _ => attrs.map( (m:MetaData) => " " + m.key + "='" + m.value +"'" ).reduceLeft(_+_)
     }
-  }
-  
-  def getFileTree(f: File): Stream[File] =
-    f #:: (if (f.isDirectory) f.listFiles().toStream.flatMap(getFileTree) 
-      else Stream.empty)
+  }      
       
   case class Image(hpos: Int, vpos: Int, width: Int, height: Int)
   
@@ -48,15 +45,24 @@ object METSALTO2Text {
     //FIXME: add image serialization
   }
   
+  /** helper class to store information while parsing the METS logical hierarchy */
   case class Level(element: String, id: String, fileNamePrefix: String, content: StringBuilder, serialize: Boolean) {
     val pages = new HashSet[Int]
   }
   
+  /** Asynchronous method to process a particular METS file 
+    * 
+    * Churns out ~plaintexts (Markdown for titles and lists) for logical divisions defined in the METS file
+    * as well as page plaintexts. 
+    * 
+    * Also splits the MODS metadata for those logical divisions into their own files
+    */
   def process(metsFile: File): Future[Unit] = Future {
       val directory = metsFile.getParentFile
       println("Processing: "+directory)
       new File(directory.getPath+"/extracted").mkdir()
       val prefix = directory.getPath+"/extracted/"+directory.getName+'_'
+      // first, load all page, composed, graphical and textblocks into hashes
       val textBlocks = new HashMap[String,String]
       val imageBlocks = new HashMap[String,Image]
       val composedBlocks = new HashMap[String,Buffer[String]]
@@ -64,9 +70,9 @@ object METSALTO2Text {
       val seenTextBlocks = new HashSet[String]
       val seenImageBlocks = new HashSet[String]
       val seenComposedBlocks = new HashSet[String]
-      var blocks = 0
-      val blockOrder = new HashMap[String,Int]
+      // the following stores the order in which blocks were encountered in the ALTO file for later use in page-oriented serialization
       val altoBlockOrder = new HashMap[String,Int]
+      var blocks = 0
       var break = false
       for (file <- new File(directory.getPath+"/alto").listFiles) {
         val s = Source.fromFile(file,"UTF-8")
@@ -117,11 +123,13 @@ object METSALTO2Text {
         }
         s.close()
       }
+      // here, we start processing the actual METS file
       val s = Source.fromFile(metsFile,"UTF-8")
       val xml = new XMLEventReader(s)
-      val articleMetadata: HashMap[String,String] = new HashMap
       var current = Level("","","",new StringBuilder(),false)
       blocks = 0
+      val blockOrder = new HashMap[String,Int]
+      /** recursive function to serialize a (possibly composed) block */
       def processArea: (String) => Unit = (areaId: String) => {
         blockOrder.put(areaId,blocks)
         blocks+=1
@@ -143,7 +151,9 @@ object METSALTO2Text {
           current.content.append("\n")
         }
       }
+      val articleMetadata: HashMap[String,String] = new HashMap
       while (xml.hasNext) xml.next match {
+        // first extract article metadata into a hashmap
         case EvElemStart(_,"dmdSec", attrs, _) =>
           val entity = attrs("ID")(0).text
           break = false
@@ -168,14 +178,15 @@ object METSALTO2Text {
               indent = indent.substring(0,indent.length-2)
               metadata+=indent + "</"+label+">\n" 
           }
-          articleMetadata.put(entity,metadata)
+          if (!metadata.trim.isEmpty) articleMetadata.put(entity,metadata)
         case EvElemStart(_,"structMap", attrs, _) if (attrs("TYPE")(0).text=="LOGICAL") => 
+          // process the logical structure hierarchically
           val counts = new HashMap[String,Int]
           var hierarchy = Seq(current)
           while (xml.hasNext) xml.next match {
             case EvElemStart(_,"div", attrs, _) =>
               val divType =  attrs("TYPE")(0).text.toLowerCase
-              divType match {
+              divType match { //handle various hierarchy levels differently. First, some Markdown
                 case "title" | "headline" | "title_of_work" | "continuation_headline" => 
                   current = Level(divType,"",current.fileNamePrefix,current.content,false)
                   current.content.append("# ")
@@ -189,9 +200,10 @@ object METSALTO2Text {
                   current = Level(divType,"",current.fileNamePrefix,current.content,false)
                   current.content.append(" * ")
                 case "metae_serial" | "data" | "statement" | "paragraph" | "image" | "main" | "caption" | "textblock" | "item_caption" | "heading" | "overline" | "footnote" | "content" | "body_content" | "text" | "newspaper" | "volume" | "issue" | "body" =>
+                  // these are just ignored completely
                   current = Level(divType,"",current.fileNamePrefix,current.content,false)
-                case _ => 
-                  val articleNumber = divType match {
+                case _ => // everything else results (eventually) in a new file for the logical structure (e.g. article, section, front matter, table_of_contents, ...)
+                  val typeCount = divType match {
                     case "front" => ""
                     case "back" => ""
                     case _ if attrs("DMDID")!=null => "_"+attrs("DMDID")(0).text.replaceFirst("^[^\\d]*","")
@@ -200,7 +212,7 @@ object METSALTO2Text {
                       counts.put(divType,n)
                       "_"+n
                   }
-                  current = Level(divType,if (attrs("DMDID")!=null) attrs("DMDID")(0).text else "",(if (current.fileNamePrefix!="") current.fileNamePrefix+"_" else "")+divType+articleNumber, new StringBuilder(),true)
+                  current = Level(divType,if (attrs("DMDID")!=null) attrs("DMDID")(0).text else "",(if (current.fileNamePrefix!="") current.fileNamePrefix+"_" else "")+divType+typeCount, new StringBuilder(),true)
               }
               hierarchy = hierarchy :+ current 
             case EvElemStart(_,"area",attrs,_) => 
@@ -208,13 +220,15 @@ object METSALTO2Text {
             case EvElemEnd(_,"div") =>
               val hc = hierarchy.last
               hierarchy = hierarchy.dropRight(1)
-              if (hc.element=="paragraph" || hc.element=="textblock") hc.content.append("\n")
+              if (hc.element=="paragraph" || hc.element=="textblock") hc.content.append("\n") //paragraphs and textblocks result in plaintext paragraphs
               if (hc.serialize) {
                 if (!hc.content.mkString.trim.isEmpty) {
                   val pw = new PrintWriter(new File(prefix+hc.fileNamePrefix+".txt"))
                   pw.append(hc.content)
                   pw.close()
                 }
+              }
+              if (hc.serialize || articleMetadata.contains(hc.id)) {
                 val pw = new PrintWriter(new File(prefix+hc.fileNamePrefix+"_metadata.xml"))
                 pw.append("<metadata>\n")
                 if (articleMetadata.contains(hc.id))
@@ -229,6 +243,7 @@ object METSALTO2Text {
           }
         case _ =>  
       }
+      // sometimes (often), all blocks defined in the ALTO don't appear in the logical structure. Those are serialized here, first starting with unreferenced composed blocks
       for (block <- composedBlocks.keys;if !seenComposedBlocks.contains(block)) {
         current = Level("","","",new StringBuilder(),false)
         processArea(block)
@@ -239,9 +254,30 @@ object METSALTO2Text {
         pw.println("<metadata>\n<blocks>"+composedBlocks(block).toSeq.sorted.mkString(",")+"</blocks>\n<pages>"+current.pages.toSeq.sorted.mkString(",")+"</pages>\n</metadata>")
         pw.close()
       }
+      // here, we then serialize unreferenced text blocks by page
+      val unclaimedPageBlocks = new HashMap[Int,Buffer[String]]
+      for (textBlock <- textBlocks.keys;if !seenTextBlocks.contains(textBlock)) 
+        unclaimedPageBlocks.getOrElseUpdate(Integer.parseInt(textBlock.substring(1).replaceFirst("_.*","")),new ArrayBuffer[String]) += textBlock
+      for (page <- unclaimedPageBlocks.keys) {
+        var pw = new PrintWriter(new File(prefix+"other_texts_page_"+page+"_metadata.xml"))
+        pw.println("<metadata>\n<blocks>"+unclaimedPageBlocks(page).toSeq.sorted.mkString(",")+"</blocks>\n</metadata>")
+        pw.close()
+        pw = new PrintWriter(new File(prefix+"other_texts_page_"+page+".txt"))
+        for (text <- unclaimedPageBlocks(page).toSeq.sorted.map(textBlocks(_))) pw.println(text)
+        pw.close()
+      }
+      // finally, we serialize also page plaintexts. The blocks are organized sorted first by how they appear in the logical order, then by inserting any blocks not appearing in the logical order after their ALTO predecessor.
       for (page <- pageBlocks.keys) {
         current = Level("","","",new StringBuilder(),false)
-        pageBlocks.put(page,pageBlocks(page).sortWith((a,b) => if (blockOrder.contains(a) && blockOrder.contains(b)) blockOrder(a)<blockOrder(b) else altoBlockOrder(a)<altoBlockOrder(b)))
+        var (refBlocks,unrefBlocks) = pageBlocks(page).partition(blockOrder.contains(_))
+        refBlocks = refBlocks.sortWith(blockOrder(_)<blockOrder(_))
+        unrefBlocks.sortWith(altoBlockOrder(_)<altoBlockOrder(_)).foreach( b => {
+          val myBlockOrder = altoBlockOrder(b)-1
+          var i = 0
+          while (i<refBlocks.length-1 && myBlockOrder!=altoBlockOrder(refBlocks(i))) i+=1
+          refBlocks.insert(i+1,b)
+        })
+        pageBlocks.put(page,refBlocks)
         processArea(page)
         var pw = new PrintWriter(new File(prefix+"page_"+page+".txt"))
         pw.append(current.content)
@@ -249,20 +285,6 @@ object METSALTO2Text {
         pw = new PrintWriter(new File(prefix+"page_"+page+"_metadata.xml"))
         pw.println("<metadata>\n<blocks>"+pageBlocks(page).toSeq.sorted.mkString(",")+"</blocks>\n</metadata>")
         pw.close()
-        
-      }
-      seenTextBlocks.foreach(b=>textBlocks.remove(b))
-      if (!textBlocks.isEmpty) {
-        val pageBlocks = new HashMap[Int,HashSet[String]]
-        for (textBlock <- textBlocks.keys) pageBlocks.getOrElseUpdate(Integer.parseInt(textBlock.substring(1,textBlock.indexOf('_'))),new HashSet[String]).add(textBlock)
-        for (page <- pageBlocks.keys) {
-          var pw = new PrintWriter(new File(prefix+"other_texts_page_"+page+"_metadata.xml"))
-          pw.println("<metadata>\n<blocks>"+pageBlocks(page).toSeq.sorted.mkString(",")+"</blocks>\n</metadata>")
-          pw.close()
-          pw = new PrintWriter(new File(prefix+"other_texts_page_"+page+".txt"))
-          for (text <- pageBlocks(page).toSeq.sorted.map(textBlocks(_))) pw.println(text)
-          pw.close()
-        }
       }
       s.close()
   }
@@ -274,7 +296,7 @@ object METSALTO2Text {
       f.onSuccess { case _ => println("Processed: "+metsFile.getParentFile) }
       f
     })
-    f.onFailure { case t => println("Processing aborted due to an error.") }
+    f.onFailure { case t => println("Processing of at least one file resulted in an error.") }
     f.onSuccess { case _ => println("Successfully processed all files.") }
     Await.result(f, Duration.Inf)
   }
