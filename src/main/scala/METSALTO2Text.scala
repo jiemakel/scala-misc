@@ -15,6 +15,7 @@ import scala.collection.mutable.HashMap
 import scala.collection.mutable.HashSet
 import java.io.PrintWriter
 import java.io.File
+import javax.imageio.ImageIO
 import scala.concurrent.Future
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Await
@@ -25,10 +26,10 @@ import scala.collection.mutable.Buffer
 import scala.collection.mutable.ArrayBuffer
 
 object METSALTO2Text {
-  
+
   /** helper function to get a recursive stream of files for a directory */
   def getFileTree(f: File): Stream[File] =
-    f #:: (if (f.isDirectory) f.listFiles().toStream.flatMap(getFileTree) 
+    f #:: (if (f.isDirectory) f.listFiles().toStream.flatMap(getFileTree)
       else Stream.empty)
 
   /** helper function to turn XML attrs back into text */
@@ -37,24 +38,38 @@ object METSALTO2Text {
       case 0 => ""
       case _ => attrs.map( (m:MetaData) => " " + m.key + "='" + m.value +"'" ).reduceLeft(_+_)
     }
-  }      
-      
-  case class Image(hpos: Int, vpos: Int, width: Int, height: Int)
-  
-  def serializeImage(filename: String, image: Image) {
-    //FIXME: add image serialization
   }
-  
+
+  case class Image(parentDirectory: File, filenamePrefix: String, hpos: Int, vpos: Int, width: Int, height: Int)
+
+  def serializeImage(outputFilename: String, page: Int, image: Image) {
+    var imgFile = new File(image.parentDirectory.getPath+"/master_img/"+image.filenamePrefix+"-master.tif")
+    if (!imgFile.exists) imgFile = new File(image.parentDirectory.getPath+"/preservation_img/pr-"+image.filenamePrefix+".tif")
+    if (!imgFile.exists) imgFile = new File(image.parentDirectory.getPath+"/master_img/"+image.filenamePrefix+"-master.jp2")
+    if (!imgFile.exists) imgFile = new File(image.parentDirectory.getPath+"/preservation_img/pr-"+image.filenamePrefix+".jp2")
+    if (!imgFile.exists) imgFile = new File(image.parentDirectory.getAbsolutePath()+"/access_img/"+image.filenamePrefix+"-access.jpg")
+    if (imgFile.exists) {
+      val img = ImageIO.read(imgFile)
+      val subImg = img.getSubimage(image.hpos,image.vpos,image.width,image.height)
+      ImageIO.write(subImg,"png",new File(outputFilename+".png"))
+    }
+    val pw = new PrintWriter(outputFilename+"_metadata.xml")
+    pw.append("<metadata>\n")
+    pw.append("<pages>"+page+"</pages>\n<x>"+image.hpos+"</x>\n<y>"+image.vpos+"</y>\n<width>"+image.width+"</width>\n<height>"+image.height+"</height>\n")
+    pw.append("</metadata>\n")
+    pw.close()    
+  }
+
   /** helper class to store information while parsing the METS logical hierarchy */
-  case class Level(element: String, id: String, fileNamePrefix: String, content: StringBuilder, serialize: Boolean) {
+  case class Level(element: String, id: String, fileNamePrefix: String, content: StringBuilder, var serialize: Boolean) {
     val pages = new HashSet[Int]
   }
-  
-  /** Asynchronous method to process a particular METS file 
-    * 
+
+  /** Asynchronous method to process a particular METS file
+    *
     * Churns out ~plaintexts (Markdown for titles and lists) for logical divisions defined in the METS file
-    * as well as page plaintexts. 
-    * 
+    * as well as page plaintexts.
+    *
     * Also splits the MODS metadata for those logical divisions into their own files
     */
   def process(metsFile: File): Future[Unit] = Future {
@@ -85,7 +100,7 @@ object METSALTO2Text {
             pageBlocks.put(attrs("ID")(0).text,page.get)
             altoBlockOrder.put(attrs("ID")(0).text,blocks)
             blocks+=1
-          case EvElemStart(_,"ComposedBlock",attrs,_) => 
+          case EvElemStart(_,"ComposedBlock",attrs,_) =>
             val composedBlockId = attrs("ID")(0).text
             composedBlock = Some(new ArrayBuffer[String])
             page.foreach(_+=composedBlockId)
@@ -95,21 +110,21 @@ object METSALTO2Text {
           case EvElemStart(_,"GraphicalElement",attrs,_) =>
             val imageBlock = attrs("ID")(0).text
             composedBlock.orElse(page).foreach(_+=imageBlock)
-            imageBlocks.put(imageBlock,Image(Integer.parseInt(attrs("HPOS")(0).text),Integer.parseInt(attrs("VPOS")(0).text),Integer.parseInt(attrs("WIDTH")(0).text),Integer.parseInt(attrs("HEIGHT")(0).text)))
+            imageBlocks.put(imageBlock,Image(directory,file.getName.replace("-alto.xml",""),Integer.parseInt(attrs("HPOS")(0).text)*300/254,Integer.parseInt(attrs("VPOS")(0).text)*300/254,Integer.parseInt(attrs("WIDTH")(0).text)*300/254,Integer.parseInt(attrs("HEIGHT")(0).text)*300/254))
             altoBlockOrder.put(imageBlock,blocks)
             blocks+=1
           case EvElemEnd(_,"ComposedBlock") =>
-            composedBlock = None 
+            composedBlock = None
           case EvElemEnd(_,"Page") =>
-            page = None 
-          case EvElemStart(_,"TextBlock",attrs,_) => 
+            page = None
+          case EvElemStart(_,"TextBlock",attrs,_) =>
             var text = ""
-            val textBlock = attrs("ID")(0).text 
+            val textBlock = attrs("ID")(0).text
             composedBlock.orElse(page).foreach(_+=textBlock)
             break = false
             while (xml.hasNext && !break) xml.next match {
               case EvElemStart(_,"String",attrs,_) if (attrs("SUBS_TYPE")!=null && attrs("SUBS_TYPE")(0).text=="HypPart1") => text+=attrs("SUBS_CONTENT")(0).text
-              case EvElemStart(_,"String",attrs,_) if (attrs("SUBS_TYPE")!=null && attrs("SUBS_TYPE")(0).text=="HypPart2") => 
+              case EvElemStart(_,"String",attrs,_) if (attrs("SUBS_TYPE")!=null && attrs("SUBS_TYPE")(0).text=="HypPart2") =>
               case EvElemStart(_,"String",attrs,_) => text+=attrs("CONTENT")(0).text
               case EvElemStart(_,"SP",attrs,_) => text+=" "
               case EvElemEnd(_,"TextLine") => text+="\n"
@@ -138,7 +153,8 @@ object METSALTO2Text {
           current.content.append(textBlocks(areaId))
           seenTextBlocks.add(areaId)
         } else if (imageBlocks.contains(areaId)) {
-          serializeImage(prefix+current.fileNamePrefix+"_image_"+areaId,imageBlocks(areaId))
+          serializeImage(prefix+current.fileNamePrefix+"_image_"+areaId,Integer.parseInt(areaId.substring(1).replaceFirst("_.*","")),imageBlocks(areaId))
+          current.serialize=true
           seenImageBlocks.add(areaId)
         } else if (composedBlocks.contains(areaId)) {
           for (block <- composedBlocks(areaId)) {
@@ -159,7 +175,7 @@ object METSALTO2Text {
           break = false
           while (xml.hasNext && !break) xml.next match {
             case EvElemStart(_,"mods",_,_) => break = true
-            case _ => 
+            case _ =>
           }
           break = false
           var indent = ""
@@ -174,12 +190,12 @@ object METSALTO2Text {
               case _ => metadata += er.entity
             }
             case EvElemEnd(_,"mods") => break = true
-            case EvElemEnd(_, label) => 
+            case EvElemEnd(_, label) =>
               indent = indent.substring(0,indent.length-2)
-              metadata+=indent + "</"+label+">\n" 
+              metadata+=indent + "</"+label+">\n"
           }
           if (!metadata.trim.isEmpty) articleMetadata.put(entity,metadata)
-        case EvElemStart(_,"structMap", attrs, _) if (attrs("TYPE")(0).text=="LOGICAL") => 
+        case EvElemStart(_,"structMap", attrs, _) if (attrs("TYPE")(0).text=="LOGICAL") =>
           // process the logical structure hierarchically
           val counts = new HashMap[String,Int]
           var hierarchy = Seq(current)
@@ -187,19 +203,19 @@ object METSALTO2Text {
             case EvElemStart(_,"div", attrs, _) =>
               val divType =  attrs("TYPE")(0).text.toLowerCase
               divType match { //handle various hierarchy levels differently. First, some Markdown
-                case "title" | "headline" | "title_of_work" | "continuation_headline" => 
+                case "title" | "headline" | "title_of_work" | "continuation_headline" =>
                   current = Level(divType,"",current.fileNamePrefix,current.content,false)
                   current.content.append("# ")
-                case "heading_text" | "subtitle" | "running_title" => 
+                case "heading_text" | "subtitle" | "running_title" =>
                   current = Level(divType,"",current.fileNamePrefix,current.content,false)
                   current.content.append("## ")
-                case "author" => 
+                case "author" =>
                   current = Level(divType,"",current.fileNamePrefix,current.content,false)
                   current.content.append("### ")
-                case "item" => 
+                case "item" =>
                   current = Level(divType,"",current.fileNamePrefix,current.content,false)
                   current.content.append(" * ")
-                case "metae_serial" | "data" | "statement" | "paragraph" | "image" | "main" | "caption" | "textblock" | "item_caption" | "heading" | "overline" | "footnote" | "content" | "body_content" | "text" | "newspaper" | "volume" | "issue" | "body" =>
+                case "metae_serial" | "data" | "statement" | "metae_monograph" | "paragraph" | "image" | "main" | "caption" | "textblock" | "item_caption" | "heading" | "overline" | "footnote" | "content" | "body_content" | "text" | "newspaper" | "volume" | "issue" | "body" =>
                   // these are just ignored completely
                   current = Level(divType,"",current.fileNamePrefix,current.content,false)
                 case _ => // everything else results (eventually) in a new file for the logical structure (e.g. article, section, front matter, table_of_contents, ...)
@@ -214,8 +230,8 @@ object METSALTO2Text {
                   }
                   current = Level(divType,if (attrs("DMDID")!=null) attrs("DMDID")(0).text else "",(if (current.fileNamePrefix!="") current.fileNamePrefix+"_" else "")+divType+typeCount, new StringBuilder(),true)
               }
-              hierarchy = hierarchy :+ current 
-            case EvElemStart(_,"area",attrs,_) => 
+              hierarchy = hierarchy :+ current
+            case EvElemStart(_,"area",attrs,_) =>
               processArea(attrs("BEGIN")(0).text)
             case EvElemEnd(_,"div") =>
               val hc = hierarchy.last
@@ -239,9 +255,9 @@ object METSALTO2Text {
               }
               current=hierarchy.last
               current.pages++=hc.pages
-            case _ =>  
+            case _ =>
           }
-        case _ =>  
+        case _ =>
       }
       // sometimes (often), all blocks defined in the ALTO don't appear in the logical structure. Those are serialized here, first starting with unreferenced composed blocks
       for (block <- composedBlocks.keys;if !seenComposedBlocks.contains(block)) {
@@ -256,7 +272,7 @@ object METSALTO2Text {
       }
       // here, we then serialize unreferenced text blocks by page
       val unclaimedPageBlocks = new HashMap[Int,Buffer[String]]
-      for (textBlock <- textBlocks.keys;if !seenTextBlocks.contains(textBlock)) 
+      for (textBlock <- textBlocks.keys;if !seenTextBlocks.contains(textBlock))
         unclaimedPageBlocks.getOrElseUpdate(Integer.parseInt(textBlock.substring(1).replaceFirst("_.*","")),new ArrayBuffer[String]) += textBlock
       for (page <- unclaimedPageBlocks.keys) {
         var pw = new PrintWriter(new File(prefix+"other_texts_page_"+page+"_metadata.xml"))
@@ -289,9 +305,9 @@ object METSALTO2Text {
       }
       s.close()
   }
-      
+
   def main(args: Array[String]): Unit = {
-    val f = Future.sequence(for (dir<-args.toSeq;metsFile <- getFileTree(new File(dir)); if (metsFile.getName().endsWith("_mets.xml"))) yield {
+    val f = Future.sequence(for (dir<-args.toSeq;metsFile <- getFileTree(new File(dir)); if (metsFile.getName().endsWith("mets.xml"))) yield {
       val f = process(metsFile)
       f.onFailure { case t => println("An error has occured processing "+metsFile.getParentFile+": " + t.printStackTrace()) }
       f.onSuccess { case _ => println("Processed: "+metsFile.getParentFile) }

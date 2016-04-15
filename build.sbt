@@ -15,11 +15,16 @@ libraryDependencies ++= Seq(
 "ch.qos.logback" % "logback-classic" % "1.1.3",
 "org.slf4j" % "log4j-over-slf4j" % "1.7.12",
 "cc.mallet" % "mallet" % "2.0.8-RC3",
-"info.freelibrary" % "freelib-marc4j" % "2.6.6"
+"info.freelibrary" % "freelib-marc4j" % "2.6.6",
+"it.geosolutions.imageio-ext" % "imageio-ext-kakadu" % "1.1.13",
+"it.geosolutions.imageio-ext" % "imageio-ext-kakadujni" % "6.3.1",
+"it.geosolutions.imageio-ext" % "imageio-ext-tiff" % "1.1.13"
 )
 
 resolvers ++= Seq(
-    Resolver.mavenLocal
+    Resolver.mavenLocal,
+    "imageio-ext" at "http://maven.geo-solutions.it/",
+    "geotoolkit" at "http://maven.geotoolkit.org/"
 )
 
 fork in run := true
