@@ -29,25 +29,30 @@ import org.json4s.native.JsonMethods._
 
 object MarkAnnotations {
   def main(args: Array[String]): Unit = {
-    val pw = new java.io.PrintWriter(new File("ner_testidata_places-tagged.bin"))
-    for (file <- new java.io.File("tmp/").listFiles.filter(_.getName.endsWith(".in")).sorted) {
-      val annotations = (parse(new java.io.File(file.getAbsolutePath.replace(".in",".out"))) \\ "matches" \\ classOf[JString])
+    val pw = new java.io.PrintWriter(new File("ner_testidata_places-tagged-fuzzy-new.bin"))
+    for (file <- new java.io.File("ner_testidata/").listFiles.filter(_.getName.endsWith(".in")).sorted) {
+      val annotations = (parse(new java.io.File("ner_testidata/places/"+file.getName.replace(".in","-places-fuzzy.out"))) \\ "matches" \\ classOf[JString])
       val sannotations = annotations.filter(_.indexOf(' ') == -1).toSet
-      val mannotations = annotations.filter(_.indexOf(' ') != -1)
+      val mannotations = annotations.filter(_.indexOf(' ') != -1).sortBy(_.length).reverse
       var text = Source.fromFile(file).getLines().mkString
       for (an <- mannotations) text = text.replaceAllLiterally(an, "<EnamexLocPpl>"+an+"\t</EnamexLocPpl>")
-      var inMulti = false
+      var inMulti = 0
       for (word <-text.split(" +")) {
         if (word.startsWith("<EnamexLocPpl>")) {
-          pw.println(word.replace("<EnamexLocPpl>","")+"\t<EnamexLocPpl>")
-          inMulti = true
+          pw.println(word.replaceAllLiterally("<EnamexLocPpl>","")+"\t<EnamexLocPpl>")
+          inMulti += "<EnamexLocPpl>".r.findAllIn(word).length
         } else if (word.contains("\t</EnamexLocPpl>")) {
-          pw.println(word.replace("\t</EnamexLocPpl>","")+"\t</EnamexLocPpl>")
-          inMulti = false
-        } else if (inMulti) pw.println(word+"\t<EnamexLocPpl>")
+          inMulti -= "</EnamexLocPpl>".r.findAllIn(word).length 
+          if (inMulti==0)
+            pw.println(word.replaceAllLiterally("\t</EnamexLocPpl>","")+"\t</EnamexLocPpl>")
+          else 
+            pw.println(word.replaceAllLiterally("\t</EnamexLocPpl>","")+"\t<EnamexLocPpl>")
+        } else if (inMulti>0) pw.println(word+"\t<EnamexLocPpl>")
         else if (sannotations.contains(word) || sannotations.contains(word.replaceAll("\\W*$",""))) pw.println(word+"\t<EnamexLocPpl/>")
         else pw.println(word+"\tO")
       }
     }
+    pw.close()
   }
 }
+
