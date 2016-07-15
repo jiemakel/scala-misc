@@ -143,10 +143,11 @@ object VIAFXML2CSV extends LazyLogging {
       case _ => 
     }
     output.synchronized { output.write(Seq(id,nameType,birthDate,deathDate,gender,countries.map(p => p._1+":"+p._2).mkString(";"),nationalities.map(p => p._1+":"+p._2).mkString(";"),relatorCodes.map(p => p._1+":"+p._2).mkString(";"),prefLabels.map(_.replace(";","\\;")).mkString(";"),altLabels.map(_.replace(";","\\;")).mkString(";"),relLabels.map(_.replace(";","\\;")).mkString(";"))) }
+    println("done")
   }
   
   val numWorkers = sys.runtime.availableProcessors
-  val queueCapacity = 100
+  val queueCapacity = 2
 
   implicit val ec = ExecutionContext.fromExecutorService(
    new ThreadPoolExecutor(
@@ -165,11 +166,7 @@ object VIAFXML2CSV extends LazyLogging {
     val s = Source.fromInputStream(new GZIPInputStream(new FileInputStream("viaf.xml.gz")), "UTF-8")
     implicit val output: CSVWriter = CSVWriter("output.csv")    
     output.write(Seq("id","nameType","birthDate","deathDate","gender","countries","nationalities","relatorCodes","prefLabels","altLabels","relLabels"))
-    val f = Future.sequence(for (record <- s.getLines) yield {
-      val f = process(record)
-      f.onFailure { case t => logger.error("An error has occured: " + t.printStackTrace) }
-      f.recover { case cause => throw new Exception("An error has occured", cause) }
-    })
+    val f = Future.sequence(for (record <- s.getLines) yield process(record))
     f.onFailure { case t => logger.error("Processing of at least one linr resulted in an error:" + t.getMessage+": " + t.printStackTrace) }
     f.onSuccess { case _ => logger.info("Successfully processed all lines.") }
     Await.result(f, Duration.Inf)
