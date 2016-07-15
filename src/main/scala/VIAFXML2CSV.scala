@@ -38,6 +38,8 @@ import scala.xml.pull.EvComment
 import java.io.PushbackInputStream
 import java.util.zip.GZIPInputStream
 import com.bizo.mighty.csv.CSVWriter
+import java.util.concurrent.atomic.AtomicInteger
+import scala.concurrent.Promise
 
 object VIAFXML2CSV extends LazyLogging {
   
@@ -146,15 +148,26 @@ object VIAFXML2CSV extends LazyLogging {
     implicit val output: CSVWriter = CSVWriter("output.csv")    
     output.write(Seq("id","nameType","birthDate","deathDate","gender","countries","nationalities","relatorCodes","prefLabels","altLabels","relLabels"))
     var line = 0
-    val f = Future.sequence(for (record <- s.getLines) yield {
+    val processed = new AtomicInteger(0)
+    val failures = new AtomicInteger(0)
+    val finished: Promise[Unit] = Promise()
+    var finishedReading = false
+    for (record <- s.getLines) {
       line+=1
       val f = process(record)
-      f.onFailure { case t => logger.error("An error has occured processing line "+line+": " + t.printStackTrace) }
+      f.onComplete{ 
+        case _ => 
+          if (finishedReading && processed.incrementAndGet()==line) finished.success() 
+      }
+      f.onFailure {
+        case t =>
+          failures.incrementAndGet()
+          logger.error("An error has occured processing line "+line+": " + t.printStackTrace)
+      }
       f.recover { case cause => throw new Exception("An error has occured processing "+line, cause) }
-    })
-    f.onFailure { case t => logger.error("Processing of at least one linr resulted in an error:" + t.getMessage+": " + t.printStackTrace) }
-    f.onSuccess { case _ => logger.info("Successfully processed all lines.") }
-    Await.result(f, Duration.Inf)
+    }
+    finishedReading = true
+    Await.result(finished.future, Duration.Inf)
     output.close()
   }
 }
