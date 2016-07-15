@@ -38,7 +38,6 @@ import scala.xml.pull.EvComment
 import java.io.PushbackInputStream
 import java.util.zip.GZIPInputStream
 import com.bizo.mighty.csv.CSVWriter
-import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent.Promise
 
 object VIAFXML2CSV extends LazyLogging {
@@ -106,68 +105,60 @@ object VIAFXML2CSV extends LazyLogging {
     return None
   }
 
-  def process(record: String)(implicit output: CSVWriter): Future[Unit] = Future {
-    implicit val xml = new XMLEventReader(Source.fromString(record.substring(record.indexOf("\t")+1)))
-    var id: String = null
-    var nameType: String = ""
-    val prefLabels: HashSet[String] = new HashSet[String]()
-    val altLabels: HashSet[String] = new HashSet[String]()
-    val relLabels: HashSet[String] = new HashSet[String]()
-    var birthDate: String = ""
-    var deathDate: String = ""
-    var dateType: String = ""
-    var gender: String = ""
-    val nationalities: HashMap[String,String] = new HashMap[String,String]()
-    val countries: HashMap[String,String] = new HashMap[String,String]()
-    val relatorCodes: HashMap[String,String] = new HashMap[String,String]()
-    while (xml.hasNext) xml.next match {
-      case EvElemStart(_,"viafID",_,_) => id = readContents
-      case EvElemStart(_,"nameType",_,_) => nameType = readContents
-      case EvElemStart(_,"mainHeadings",_,_) =>
-        var break = false
-        while (xml.hasNext && !break) xml.next match {
-          case EvElemStart(_,"text",_,_) => prefLabels.add(readContents)
-          case EvElemEnd(_,"mainHeadings") => break = true       
-          case _ => 
-        }
-      case EvElemStart(_,"gender",_,_) => gender = readContents
-      case EvElemStart(_,"birthDate",_,_) => birthDate = readContents
-      case EvElemStart(_,"deathDate",_,_) => deathDate = readContents
-      case EvElemStart(_,"x400",_,_) => readAlternate("x400").foreach(altLabels.add(_)) 
-      case EvElemStart(_,"x500",_,_) => readAlternate("x500").foreach(relLabels.add(_))
-      case EvElemStart(_,"nationalityOfEntity",_,_) => readAggregate("nationalityOfEntity", nationalities)  
-      case EvElemStart(_,"countries",_,_) => readAggregate("countries", countries)
-      case EvElemStart(_,"RelatorCodes",_,_) => readAggregate("RelatorCodes", relatorCodes)
-      case _ => 
+  def process(record: String)(implicit output: CSVWriter): Future[Unit] = {
+    val p = Promise[Unit]()
+    Future {
+      implicit val xml = new XMLEventReader(Source.fromString(record.substring(record.indexOf("\t")+1)))
+      var id: String = null
+      var nameType: String = ""
+      val prefLabels: HashSet[String] = new HashSet[String]()
+      val altLabels: HashSet[String] = new HashSet[String]()
+      val relLabels: HashSet[String] = new HashSet[String]()
+      var birthDate: String = ""
+      var deathDate: String = ""
+      var dateType: String = ""
+      var gender: String = ""
+      val nationalities: HashMap[String,String] = new HashMap[String,String]()
+      val countries: HashMap[String,String] = new HashMap[String,String]()
+      val relatorCodes: HashMap[String,String] = new HashMap[String,String]()
+      while (xml.hasNext) xml.next match {
+        case EvElemStart(_,"viafID",_,_) => id = readContents
+        case EvElemStart(_,"nameType",_,_) => nameType = readContents
+        case EvElemStart(_,"mainHeadings",_,_) =>
+          var break = false
+          while (xml.hasNext && !break) xml.next match {
+            case EvElemStart(_,"text",_,_) => prefLabels.add(readContents)
+            case EvElemEnd(_,"mainHeadings") => break = true       
+            case _ => 
+          }
+        case EvElemStart(_,"gender",_,_) => gender = readContents
+        case EvElemStart(_,"birthDate",_,_) => birthDate = readContents
+        case EvElemStart(_,"deathDate",_,_) => deathDate = readContents
+        case EvElemStart(_,"x400",_,_) => readAlternate("x400").foreach(altLabels.add(_)) 
+        case EvElemStart(_,"x500",_,_) => readAlternate("x500").foreach(relLabels.add(_))
+        case EvElemStart(_,"nationalityOfEntity",_,_) => readAggregate("nationalityOfEntity", nationalities)  
+        case EvElemStart(_,"countries",_,_) => readAggregate("countries", countries)
+        case EvElemStart(_,"RelatorCodes",_,_) => readAggregate("RelatorCodes", relatorCodes)
+        case _ => 
+      }
+      output.synchronized { output.write(Seq(id,nameType,birthDate,deathDate,gender,countries.map(p => p._1+":"+p._2).mkString(";"),nationalities.map(p => p._1+":"+p._2).mkString(";"),relatorCodes.map(p => p._1+":"+p._2).mkString(";"),prefLabels.map(_.replace(";","\\;")).mkString(";"),altLabels.map(_.replace(";","\\;")).mkString(";"),relLabels.map(_.replace(";","\\;")).mkString(";"))) }
+      p.success()
     }
-    output.synchronized { output.write(Seq(id,nameType,birthDate,deathDate,gender,countries.map(p => p._1+":"+p._2).mkString(";"),nationalities.map(p => p._1+":"+p._2).mkString(";"),relatorCodes.map(p => p._1+":"+p._2).mkString(";"),prefLabels.map(_.replace(";","\\;")).mkString(";"),altLabels.map(_.replace(";","\\;")).mkString(";"),relLabels.map(_.replace(";","\\;")).mkString(";"))) }
+    p.future
   }
 
   def main(args: Array[String]): Unit = {
     val s = Source.fromInputStream(new GZIPInputStream(new FileInputStream("viaf.xml.gz")), "UTF-8")
     implicit val output: CSVWriter = CSVWriter("output.csv")    
     output.write(Seq("id","nameType","birthDate","deathDate","gender","countries","nationalities","relatorCodes","prefLabels","altLabels","relLabels"))
-    var line = 0
-    val processed = new AtomicInteger(0)
-    val failures = new AtomicInteger(0)
-    val finished: Promise[Unit] = Promise()
-    var finishedReading = false
-    for (record <- s.getLines) {
-      line+=1
+    val f = Future.sequence(for (record <- s.getLines) yield {
       val f = process(record)
-      f.onComplete{ 
-        case _ => 
-          if (finishedReading && processed.incrementAndGet()==line) finished.success() 
-      }
-      f.onFailure {
-        case t =>
-          failures.incrementAndGet()
-          logger.error("An error has occured processing line "+line+": " + t.printStackTrace)
-      }
-      f.recover { case cause => throw new Exception("An error has occured processing "+line, cause) }
-    }
-    finishedReading = true
-    Await.result(finished.future, Duration.Inf)
+      f.onFailure { case t => logger.error("An error has occured: " + t.printStackTrace) }
+      f.recover { case cause => throw new Exception("An error has occured", cause) }
+    })
+    f.onFailure { case t => logger.error("Processing of at least one linr resulted in an error:" + t.getMessage+": " + t.printStackTrace) }
+    f.onSuccess { case _ => logger.info("Successfully processed all lines.") }
+    Await.result(f, Duration.Inf)
     output.close()
   }
 }
