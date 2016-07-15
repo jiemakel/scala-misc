@@ -17,7 +17,6 @@ import java.io.PrintWriter
 import java.io.File
 import javax.imageio.ImageIO
 import scala.concurrent.Future
-import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Await
 import scala.concurrent.duration._
 import scala.xml.pull.EvEntityRef
@@ -39,6 +38,10 @@ import java.io.PushbackInputStream
 import java.util.zip.GZIPInputStream
 import com.bizo.mighty.csv.CSVWriter
 import scala.concurrent.Promise
+import scala.concurrent.ExecutionContext
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.TimeUnit
 
 object VIAFXML2CSV extends LazyLogging {
   
@@ -105,47 +108,58 @@ object VIAFXML2CSV extends LazyLogging {
     return None
   }
 
-  def process(record: String)(implicit output: CSVWriter): Future[Unit] = {
-    val p = Promise[Unit]()
-    Future {
-      implicit val xml = new XMLEventReader(Source.fromString(record.substring(record.indexOf("\t")+1)))
-      var id: String = null
-      var nameType: String = ""
-      val prefLabels: HashSet[String] = new HashSet[String]()
-      val altLabels: HashSet[String] = new HashSet[String]()
-      val relLabels: HashSet[String] = new HashSet[String]()
-      var birthDate: String = ""
-      var deathDate: String = ""
-      var dateType: String = ""
-      var gender: String = ""
-      val nationalities: HashMap[String,String] = new HashMap[String,String]()
-      val countries: HashMap[String,String] = new HashMap[String,String]()
-      val relatorCodes: HashMap[String,String] = new HashMap[String,String]()
-      while (xml.hasNext) xml.next match {
-        case EvElemStart(_,"viafID",_,_) => id = readContents
-        case EvElemStart(_,"nameType",_,_) => nameType = readContents
-        case EvElemStart(_,"mainHeadings",_,_) =>
-          var break = false
-          while (xml.hasNext && !break) xml.next match {
-            case EvElemStart(_,"text",_,_) => prefLabels.add(readContents)
-            case EvElemEnd(_,"mainHeadings") => break = true       
-            case _ => 
-          }
-        case EvElemStart(_,"gender",_,_) => gender = readContents
-        case EvElemStart(_,"birthDate",_,_) => birthDate = readContents
-        case EvElemStart(_,"deathDate",_,_) => deathDate = readContents
-        case EvElemStart(_,"x400",_,_) => readAlternate("x400").foreach(altLabels.add(_)) 
-        case EvElemStart(_,"x500",_,_) => readAlternate("x500").foreach(relLabels.add(_))
-        case EvElemStart(_,"nationalityOfEntity",_,_) => readAggregate("nationalityOfEntity", nationalities)  
-        case EvElemStart(_,"countries",_,_) => readAggregate("countries", countries)
-        case EvElemStart(_,"RelatorCodes",_,_) => readAggregate("RelatorCodes", relatorCodes)
-        case _ => 
-      }
-      output.synchronized { output.write(Seq(id,nameType,birthDate,deathDate,gender,countries.map(p => p._1+":"+p._2).mkString(";"),nationalities.map(p => p._1+":"+p._2).mkString(";"),relatorCodes.map(p => p._1+":"+p._2).mkString(";"),prefLabels.map(_.replace(";","\\;")).mkString(";"),altLabels.map(_.replace(";","\\;")).mkString(";"),relLabels.map(_.replace(";","\\;")).mkString(";"))) }
-      p.success()
+  def process(record: String)(implicit output: CSVWriter): Future[Unit] = Future {
+    implicit val xml = new XMLEventReader(Source.fromString(record.substring(record.indexOf("\t")+1)))
+    var id: String = null
+    var nameType: String = ""
+    val prefLabels: HashSet[String] = new HashSet[String]()
+    val altLabels: HashSet[String] = new HashSet[String]()
+    val relLabels: HashSet[String] = new HashSet[String]()
+    var birthDate: String = ""
+    var deathDate: String = ""
+    var dateType: String = ""
+    var gender: String = ""
+    val nationalities: HashMap[String,String] = new HashMap[String,String]()
+    val countries: HashMap[String,String] = new HashMap[String,String]()
+    val relatorCodes: HashMap[String,String] = new HashMap[String,String]()
+    while (xml.hasNext) xml.next match {
+      case EvElemStart(_,"viafID",_,_) => id = readContents
+      case EvElemStart(_,"nameType",_,_) => nameType = readContents
+      case EvElemStart(_,"mainHeadings",_,_) =>
+        var break = false
+        while (xml.hasNext && !break) xml.next match {
+          case EvElemStart(_,"text",_,_) => prefLabels.add(readContents)
+          case EvElemEnd(_,"mainHeadings") => break = true       
+          case _ => 
+        }
+      case EvElemStart(_,"gender",_,_) => gender = readContents
+      case EvElemStart(_,"birthDate",_,_) => birthDate = readContents
+      case EvElemStart(_,"deathDate",_,_) => deathDate = readContents
+      case EvElemStart(_,"x400",_,_) => readAlternate("x400").foreach(altLabels.add(_)) 
+      case EvElemStart(_,"x500",_,_) => readAlternate("x500").foreach(relLabels.add(_))
+      case EvElemStart(_,"nationalityOfEntity",_,_) => readAggregate("nationalityOfEntity", nationalities)  
+      case EvElemStart(_,"countries",_,_) => readAggregate("countries", countries)
+      case EvElemStart(_,"RelatorCodes",_,_) => readAggregate("RelatorCodes", relatorCodes)
+      case _ => 
     }
-    p.future
+    output.synchronized { output.write(Seq(id,nameType,birthDate,deathDate,gender,countries.map(p => p._1+":"+p._2).mkString(";"),nationalities.map(p => p._1+":"+p._2).mkString(";"),relatorCodes.map(p => p._1+":"+p._2).mkString(";"),prefLabels.map(_.replace(";","\\;")).mkString(";"),altLabels.map(_.replace(";","\\;")).mkString(";"),relLabels.map(_.replace(";","\\;")).mkString(";"))) }
   }
+  
+  val numWorkers = sys.runtime.availableProcessors
+  val queueCapacity = 100
+
+  implicit val ec = ExecutionContext.fromExecutorService(
+   new ThreadPoolExecutor(
+     numWorkers, numWorkers,
+     0L, TimeUnit.SECONDS,
+     new ArrayBlockingQueue[Runnable](queueCapacity) {
+       override def offer(e: Runnable) = {
+         put(e); // may block if waiting for empty room
+         true
+       }
+     }
+   )
+  )
 
   def main(args: Array[String]): Unit = {
     val s = Source.fromInputStream(new GZIPInputStream(new FileInputStream("viaf.xml.gz")), "UTF-8")
