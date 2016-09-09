@@ -45,19 +45,6 @@ import java.util.concurrent.TimeUnit
 
 object VIAFXML2CSV extends LazyLogging {
   
-  /** helper function to get a recursive stream of files for a directory */
-  def getFileTree(f: File): Stream[File] =
-    f #:: (if (f.isDirectory) f.listFiles().toStream.flatMap(getFileTree)
-      else Stream.empty)
-
-  /** helper function to turn XML attrs back into text */
-  def attrsToString(attrs:MetaData) = {
-    attrs.length match {
-      case 0 => ""
-      case _ => attrs.map( (m:MetaData) => " " + m.key + "='" + m.value +"'" ).reduceLeft(_+_)
-    }
-  }
-  
   def readContents(implicit xml: XMLEventReader): String = {
     var break = false
     val content = new StringBuilder()
@@ -142,8 +129,7 @@ object VIAFXML2CSV extends LazyLogging {
       case EvElemStart(_,"RelatorCodes",_,_) => readAggregate("RelatorCodes", relatorCodes)
       case _ => 
     }
-    output.synchronized { output.write(Seq(id,nameType,birthDate,deathDate,gender,countries.map(p => p._1+":"+p._2).mkString(";"),nationalities.map(p => p._1+":"+p._2).mkString(";"),relatorCodes.map(p => p._1+":"+p._2).mkString(";"),prefLabels.map(_.replace(";","\\;")).mkString(";"),altLabels.map(_.replace(";","\\;")).mkString(";"),relLabels.map(_.replace(";","\\;")).mkString(";"))) }
-    println("done")
+    output.synchronized { output.write(Seq(id,nameType,birthDate,deathDate,dateType,gender,countries.map(p => p._1+":"+p._2).mkString(";"),nationalities.map(p => p._1+":"+p._2).mkString(";"),relatorCodes.map(p => p._1+":"+p._2).mkString(";"),prefLabels.map(_.replace(";","\\;")).mkString(";"),altLabels.map(_.replace(";","\\;")).mkString(";"),relLabels.map(_.replace(";","\\;")).mkString(";"))) }
   }
   
   val numWorkers = sys.runtime.availableProcessors
@@ -165,7 +151,7 @@ object VIAFXML2CSV extends LazyLogging {
   def main(args: Array[String]): Unit = {
     val s = Source.fromInputStream(new GZIPInputStream(new FileInputStream("viaf.xml.gz")), "UTF-8")
     implicit val output: CSVWriter = CSVWriter("output.csv")    
-    output.write(Seq("id","nameType","birthDate","deathDate","gender","countries","nationalities","relatorCodes","prefLabels","altLabels","relLabels"))
+    output.write(Seq("id","nameType","birthDate","deathDate","dateType","gender","countries","nationalities","relatorCodes","prefLabels","altLabels","relLabels"))
     val f = Future.sequence(for (record <- s.getLines) yield process(record))
     f.onFailure { case t => logger.error("Processing of at least one linr resulted in an error:" + t.getMessage+": " + t.printStackTrace) }
     f.onSuccess { case _ => logger.info("Successfully processed all lines.") }
