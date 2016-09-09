@@ -122,6 +122,7 @@ object VIAFXML2CSV extends LazyLogging {
       case EvElemStart(_,"gender",_,_) => gender = readContents
       case EvElemStart(_,"birthDate",_,_) => birthDate = readContents
       case EvElemStart(_,"deathDate",_,_) => deathDate = readContents
+      case EvElemStart(_,"dateType",_,_) => dateType = readContents
       case EvElemStart(_,"x400",_,_) => readAlternate("x400").foreach(altLabels.add(_)) 
       case EvElemStart(_,"x500",_,_) => readAlternate("x500").foreach(relLabels.add(_))
       case EvElemStart(_,"nationalityOfEntity",_,_) => readAggregate("nationalityOfEntity", nationalities)  
