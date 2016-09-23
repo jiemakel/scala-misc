@@ -21,7 +21,8 @@ libraryDependencies ++= Seq(
 "it.geosolutions.imageio-ext" % "imageio-ext-kakadujni" % "6.3.1",
 "it.geosolutions.imageio-ext" % "imageio-ext-tiff" % "1.1.13",
 "org.apache.lucene" % "lucene-analyzers-common" % "6.2.1",
-"org.apache.lucene" % "lucene-queryparser" % "6.2.1"
+"org.apache.lucene" % "lucene-queryparser" % "6.2.1",
+"org.apache.commons" % "commons-math3" % "3.6.1"
 )
 
 resolvers ++= Seq(
