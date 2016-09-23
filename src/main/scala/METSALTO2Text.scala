@@ -24,8 +24,11 @@ import scala.xml.pull.EvEntityRef
 import scala.xml.parsing.XhtmlEntities
 import scala.collection.mutable.Buffer
 import scala.collection.mutable.ArrayBuffer
+import com.typesafe.scalalogging.LazyLogging
+import java.io.FileInputStream
+import java.net.URL
 
-object METSALTO2Text {
+object METSALTO2Text extends LazyLogging {
 
   /** helper function to get a recursive stream of files for a directory */
   def getFileTree(f: File): Stream[File] =
@@ -48,11 +51,13 @@ object METSALTO2Text {
     if (!imgFile.exists) imgFile = new File(image.parentDirectory.getPath+"/master_img/"+image.filenamePrefix+"-master.jp2")
     if (!imgFile.exists) imgFile = new File(image.parentDirectory.getPath+"/preservation_img/pr-"+image.filenamePrefix+".jp2")
     if (!imgFile.exists) imgFile = new File(image.parentDirectory.getAbsolutePath()+"/access_img/"+image.filenamePrefix+"-access.jpg")
-    if (imgFile.exists) {
-      val img = ImageIO.read(imgFile)
+    var istream = if (imgFile.exists) new FileInputStream(imgFile) else new URL("").openStream() //FIXME
+    val img = ImageIO.read(istream)
+    istream.close()
+    if (img!=null) {
       val subImg = img.getSubimage(image.hpos,image.vpos,image.width,image.height)
       ImageIO.write(subImg,"png",new File(outputFilename+".png"))
-    }
+    } else logger.error(s"Image ${image} / ${outputFilename} came out null") 
     val pw = new PrintWriter(outputFilename+"_metadata.xml")
     pw.append("<metadata>\n")
     pw.append("<pages>"+page+"</pages>\n<x>"+image.hpos+"</x>\n<y>"+image.vpos+"</y>\n<width>"+image.width+"</width>\n<height>"+image.height+"</height>\n")
@@ -74,7 +79,7 @@ object METSALTO2Text {
     */
   def process(metsFile: File): Future[Unit] = Future {
       val directory = metsFile.getParentFile
-      println("Processing: "+directory)
+      logger.info("Processing: "+directory)
       new File(directory.getPath+"/extracted").mkdir()
       val prefix = directory.getPath+"/extracted/"+directory.getName+'_'
       // first, load all page, composed, graphical and textblocks into hashes
@@ -162,10 +167,10 @@ object METSALTO2Text {
             current.content.append("\n")
           }
           seenComposedBlocks.add(areaId)
-        } else for (block <- pageBlocks(areaId)) {
+        } else if (pageBlocks.contains(areaId)) for (block <- pageBlocks(areaId)) {
           processArea(block)
           current.content.append("\n")
-        }
+        } else logger.error(s"Unknown block ${areaId} in ${metsFile}.")
       }
       val articleMetadata: HashMap[String,String] = new HashMap
       while (xml.hasNext) xml.next match {
@@ -309,12 +314,12 @@ object METSALTO2Text {
   def main(args: Array[String]): Unit = {
     val f = Future.sequence(for (dir<-args.toSeq;metsFile <- getFileTree(new File(dir)); if (metsFile.getName().endsWith("mets.xml"))) yield {
       val f = process(metsFile)
-      f.onFailure { case t => println("An error has occured processing "+metsFile.getParentFile+": " + t.printStackTrace()) }
-      f.onSuccess { case _ => println("Processed: "+metsFile.getParentFile) }
+      f.onFailure { case t => logger.error("An error has occured processing "+metsFile.getParentFile+": " + t.printStackTrace()) }
+      f.onSuccess { case _ => logger.info("Processed: "+metsFile.getParentFile) }
       f
     })
-    f.onFailure { case t => println("Processing of at least one file resulted in an error.") }
-    f.onSuccess { case _ => println("Successfully processed all files.") }
+    f.onFailure { case t => logger.error("Processing of at least one file resulted in an error.") }
+    f.onSuccess { case _ => logger.info("Successfully processed all files.") }
     Await.result(f, Duration.Inf)
   }
 }

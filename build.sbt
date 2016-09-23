@@ -6,6 +6,7 @@ scalaVersion := "2.11.8"
 
 libraryDependencies ++= Seq(
 "org.json4s" %% "json4s-native" % "3.2.10",
+"com.fasterxml" % "aalto-xml" % "1.0.0",
 "org.apache.jena" % "jena-core" % "3.0.1" exclude("org.slf4j","slf4j-log4j12") exclude("log4j","log4j") exclude("commons-logging", "commons-logging"),
 "org.apache.jena" % "jena-arq" % "3.0.1" exclude("org.slf4j","slf4j-log4j12") exclude("log4j","log4j") exclude("commons-logging", "commons-logging"),
 "com.github.nscala-time" %% "nscala-time" % "1.2.0",
@@ -18,7 +19,9 @@ libraryDependencies ++= Seq(
 "info.freelibrary" % "freelib-marc4j" % "2.6.6",
 "it.geosolutions.imageio-ext" % "imageio-ext-kakadu" % "1.1.13",
 "it.geosolutions.imageio-ext" % "imageio-ext-kakadujni" % "6.3.1",
-"it.geosolutions.imageio-ext" % "imageio-ext-tiff" % "1.1.13"
+"it.geosolutions.imageio-ext" % "imageio-ext-tiff" % "1.1.13",
+"org.apache.lucene" % "lucene-analyzers-common" % "6.2.1",
+"org.apache.lucene" % "lucene-queryparser" % "6.2.1"
 )
 
 resolvers ++= Seq(
