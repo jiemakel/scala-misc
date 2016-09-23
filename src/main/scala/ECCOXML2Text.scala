@@ -125,13 +125,14 @@ object ECCOXML2Text extends LazyLogging {
         metadata.append(indent + "<" + label + attrsToString(attrs) + ">\n")
         indent += "  "
       case EvText(text) => if (text.trim!="") metadata.append(indent + text.trim + "\n")
-      case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
+      case er: EvEntityRef => metadata.append('&'); metadata.append(er.entity); metadata.append(';') /* XhtmlEntities.entMap.get(er.entity) match {
         case Some(chr) => metadata.append(chr)
         case _ => metadata.append(er.entity)
-      }
+      }*/
       case EvElemEnd(_, label) =>
         indent = indent.substring(0,indent.length-2)
         metadata.append(indent + "</"+label+">\n")
+      case EvComment(_) => 
     }
     if (sw!=null) sw.close()
     sw = new PrintWriter(new File(prefix+"metadata.xml"))
