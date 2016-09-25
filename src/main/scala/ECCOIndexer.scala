@@ -27,7 +27,7 @@ import org.apache.lucene.document.Field.Store
 
 import scala.collection.JavaConversions._
 
-object EccoIndexer {
+object ECCOIndexer {
   /** helper function to get a recursive stream of files for a directory */
   def getFileTree(f: File): Stream[File] =
     f #:: (if (f.isDirectory) f.listFiles().toStream.flatMap(getFileTree)
