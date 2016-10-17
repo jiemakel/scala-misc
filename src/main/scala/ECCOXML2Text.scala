@@ -84,8 +84,12 @@ object ECCOXML2Text extends LazyLogging {
               currentSection = attrs("type")(0).text
               sw = new PrintWriter(new File(prefix+currentSection.replaceAllLiterally("bodyPage","body")+".txt"))
             }
-          case EvElemStart(_,"sectionHeader",_,_) =>
-            content.append("# ")
+          case EvElemStart(_,"sectionHeader",attrs,_) =>
+            content.append(attrs.get("type").map(_(0).text).getOrElse("") match {
+              case "other" => "### "
+              case "section" => "## "
+              case _ =>  "# "
+            })
             var break2 = false
             while (xml.hasNext && !break2) xml.next match {
               case EvText(text) => content.append(text)

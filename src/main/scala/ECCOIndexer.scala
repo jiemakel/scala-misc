@@ -26,6 +26,10 @@ import org.apache.lucene.document.StringField
 import org.apache.lucene.document.Field.Store
 
 import scala.collection.JavaConversions._
+import org.apache.lucene.analysis.tokenattributes.CharTermAttribute
+import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
+import org.apache.lucene.document.FieldType
+import scala.collection.mutable.HashMap
 
 object ECCOIndexer {
   /** helper function to get a recursive stream of files for a directory */
@@ -45,75 +49,158 @@ object ECCOIndexer {
       case EvComment(_) => 
       case EvElemEnd(_,_) => break = true 
     }
-    return content.toString
+    return content.toString.trim
   }
   
   val fileRegex = ".*_(.*)\\.txt".r
   
   val headingRegex = "^# ".r
-      
+
+  val analyzer = new StandardAnalyzer()
+ 
+  val dir = FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/dindex"))
+  val dir2 = FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/cindex"))
+  val iwc = new IndexWriterConfig(analyzer)
+  val iwc2 = new IndexWriterConfig(analyzer)
+  val iw = new IndexWriter(dir, iwc)
+  val iw2 = new IndexWriter(dir2, iwc2)
+ 
+
+  def getIndexedLength(text: String): Int = {
+    val ts = analyzer.tokenStream("", text)
+    val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
+    ts.reset()
+    var length = 0
+    while (ts.incrementToken())
+      length += oa.getPositionIncrement
+    ts.end()
+    ts.close()
+    return length
+  }
+  
   def main(args: Array[String]): Unit = {
-    val dir = FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/index"))
-    val analyzer = new StandardAnalyzer()
-    val iwc = new IndexWriterConfig(analyzer)
-    val iw = new IndexWriter(dir, iwc)
     iw.deleteAll()
+    iw2.deleteAll()
+    /*
+     *
+   6919 article
+  51226 backmatter
+  34276 book
+1377880 chapter
+ 147743 frontmatter
+  13386 index
+  25772 other
+  38055 part
+ 290959 section
+   3957 titlePage
+  32836 TOC
+   1481 volume
+     */
     for (dir<-args.toSeq;file <- getFileTree(new File(dir))) if (file.getName.endsWith("_metadata.xml")) {
       println("Processing "+file.getParent)
       val xmls = Source.fromFile(file)
       implicit val xml = new XMLEventReader(xmls)
-      val d = new Document()
+      val md = new Document()
       while (xml.hasNext) xml.next match {
-        case EvElemStart(_,"documentID",_,_) => d.add(new Field("metadata_documentID",readContents,StoredField.TYPE))
-        case EvElemStart(_,"ESTCID",_,_) => d.add(new Field("metadata_ESTCID",readContents,StoredField.TYPE))
-        case EvElemStart(_,"pubDate",_,_) => d.add(new Field("metadata_pubDate",readContents,StringField.TYPE_STORED))
-        case EvElemStart(_,"language",_,_) => d.add(new Field("metadata_language",readContents,StringField.TYPE_STORED))
-        case EvElemStart(_,"module",_,_) => d.add(new Field("metadata_module",readContents,StringField.TYPE_STORED))
-        case EvElemStart(_,"documentType",_,_) => d.add(new Field("metadata_documentType",readContents,StringField.TYPE_STORED))
-        case EvElemStart(_,"notes",_,_) => d.add(new Field("metadata_notes",readContents,TextField.TYPE_STORED))
-        case EvElemStart(_,"fullTitle",_,_) => d.add(new Field("metadata_fullTitle",readContents,TextField.TYPE_STORED))
+        case EvElemStart(_,"documentID",_,_) => md.add(new Field("metadata_documentID",readContents,StoredField.TYPE))
+        case EvElemStart(_,"ESTCID",_,_) => md.add(new Field("metadata_ESTCID",readContents,StoredField.TYPE))
+        case EvElemStart(_,"pubDate",_,_) => md.add(new Field("metadata_pubDate",readContents,StringField.TYPE_STORED))
+        case EvElemStart(_,"language",_,_) => md.add(new Field("metadata_language",readContents,StringField.TYPE_STORED))
+        case EvElemStart(_,"module",_,_) => md.add(new Field("metadata_module",readContents,StringField.TYPE_STORED))
+        case EvElemStart(_,"notes",_,_) => md.add(new Field("metadata_notes",readContents,TextField.TYPE_STORED))
+        case EvElemStart(_,"fullTitle",_,_) => md.add(new Field("metadata_fullTitle",readContents,TextField.TYPE_STORED))
         case _ => 
       }
       xmls.close()
+      val d = new Document()
+      for (f <- md) d.add(f)
+      var tlength = 0
+      val tlengths = new HashMap[String,Int]
       for (file <- getFileTree(file.getParentFile)) if (file.getName.endsWith(".txt") && !file.getName.contains("_page")) {
+        var l1Heading: Seq[Field] = Seq.empty
+        var l2Heading: Seq[Field] = Seq.empty
+        var d2o: Option[Document] = None
         val field = fileRegex.findFirstMatchIn(file.getName).get.group(1)
         val contents = new StringBuilder
-        val f = Source.fromFile(file)
-        for (line <- f.getLines) {
-          if (line.startsWith("# "))
-            d.add(new Field("heading_"+field,line.substring(2),TextField.TYPE_NOT_STORED))
-          else {
+        val fl = Source.fromFile(file)
+        for (line <- fl.getLines) {
+          if (line.startsWith("# ") || line.startsWith("## ") || line.startsWith("### ")) {
+            if (contents.length>0) {
+              var f = new Field("contents_"+field, contents.toString, TextField.TYPE_NOT_STORED)
+              d.add(f)
+              val d2 = d2o.getOrElse({ 
+                val d2 = new Document()
+                for (f <- md) d2.add(f)
+                d2
+              })
+              d2.add(f)
+              val l = getIndexedLength(contents.toString)
+              tlengths.put("tclength_"+field, tlengths.getOrElseUpdate("tclength_"+field, 0) + l)
+              f = new StoredField("clength_"+field, l)
+              d.add(f)
+              d2.add(f)
+              tlength += l
+              iw2.addDocument(d2)
+            }
+            contents.clear()
+            val d2 = new Document()
+            for (f <- md) d2.add(f)
+            d2o = Some(d2)
+            val level =
+              if (line.startsWith("### ")) 3
+              else if (line.startsWith("## ")) 2
+              else 1
+            val f = new Field("heading"+level+"_"+field,line.substring(level+1),TextField.TYPE_STORED)
+            d.add(f)
+            d2.add(f)
+            val l = getIndexedLength(line.substring(level+1))
+            val f2 = new StoredField("h"+level+"length_"+field, l)
+            d.add(f2)
+            d2.add(f2)
+            if (level==3) {
+              l1Heading.foreach(d2.add(_))
+              l2Heading.foreach(d2.add(_))
+            } else if (level==2) {
+              l1Heading.foreach(d2.add(_))
+              l2Heading = Seq(f,f2)
+            } else {
+              l1Heading = Seq(f,f2)
+              l2Heading = Seq.empty
+            }
+            tlengths.put("hc"+level+"length_"+field, tlengths.getOrElseUpdate("hc"+level+"length_"+field, 0) + l)
+            tlengths.put("hclength_"+field, tlengths.getOrElseUpdate("hclength_"+field, 0) + l)
+            tlength += l
+          } else
             contents.append(line)
-            contents.append('\n')
-          }
         }
-        f.close()
-        d.add(new Field("contents_"+field, contents.toString, TextField.TYPE_NOT_STORED))
+        fl.close()
+        var f = new Field("contents_"+field, contents.toString, TextField.TYPE_NOT_STORED)
+        d.add(f)
+        val d2 = d2o.getOrElse({ 
+          val d2 = new Document()
+          for (f <- md) d2.add(f)
+          d2
+        })
+        d2.add(f)
+        val l = getIndexedLength(contents.toString)
+        tlengths.put("tclength_"+field, tlengths.getOrElseUpdate("tclength_"+field, 0) + l)
+        f = new StoredField("clength_"+field, l)
+        d.add(f)
+        d2.add(f)
+        tlength += l
+        iw2.addDocument(d2)
       }
+      for ((field,tlength) <- tlengths) d.add(new StoredField(field,tlength))
+      d.add(new StoredField("tlength",tlength))
       iw.addDocument(d)
     }
+    iw.forceMerge(1)
+    iw2.forceMerge(1)
+    iw.commit()
+    iw2.commit()
     iw.close()
-    
-/*    val ir = DirectoryReader.open(dir)
-    val is = new IndexSearcher(ir)
-    val qp = new QueryParser("text", analyzer)
-    val q = qp.parse("test")
-    is.search(q, new Collector() {
-      
-      def needsScores: Boolean = false
-      
-      def getLeafCollector(context: LeafReaderContext): LeafCollector = {
-        val docBase = context.docBase;
-        return new LeafCollector() {
-          def setScorer(scorer: Scorer) {}
-         
-          def collect(doc: Int) {
-            docBase+doc
-          }
-        }
-      }
-    })
-    */
+    iw2.close()
     dir.close()
+    dir2.close()
   }
 }
