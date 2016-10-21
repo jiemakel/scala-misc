@@ -4,6 +4,8 @@ version := "1.0"
 
 scalaVersion := "2.11.8"
 
+resolvers += "Oracle" at "http://download.oracle.com/maven/"
+
 libraryDependencies ++= Seq(
 "org.json4s" %% "json4s-native" % "3.2.10",
 "com.fasterxml" % "aalto-xml" % "1.0.0",
@@ -22,6 +24,7 @@ libraryDependencies ++= Seq(
 "it.geosolutions.imageio-ext" % "imageio-ext-tiff" % "1.1.13",
 "org.apache.lucene" % "lucene-analyzers-common" % "6.2.1",
 "org.apache.lucene" % "lucene-queryparser" % "6.2.1",
+"com.sleepycat" % "je" % "7.0.6",
 "org.apache.commons" % "commons-math3" % "3.6.1"
 )
 

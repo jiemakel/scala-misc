@@ -30,6 +30,13 @@ import org.apache.lucene.analysis.tokenattributes.CharTermAttribute
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
 import org.apache.lucene.document.FieldType
 import scala.collection.mutable.HashMap
+import com.sleepycat.je.EnvironmentConfig
+import com.sleepycat.je.Environment
+import com.sleepycat.je.DatabaseConfig
+import scala.collection.mutable.Buffer
+import org.apache.lucene.document.IntPoint
+import org.apache.lucene.index.IndexOptions
+import org.apache.lucene.analysis.shingle.ShingleAnalyzerWrapper
 
 object ECCOIndexer {
   /** helper function to get a recursive stream of files for a directory */
@@ -58,15 +65,20 @@ object ECCOIndexer {
 
   val analyzer = new StandardAnalyzer()
  
-  val dir = FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/dindex"))
-  val dir2 = FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/cindex"))
-  val iwc = new IndexWriterConfig(analyzer)
-  val iwc2 = new IndexWriterConfig(analyzer)
-  val iw = new IndexWriter(dir, iwc)
-  val iw2 = new IndexWriter(dir2, iwc2)
- 
+/*  val bdbec = new EnvironmentConfig().setAllowCreate(true)
+  val bdbe = new Environment(FileSystems.getDefault().getPath("/srv/ecco/bdb").toFile,bdbec)
+  bdbe.removeDatabase(null, "bdb")
+  val bdbc = new DatabaseConfig().setAllowCreate(true).setExclusiveCreate(true).setDeferredWrite(true)
+  val bdb = bdbe.openDatabase(null, "bdb", bdbc) */
+  
+  // document level, used for basic search, collocation
+  val diw = new IndexWriter(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/dindex")), new IndexWriterConfig(analyzer))
+  // heading level, search inside subpart
+  val hiw = new IndexWriter(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/hindex")), new IndexWriterConfig(analyzer)) 
+  // paragraph level, used only for collocation
+  val piw = new IndexWriter(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/pindex")), new IndexWriterConfig(analyzer))
 
-  def getIndexedLength(text: String): Int = {
+  def getNumberOfTokens(text: String): Int = {
     val ts = analyzer.tokenStream("", text)
     val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
     ts.reset()
@@ -77,10 +89,24 @@ object ECCOIndexer {
     ts.close()
     return length
   }
+
+  val dcontentFieldType = new FieldType(TextField.TYPE_NOT_STORED)
+  dcontentFieldType.setOmitNorms(true)
+  dcontentFieldType.setStoreTermVectors(true)
+
+  val dstoredContentFieldType = new FieldType(dcontentFieldType)
+  dstoredContentFieldType.setStored(true)
+
+  val phcontentFieldType = new FieldType(dcontentFieldType)
+  phcontentFieldType.setIndexOptions(IndexOptions.DOCS)
   
   def main(args: Array[String]): Unit = {
-    iw.deleteAll()
-    iw2.deleteAll()
+    diw.deleteAll()
+    diw.commit()
+    hiw.deleteAll()
+    hiw.commit()
+    piw.deleteAll()
+    piw.commit()
     /*
      *
    6919 article
@@ -100,107 +126,98 @@ object ECCOIndexer {
       println("Processing "+file.getParent)
       val xmls = Source.fromFile(file)
       implicit val xml = new XMLEventReader(xmls)
-      val md = new Document()
+      val d = new Document()
+      var documentId: Field = null
+      var estcId: Field = null
       while (xml.hasNext) xml.next match {
-        case EvElemStart(_,"documentID",_,_) => md.add(new Field("metadata_documentID",readContents,StoredField.TYPE))
-        case EvElemStart(_,"ESTCID",_,_) => md.add(new Field("metadata_ESTCID",readContents,StoredField.TYPE))
-        case EvElemStart(_,"pubDate",_,_) => md.add(new Field("metadata_pubDate",readContents,StringField.TYPE_STORED))
-        case EvElemStart(_,"language",_,_) => md.add(new Field("metadata_language",readContents,StringField.TYPE_STORED))
-        case EvElemStart(_,"module",_,_) => md.add(new Field("metadata_module",readContents,StringField.TYPE_STORED))
-        case EvElemStart(_,"notes",_,_) => md.add(new Field("metadata_notes",readContents,TextField.TYPE_STORED))
-        case EvElemStart(_,"fullTitle",_,_) => md.add(new Field("metadata_fullTitle",readContents,TextField.TYPE_STORED))
+        case EvElemStart(_,"documentID",_,_) => 
+          documentId = new Field("metadata_documentID",readContents,StoredField.TYPE)
+          d.add(documentId)
+        case EvElemStart(_,"ESTCID",_,_) =>
+          estcId = new Field("metadata_ESTCID",readContents,StoredField.TYPE)
+          d.add(estcId)
+        case EvElemStart(_,"pubDate",_,_) => readContents match {
+          case "" =>
+          case "1809" => d.add(new IntPoint("metadata_pubDate",18090101))
+          case any => d.add(new IntPoint("metadata_pubDate",any.toInt))
+        }
+        case EvElemStart(_,"language",_,_) => d.add(new Field("metadata_language",readContents,StringField.TYPE_STORED))
+        case EvElemStart(_,"module",_,_) => d.add(new Field("metadata_module",readContents,StringField.TYPE_STORED))
+        case EvElemStart(_,"notes",_,_) => d.add(new Field("metadata_notes",readContents,dstoredContentFieldType))
+        case EvElemStart(_,"fullTitle",_,_) => d.add(new Field("metadata_fullTitle",readContents,dstoredContentFieldType))
         case _ => 
       }
       xmls.close()
-      val d = new Document()
-      for (f <- md) d.add(f)
-      var tlength = 0
-      val tlengths = new HashMap[String,Int]
+      val dcontents = new StringBuilder
       for (file <- getFileTree(file.getParentFile)) if (file.getName.endsWith(".txt") && !file.getName.contains("_page")) {
-        var l1Heading: Seq[Field] = Seq.empty
-        var l2Heading: Seq[Field] = Seq.empty
-        var d2o: Option[Document] = None
+        var hds = Seq(1,2,3).map(w => None.asInstanceOf[Option[Document]]).toBuffer
         val field = fileRegex.findFirstMatchIn(file.getName).get.group(1)
-        val contents = new StringBuilder
+        val hcontents = hds.map(w => new StringBuilder)
+        val pcontents = new StringBuilder
         val fl = Source.fromFile(file)
         for (line <- fl.getLines) {
-          if (line.startsWith("# ") || line.startsWith("## ") || line.startsWith("### ")) {
-            if (contents.length>0) {
-              var f = new Field("contents_"+field, contents.toString, TextField.TYPE_NOT_STORED)
-              d.add(f)
-              val d2 = d2o.getOrElse({ 
-                val d2 = new Document()
-                for (f <- md) d2.add(f)
-                d2
-              })
-              d2.add(f)
-              val l = getIndexedLength(contents.toString)
-              tlengths.put("tclength_"+field, tlengths.getOrElseUpdate("tclength_"+field, 0) + l)
-              f = new StoredField("clength_"+field, l)
-              d.add(f)
-              d2.add(f)
-              tlength += l
-              iw2.addDocument(d2)
+          if (line.isEmpty) {
+            if (!pcontents.isEmpty) {
+              val d2 = new Document()
+              d2.add(new Field("contents",pcontents.toString,phcontentFieldType))
+              pcontents.clear()
+              piw.addDocument(d2)
             }
-            contents.clear()
-            val d2 = new Document()
-            for (f <- md) d2.add(f)
-            d2o = Some(d2)
-            val level =
-              if (line.startsWith("### ")) 3
-              else if (line.startsWith("## ")) 2
-              else 1
-            val f = new Field("heading"+level+"_"+field,line.substring(level+1),TextField.TYPE_STORED)
-            d.add(f)
-            d2.add(f)
-            val l = getIndexedLength(line.substring(level+1))
-            val f2 = new StoredField("h"+level+"length_"+field, l)
-            d.add(f2)
-            d2.add(f2)
-            if (level==3) {
-              l1Heading.foreach(d2.add(_))
-              l2Heading.foreach(d2.add(_))
-            } else if (level==2) {
-              l1Heading.foreach(d2.add(_))
-              l2Heading = Seq(f,f2)
-            } else {
-              l1Heading = Seq(f,f2)
-              l2Heading = Seq.empty
-            }
-            tlengths.put("hc"+level+"length_"+field, tlengths.getOrElseUpdate("hc"+level+"length_"+field, 0) + l)
-            tlengths.put("hclength_"+field, tlengths.getOrElseUpdate("hclength_"+field, 0) + l)
-            tlength += l
           } else
-            contents.append(line)
+            pcontents.append(line)
+          if (line.startsWith("# ") || line.startsWith("## ") || line.startsWith("### ")) {
+            val level =
+              if (line.startsWith("### ")) 2
+              else if (line.startsWith("## ")) 1
+              else 0
+            for (
+                i <- level until hds.length;
+                contents = hcontents(i)
+            ) {
+              hds(i).foreach { d2 => 
+                if (!contents.isEmpty) {
+                  d2.add(new Field("contents",contents.toString,phcontentFieldType))
+                  contents.clear()
+                }
+                hiw.addDocument(d2)
+              }
+              hds(i) = None
+            }
+            val d2 = new Document()
+            hds(level) = Some(d2)
+            val f = new Field("heading",line.substring(level+1),phcontentFieldType)
+            d2.add(f)
+            for (i <- 0 until level) hcontents(i).append(line)
+          } else
+            for (i <- 0 until hds.length) hds(i).foreach(d=> hcontents(i).append(line))
+          dcontents.append(line)
         }
         fl.close()
-        var f = new Field("contents_"+field, contents.toString, TextField.TYPE_NOT_STORED)
-        d.add(f)
-        val d2 = d2o.getOrElse({ 
-          val d2 = new Document()
-          for (f <- md) d2.add(f)
-          d2
-        })
-        d2.add(f)
-        val l = getIndexedLength(contents.toString)
-        tlengths.put("tclength_"+field, tlengths.getOrElseUpdate("tclength_"+field, 0) + l)
-        f = new StoredField("clength_"+field, l)
-        d.add(f)
-        d2.add(f)
-        tlength += l
-        iw2.addDocument(d2)
+        for (
+            i <- 0 until hds.length;
+            contents = hcontents(i)
+        )
+          hds(i).foreach { d2 => 
+            if (!contents.isEmpty)
+              d2.add(new Field("contents",contents.toString,phcontentFieldType))
+            hiw.addDocument(d2)
+          }
       }
-      for ((field,tlength) <- tlengths) d.add(new StoredField(field,tlength))
-      d.add(new StoredField("tlength",tlength))
-      iw.addDocument(d)
+      d.add(new Field("contents", dcontents.toString, dcontentFieldType))
+      d.add(new StoredField("tlength",getNumberOfTokens(dcontents.toString)))
+      diw.addDocument(d)
     }
-    iw.forceMerge(1)
-    iw2.forceMerge(1)
-    iw.commit()
-    iw2.commit()
-    iw.close()
-    iw2.close()
-    dir.close()
-    dir2.close()
+    diw.forceMerge(1)
+    diw.commit()
+    diw.close()
+    diw.getDirectory.close()
+    hiw.forceMerge(1)
+    hiw.commit()
+    hiw.close()
+    hiw.getDirectory.close()
+    piw.forceMerge(1)
+    piw.commit()
+    piw.close()
+    piw.getDirectory.close()
   }
 }
