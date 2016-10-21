@@ -37,6 +37,7 @@ import scala.collection.mutable.Buffer
 import org.apache.lucene.document.IntPoint
 import org.apache.lucene.index.IndexOptions
 import org.apache.lucene.analysis.shingle.ShingleAnalyzerWrapper
+import scala.collection.mutable.ArrayBuffer
 
 object ECCOIndexer {
   /** helper function to get a recursive stream of files for a directory */
@@ -64,16 +65,10 @@ object ECCOIndexer {
   val headingRegex = "^# ".r
 
   val analyzer = new StandardAnalyzer()
- 
-/*  val bdbec = new EnvironmentConfig().setAllowCreate(true)
-  val bdbe = new Environment(FileSystems.getDefault().getPath("/srv/ecco/bdb").toFile,bdbec)
-  bdbe.removeDatabase(null, "bdb")
-  val bdbc = new DatabaseConfig().setAllowCreate(true).setExclusiveCreate(true).setDeferredWrite(true)
-  val bdb = bdbe.openDatabase(null, "bdb", bdbc) */
-  
+   
   // document level, used for basic search, collocation
   val diw = new IndexWriter(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/dindex")), new IndexWriterConfig(analyzer))
-  // heading level, search inside subpart
+  // heading level, search inside subpart, collocation
   val hiw = new IndexWriter(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/hindex")), new IndexWriterConfig(analyzer)) 
   // paragraph level, used only for collocation
   val piw = new IndexWriter(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/pindex")), new IndexWriterConfig(analyzer))
@@ -90,16 +85,16 @@ object ECCOIndexer {
     return length
   }
 
-  val dcontentFieldType = new FieldType(TextField.TYPE_NOT_STORED)
-  dcontentFieldType.setOmitNorms(true)
-  val dstoredContentFieldType = new FieldType(dcontentFieldType)
-  dstoredContentFieldType.setStored(true)
+  val dhcontentFieldType = new FieldType(TextField.TYPE_NOT_STORED)
+  dhcontentFieldType.setOmitNorms(true)
+  val dhstoredContentFieldType = new FieldType(dhcontentFieldType)
+  dhstoredContentFieldType.setStored(true)
 
-  dcontentFieldType.setStoreTermVectors(true)
+  dhcontentFieldType.setStoreTermVectors(true)
 
 
-  val phcontentFieldType = new FieldType(dcontentFieldType)
-  phcontentFieldType.setIndexOptions(IndexOptions.DOCS)
+  val pcontentFieldType = new FieldType(dhcontentFieldType)
+  pcontentFieldType.setIndexOptions(IndexOptions.DOCS)
   
   def main(args: Array[String]): Unit = {
     diw.deleteAll()
@@ -127,36 +122,75 @@ object ECCOIndexer {
       println("Processing "+file.getParent)
       val xmls = Source.fromFile(file)
       implicit val xml = new XMLEventReader(xmls)
-      val md = new Document()
-      var documentId: Field = null
-      var estcId: Field = null
+      val dmd = new Document()
+      val hmd = new Document()
+      val pmd = new Document()
       while (xml.hasNext) xml.next match {
-        case EvElemStart(_,"documentID",_,_) => 
-          documentId = new Field("documentID",readContents,StoredField.TYPE)
-          md.add(documentId)
+        case EvElemStart(_,"documentID",_,_) =>
+          val c = readContents
+          val f = new Field("documentID",c,StringField.TYPE_STORED)
+          dmd.add(f)
+          hmd.add(f)
         case EvElemStart(_,"ESTCID",_,_) =>
-          estcId = new Field("ESTCID",readContents,StoredField.TYPE)
-          md.add(estcId)
+          val c = readContents
+          val f = new Field("ESTCID",c,StringField.TYPE_STORED)
+          dmd.add(f)
+          hmd.add(f)
         case EvElemStart(_,"pubDate",_,_) => readContents match {
           case "" =>
-          case "1809" => 
-            md.add(new IntPoint("pubDate",18090101))
-            md.add(new StoredField("pubDate",18090101))
+          case "1809" =>
+            val ip = new IntPoint("pubDate",18090101)
+            dmd.add(ip)
+            pmd.add(ip)
+            hmd.add(ip)
+            val f = new StoredField("pubDate",18090101)
+            hmd.add(f)
+            dmd.add(f)
           case any => 
-            md.add(new IntPoint("pubDate",any.toInt))
-            md.add(new StoredField("pubDate",any.toInt))
+            val ip = new IntPoint("pubDate",any.toInt) 
+            dmd.add(ip)
+            pmd.add(ip)
+            hmd.add(ip)
+            val f = new StoredField("pubDate",any.toInt)
+            dmd.add(f)
+            hmd.add(f)
         }
-        case EvElemStart(_,"language",_,_) => md.add(new Field("language",readContents,StringField.TYPE_STORED))
-        case EvElemStart(_,"module",_,_) => md.add(new Field("module",readContents,StringField.TYPE_STORED))
-        case EvElemStart(_,"notes",_,_) => md.add(new Field("notes",readContents,dstoredContentFieldType))
-        case EvElemStart(_,"fullTitle",_,_) => md.add(new Field("fullTitle",readContents,dstoredContentFieldType))
+        case EvElemStart(_,"totalPages",_,_) => 
+          val tp = readContents.toInt
+          val ip = new IntPoint("totalPages",tp) 
+          dmd.add(ip)
+          pmd.add(ip)
+          hmd.add(ip)
+          val f = new StoredField("totalPages",tp)
+          dmd.add(f)
+          hmd.add(f)
+        case EvElemStart(_,"language",_,_) =>
+          val c = readContents
+          val f = new Field("language",c,StringField.TYPE_STORED)
+          dmd.add(f)
+          hmd.add(f)
+          pmd.add(new Field("language",c,StringField.TYPE_NOT_STORED))
+        case EvElemStart(_,"module",_,_) =>
+          val c = readContents
+          val f = new Field("module",c,StringField.TYPE_STORED)
+          dmd.add(f)
+          hmd.add(f)
+          pmd.add(new Field("module",c,StringField.TYPE_NOT_STORED))
+        case EvElemStart(_,"fullTitle",_,_) => 
+          val f = new Field("fullTitle",readContents,dhstoredContentFieldType)
+          dmd.add(f)
+          hmd.add(f)
         case _ => 
       }
       xmls.close()
+      var tlength = 0
+      val pdocs = new ArrayBuffer[Document]
+      val hdocs = new ArrayBuffer[Document]
+      val ddocs = new ArrayBuffer[Document]
       for (file <- getFileTree(file.getParentFile)) if (file.getName.endsWith(".txt") && !file.getName.contains("_page")) {
         val dcontents = new StringBuilder
         val d = new Document()
-        for (f <- md) d.add(f)
+        for (f <- dmd) d.add(f)
         var hds = Seq(1,2,3).map(w => None.asInstanceOf[Option[Document]]).toBuffer
         val field = fileRegex.findFirstMatchIn(file.getName).get.group(1)
         val hcontents = hds.map(w => new StringBuilder)
@@ -166,10 +200,12 @@ object ECCOIndexer {
           if (line.isEmpty) {
             if (!pcontents.isEmpty) {
               val d2 = new Document()
-              d2.add(new Field("content",pcontents.toString,phcontentFieldType))
-              d2.add(new Field("type", field, StringField.TYPE_STORED))
+              for (f <- pmd) d2.add(f)
+              d2.add(new Field("content",pcontents.toString,pcontentFieldType))
+              d2.add(new IntPoint("contentTokens",getNumberOfTokens(pcontents.toString)))
+              d2.add(new Field("type", field, StringField.TYPE_NOT_STORED))
               pcontents.clear()
-              piw.addDocument(d2)
+              pdocs += d2
             }
           } else
             pcontents.append(line)
@@ -184,17 +220,19 @@ object ECCOIndexer {
             ) {
               hds(i).foreach { d2 => 
                 if (!contents.isEmpty) {
-                  d2.add(new Field("content",contents.toString,phcontentFieldType))
+                  d2.add(new Field("content",contents.toString,dhcontentFieldType))
+                  d2.add(new IntPoint("contentTokens",getNumberOfTokens(contents.toString)))
                   contents.clear()
                 }
                 d2.add(new Field("type", field, StringField.TYPE_STORED))
-                hiw.addDocument(d2)
+                hdocs += d2
               }
               hds(i) = None
             }
             val d2 = new Document()
+            for (f <- hmd) d2.add(f)
             hds(level) = Some(d2)
-            val f = new Field("heading",line.substring(level+1),phcontentFieldType)
+            val f = new Field("heading",line.substring(level+2),dhstoredContentFieldType)
             d2.add(f)
             for (i <- 0 until level) hcontents(i).append(line)
           } else
@@ -207,17 +245,35 @@ object ECCOIndexer {
             contents = hcontents(i)
         )
           hds(i).foreach { d2 => 
-            if (!contents.isEmpty)
-              d2.add(new Field("content",contents.toString,phcontentFieldType))
+            if (!contents.isEmpty) {
+              d2.add(new Field("content",contents.toString,dhcontentFieldType))
+              d2.add(new IntPoint("contentTokens",getNumberOfTokens(contents.toString)))
+            }
             d2.add(new Field("type", field, StringField.TYPE_STORED))
-            hiw.addDocument(d2)
+            hdocs += d2
           }
         d.add(new Field("type", field, StringField.TYPE_STORED))
-        d.add(new Field("content", dcontents.toString, dcontentFieldType))
+        d.add(new Field("content", dcontents.toString, dhcontentFieldType))
         val not = getNumberOfTokens(dcontents.toString)
+        tlength += dcontents.length
         d.add(new IntPoint("contentTokens", not))
-        d.add(new StoredField("contentTokens", not))
+        ddocs.add(d)
+      }
+      val f1 = new IntPoint("length", tlength)
+      val f2 = new StoredField("length", tlength)
+      for (d <- ddocs) {
+        d.add(f1)
+        d.add(f2)
         diw.addDocument(d)
+      }
+      for (d <- hdocs) {
+        d.add(f1)
+        d.add(f2)
+        hiw.addDocument(d)
+      }
+      for (d <- pdocs) {
+        d.add(f1)
+        piw.addDocument(d)
       }
     }
     diw.forceMerge(1)
