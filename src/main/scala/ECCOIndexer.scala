@@ -41,7 +41,7 @@ import org.apache.lucene.analysis.shingle.ShingleAnalyzerWrapper
 object ECCOIndexer {
   /** helper function to get a recursive stream of files for a directory */
   def getFileTree(f: File): Stream[File] =
-    f #:: (if (f.isDirectory) f.listFiles().toStream.flatMap(getFileTree)
+    f #:: (if (f.isDirectory) f.listFiles().sorted.toStream.flatMap(getFileTree)
       else Stream.empty)
       
   def readContents(implicit xml: XMLEventReader): String = {
@@ -92,10 +92,11 @@ object ECCOIndexer {
 
   val dcontentFieldType = new FieldType(TextField.TYPE_NOT_STORED)
   dcontentFieldType.setOmitNorms(true)
-  dcontentFieldType.setStoreTermVectors(true)
-
   val dstoredContentFieldType = new FieldType(dcontentFieldType)
   dstoredContentFieldType.setStored(true)
+
+  dcontentFieldType.setStoreTermVectors(true)
+
 
   val phcontentFieldType = new FieldType(dcontentFieldType)
   phcontentFieldType.setIndexOptions(IndexOptions.DOCS)
@@ -126,30 +127,36 @@ object ECCOIndexer {
       println("Processing "+file.getParent)
       val xmls = Source.fromFile(file)
       implicit val xml = new XMLEventReader(xmls)
-      val d = new Document()
+      val md = new Document()
       var documentId: Field = null
       var estcId: Field = null
       while (xml.hasNext) xml.next match {
         case EvElemStart(_,"documentID",_,_) => 
-          documentId = new Field("metadata_documentID",readContents,StoredField.TYPE)
-          d.add(documentId)
+          documentId = new Field("documentID",readContents,StoredField.TYPE)
+          md.add(documentId)
         case EvElemStart(_,"ESTCID",_,_) =>
-          estcId = new Field("metadata_ESTCID",readContents,StoredField.TYPE)
-          d.add(estcId)
+          estcId = new Field("ESTCID",readContents,StoredField.TYPE)
+          md.add(estcId)
         case EvElemStart(_,"pubDate",_,_) => readContents match {
           case "" =>
-          case "1809" => d.add(new IntPoint("metadata_pubDate",18090101))
-          case any => d.add(new IntPoint("metadata_pubDate",any.toInt))
+          case "1809" => 
+            md.add(new IntPoint("pubDate",18090101))
+            md.add(new StoredField("pubDate",18090101))
+          case any => 
+            md.add(new IntPoint("pubDate",any.toInt))
+            md.add(new StoredField("pubDate",any.toInt))
         }
-        case EvElemStart(_,"language",_,_) => d.add(new Field("metadata_language",readContents,StringField.TYPE_STORED))
-        case EvElemStart(_,"module",_,_) => d.add(new Field("metadata_module",readContents,StringField.TYPE_STORED))
-        case EvElemStart(_,"notes",_,_) => d.add(new Field("metadata_notes",readContents,dstoredContentFieldType))
-        case EvElemStart(_,"fullTitle",_,_) => d.add(new Field("metadata_fullTitle",readContents,dstoredContentFieldType))
+        case EvElemStart(_,"language",_,_) => md.add(new Field("language",readContents,StringField.TYPE_STORED))
+        case EvElemStart(_,"module",_,_) => md.add(new Field("module",readContents,StringField.TYPE_STORED))
+        case EvElemStart(_,"notes",_,_) => md.add(new Field("notes",readContents,dstoredContentFieldType))
+        case EvElemStart(_,"fullTitle",_,_) => md.add(new Field("fullTitle",readContents,dstoredContentFieldType))
         case _ => 
       }
       xmls.close()
-      val dcontents = new StringBuilder
       for (file <- getFileTree(file.getParentFile)) if (file.getName.endsWith(".txt") && !file.getName.contains("_page")) {
+        val dcontents = new StringBuilder
+        val d = new Document()
+        for (f <- md) d.add(f)
         var hds = Seq(1,2,3).map(w => None.asInstanceOf[Option[Document]]).toBuffer
         val field = fileRegex.findFirstMatchIn(file.getName).get.group(1)
         val hcontents = hds.map(w => new StringBuilder)
@@ -159,7 +166,8 @@ object ECCOIndexer {
           if (line.isEmpty) {
             if (!pcontents.isEmpty) {
               val d2 = new Document()
-              d2.add(new Field("contents",pcontents.toString,phcontentFieldType))
+              d2.add(new Field("content",pcontents.toString,phcontentFieldType))
+              d2.add(new Field("type", field, StringField.TYPE_STORED))
               pcontents.clear()
               piw.addDocument(d2)
             }
@@ -176,9 +184,10 @@ object ECCOIndexer {
             ) {
               hds(i).foreach { d2 => 
                 if (!contents.isEmpty) {
-                  d2.add(new Field("contents",contents.toString,phcontentFieldType))
+                  d2.add(new Field("content",contents.toString,phcontentFieldType))
                   contents.clear()
                 }
+                d2.add(new Field("type", field, StringField.TYPE_STORED))
                 hiw.addDocument(d2)
               }
               hds(i) = None
@@ -199,13 +208,17 @@ object ECCOIndexer {
         )
           hds(i).foreach { d2 => 
             if (!contents.isEmpty)
-              d2.add(new Field("contents",contents.toString,phcontentFieldType))
+              d2.add(new Field("content",contents.toString,phcontentFieldType))
+            d2.add(new Field("type", field, StringField.TYPE_STORED))
             hiw.addDocument(d2)
           }
+        d.add(new Field("type", field, StringField.TYPE_STORED))
+        d.add(new Field("content", dcontents.toString, dcontentFieldType))
+        val not = getNumberOfTokens(dcontents.toString)
+        d.add(new IntPoint("contentTokens", not))
+        d.add(new StoredField("contentTokens", not))
+        diw.addDocument(d)
       }
-      d.add(new Field("contents", dcontents.toString, dcontentFieldType))
-      d.add(new StoredField("tlength",getNumberOfTokens(dcontents.toString)))
-      diw.addDocument(d)
     }
     diw.forceMerge(1)
     diw.commit()
