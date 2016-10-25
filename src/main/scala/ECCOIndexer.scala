@@ -85,16 +85,12 @@ object ECCOIndexer {
     return length
   }
 
-  val dhcontentFieldType = new FieldType(TextField.TYPE_NOT_STORED)
-  dhcontentFieldType.setOmitNorms(true)
-  val dhstoredContentFieldType = new FieldType(dhcontentFieldType)
+  val dhpcontentFieldType = new FieldType(TextField.TYPE_NOT_STORED)
+  dhpcontentFieldType.setOmitNorms(true)
+  val dhstoredContentFieldType = new FieldType(dhpcontentFieldType)
   dhstoredContentFieldType.setStored(true)
 
-  dhcontentFieldType.setStoreTermVectors(true)
-
-
-  val pcontentFieldType = new FieldType(dhcontentFieldType)
-  pcontentFieldType.setIndexOptions(IndexOptions.DOCS)
+  dhpcontentFieldType.setStoreTermVectors(true)
   
   def main(args: Array[String]): Unit = {
     diw.deleteAll()
@@ -155,15 +151,18 @@ object ECCOIndexer {
             dmd.add(f)
             hmd.add(f)
         }
-        case EvElemStart(_,"totalPages",_,_) => 
-          val tp = readContents.toInt
-          val ip = new IntPoint("totalPages",tp) 
-          dmd.add(ip)
-          pmd.add(ip)
-          hmd.add(ip)
-          val f = new StoredField("totalPages",tp)
-          dmd.add(f)
-          hmd.add(f)
+        case EvElemStart(_,"totalPages",_,_) =>
+          val tp = readContents
+          if (!tp.isEmpty) {
+            val tpi = tp.toInt
+            val ip = new IntPoint("totalPages",tpi) 
+            dmd.add(ip)
+            pmd.add(ip)
+            hmd.add(ip)
+            val f = new StoredField("totalPages",tpi)
+            dmd.add(f)
+            hmd.add(f)
+          }
         case EvElemStart(_,"language",_,_) =>
           val c = readContents
           val f = new Field("language",c,StringField.TYPE_STORED)
@@ -201,7 +200,7 @@ object ECCOIndexer {
             if (!pcontents.isEmpty) {
               val d2 = new Document()
               for (f <- pmd) d2.add(f)
-              d2.add(new Field("content",pcontents.toString,pcontentFieldType))
+              d2.add(new Field("content",pcontents.toString,dhpcontentFieldType))
               d2.add(new IntPoint("contentTokens",getNumberOfTokens(pcontents.toString)))
               d2.add(new Field("type", field, StringField.TYPE_NOT_STORED))
               pcontents.clear()
@@ -220,7 +219,7 @@ object ECCOIndexer {
             ) {
               hds(i).foreach { d2 => 
                 if (!contents.isEmpty) {
-                  d2.add(new Field("content",contents.toString,dhcontentFieldType))
+                  d2.add(new Field("content",contents.toString,dhpcontentFieldType))
                   d2.add(new IntPoint("contentTokens",getNumberOfTokens(contents.toString)))
                   contents.clear()
                 }
@@ -246,14 +245,14 @@ object ECCOIndexer {
         )
           hds(i).foreach { d2 => 
             if (!contents.isEmpty) {
-              d2.add(new Field("content",contents.toString,dhcontentFieldType))
+              d2.add(new Field("content",contents.toString,dhpcontentFieldType))
               d2.add(new IntPoint("contentTokens",getNumberOfTokens(contents.toString)))
             }
             d2.add(new Field("type", field, StringField.TYPE_STORED))
             hdocs += d2
           }
         d.add(new Field("type", field, StringField.TYPE_STORED))
-        d.add(new Field("content", dcontents.toString, dhcontentFieldType))
+        d.add(new Field("content", dcontents.toString, dhpcontentFieldType))
         val not = getNumberOfTokens(dcontents.toString)
         tlength += dcontents.length
         d.add(new IntPoint("contentTokens", not))
