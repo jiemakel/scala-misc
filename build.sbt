@@ -24,6 +24,7 @@ libraryDependencies ++= Seq(
 "it.geosolutions.imageio-ext" % "imageio-ext-tiff" % "1.1.13",
 "org.apache.lucene" % "lucene-analyzers-common" % "6.2.1",
 "org.apache.lucene" % "lucene-queryparser" % "6.2.1",
+"org.apache.lucene" % "lucene-codecs" % "6.2.1",
 "com.sleepycat" % "je" % "7.0.6",
 "org.apache.commons" % "commons-math3" % "3.6.1"
 )

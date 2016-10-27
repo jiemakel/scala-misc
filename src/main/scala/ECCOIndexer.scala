@@ -38,6 +38,9 @@ import org.apache.lucene.document.IntPoint
 import org.apache.lucene.index.IndexOptions
 import org.apache.lucene.analysis.shingle.ShingleAnalyzerWrapper
 import scala.collection.mutable.ArrayBuffer
+import org.apache.lucene.codecs.FilterCodec
+import org.apache.lucene.codecs.lucene62.Lucene62Codec
+import org.apache.lucene.codecs.memory.FSTOrdPostingsFormat
 
 object ECCOIndexer {
   /** helper function to get a recursive stream of files for a directory */
@@ -65,13 +68,15 @@ object ECCOIndexer {
   val headingRegex = "^# ".r
 
   val analyzer = new StandardAnalyzer()
-   
+  
+  val codec = new ECCOCodec()
+  
   // document level, used for basic search, collocation
-  val diw = new IndexWriter(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/dindex")), new IndexWriterConfig(analyzer))
+  val diw = new IndexWriter(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/dindex")), new IndexWriterConfig(analyzer).setCodec(codec))
   // heading level, search inside subpart, collocation
-  val hiw = new IndexWriter(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/hindex")), new IndexWriterConfig(analyzer)) 
+  val hiw = new IndexWriter(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/hindex")), new IndexWriterConfig(analyzer).setCodec(codec)) 
   // paragraph level, used only for collocation
-  val piw = new IndexWriter(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/pindex")), new IndexWriterConfig(analyzer))
+  val piw = new IndexWriter(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/pindex")), new IndexWriterConfig(analyzer).setCodec(codec))
 
   def getNumberOfTokens(text: String): Int = {
     val ts = analyzer.tokenStream("", text)
