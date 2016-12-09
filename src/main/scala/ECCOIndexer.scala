@@ -25,7 +25,7 @@ import scala.xml.pull.EvElemEnd
 import org.apache.lucene.document.StringField
 import org.apache.lucene.document.Field.Store
 
-import scala.collection.JavaConversions._
+import scala.collection.JavaConverters._
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
 import org.apache.lucene.document.FieldType
@@ -41,6 +41,13 @@ import scala.collection.mutable.ArrayBuffer
 import org.apache.lucene.codecs.FilterCodec
 import org.apache.lucene.codecs.lucene62.Lucene62Codec
 import org.apache.lucene.codecs.memory.FSTOrdPostingsFormat
+import org.apache.lucene.store.MMapDirectory
+import org.apache.lucene.codecs.Codec
+import fi.seco.lucene.FSTOrdTermVectorsCodec
+import org.apache.lucene.analysis.CharArraySet
+import org.apache.lucene.index.UpgradeIndexMergePolicy
+import com.bizo.mighty.csv.CSVReader
+import org.apache.lucene.index.SegmentCommitInfo
 
 object ECCOIndexer {
   /** helper function to get a recursive stream of files for a directory */
@@ -52,6 +59,7 @@ object ECCOIndexer {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
+      case EvElemStart(_,_,_,_) => return null
       case EvText(text) => content.append(text)
       case er: EvEntityRef =>
         content.append('&')
@@ -67,17 +75,16 @@ object ECCOIndexer {
   
   val headingRegex = "^# ".r
 
-  val analyzer = new StandardAnalyzer()
+  val analyzer = new StandardAnalyzer(CharArraySet.EMPTY_SET)
   
-  val codec = new ECCOCodec()
+  val codec = new FSTOrdTermVectorsCodec()
   
-  // document level, used for basic search, collocation
-  val diw = new IndexWriter(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/dindex")), new IndexWriterConfig(analyzer).setCodec(codec))
-  // heading level, search inside subpart, collocation
-  val hiw = new IndexWriter(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/hindex")), new IndexWriterConfig(analyzer).setCodec(codec)) 
-  // paragraph level, used only for collocation
-  val piw = new IndexWriter(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/pindex")), new IndexWriterConfig(analyzer).setCodec(codec))
-
+  def iw(path: String): IndexWriter = {
+    val iwc = new IndexWriterConfig(analyzer)
+    iwc.setUseCompoundFile(false)
+    new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
+  }
+  
   def getNumberOfTokens(text: String): Int = {
     val ts = analyzer.tokenStream("", text)
     val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
@@ -90,16 +97,39 @@ object ECCOIndexer {
     return length
   }
 
-  val contentFieldType = new FieldType(TextField.TYPE_NOT_STORED)
+  val contentFieldType = new FieldType(TextField.TYPE_STORED)
   contentFieldType.setOmitNorms(true)
-  val storedContentFieldType = new FieldType(contentFieldType)
-  storedContentFieldType.setStored(true)
 
   contentFieldType.setStoreTermVectors(true)
   
+  def merge(path: String): Unit = {
+    val iwc = new IndexWriterConfig(analyzer)
+    iwc.setCodec(codec)
+    iwc.setMergePolicy(new UpgradeIndexMergePolicy(iwc.getMergePolicy()) {
+      override protected def shouldUpgradeSegment(si: SegmentCommitInfo): Boolean =  !si.info.getCodec.equals(codec)
+    })
+    iwc.setUseCompoundFile(false)
+    val miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
+    miw.forceMerge(1)
+    miw.commit()
+    miw.close()
+    miw.getDirectory.close()
+  }
+  
   def main(args: Array[String]): Unit = {
+    // document level
+    val diw = iw(args.last+"/dindex")
+    // document part level
+    val dpiw = iw(args.last+"/dpindex")
+    // section level
+    val hiw = iw(args.last+"/sindex") 
+    // paragraph level
+    val piw = iw(args.last+"/pindex")
+  
     diw.deleteAll()
     diw.commit()
+    dpiw.deleteAll()
+    dpiw.commit()
     hiw.deleteAll()
     hiw.commit()
     piw.deleteAll()
@@ -119,32 +149,76 @@ object ECCOIndexer {
   32836 TOC
    1481 volume
      */
-    for (dir<-args.toSeq;file <- getFileTree(new File(dir))) if (file.getName.endsWith("_metadata.xml")) {
+    for (dir<-args.toSeq.dropRight(1);file <- getFileTree(new File(dir))) if (file.getName.endsWith("_metadata.xml")) {
       println("Processing "+file.getParent)
       val xmls = Source.fromFile(file)
       implicit val xml = new XMLEventReader(xmls)
       val md = new Document()
+      var documentID: String = null
       while (xml.hasNext) xml.next match {
         case EvElemStart(_,"documentID",_,_) =>
-          val c = readContents
-          val f = new Field("documentID",c,StringField.TYPE_STORED)
+          documentID = readContents
+          val f = new Field("documentID",documentID,StringField.TYPE_STORED)
           md.add(f)
         case EvElemStart(_,"ESTCID",_,_) =>
           val c = readContents
           val f = new Field("ESTCID",c,StringField.TYPE_STORED)
           md.add(f)
+        case EvElemStart(_,"bibliographicID",attr,_) if (attr("type")(0) == "ESTC") =>
+          val c = readContents
+          val f = new Field("ESTCID",c,StringField.TYPE_STORED)
+          md.add(f)
         case EvElemStart(_,"pubDate",_,_) => readContents match {
+          case null => // ECCO2
+            var break = false
+            var endDateFound = false
+            var startDate: String = null
+            while (xml.hasNext && !break) {
+              xml.next match {
+                case EvElemStart(_,"pubDateStart",_,_) => readContents match {
+                  case any =>
+                    startDate = any
+                    val ip = new IntPoint("pubDateStart",any.toInt) 
+                    md.add(ip)
+                    val f = new StoredField("pubDateStart",any.toInt)
+                    md.add(f)
+                }
+                case EvElemStart(_,"pubDateEnd",_,_) => readContents match {
+                  case any =>                    
+                    val ip = new IntPoint("pubDateEnd",any.replaceAll("00","99").toInt) 
+                    md.add(ip)
+                    val f = new StoredField("pubDateEnd",any.replaceAll("00","99").toInt)
+                    md.add(f)
+                }
+                case EvElemEnd(_,"pubDate") => break = true
+                case _ => 
+              }
+            }
+            if (!endDateFound && startDate != null) {
+              val ip = new IntPoint("pubDateEnd",startDate.replaceAll("00","99").toInt) 
+              md.add(ip)
+              val f = new StoredField("pubDateEnd",startDate.replaceAll("00","99").toInt)
+              md.add(f)
+            }
           case "" =>
           case "1809" =>
-            val ip = new IntPoint("pubDate",18090101)
+            val ip = new IntPoint("pubDateStart",18090000)
+            val ip2 = new IntPoint("pubDateEnd",18099999)
             md.add(ip)
-            val f = new StoredField("pubDate",18090101)
+            md.add(ip2)
+            val f = new StoredField("pubDateStart",18090000)
+            val f2 = new StoredField("pubDateEnd",18099999)
             md.add(f)
+            md.add(f2)
           case any => 
-            val ip = new IntPoint("pubDate",any.toInt) 
+            val ip = new IntPoint("pubDateStart", any.replaceAll("01","00").toInt) 
+            val ip2 = new IntPoint("pubDateEnd", any.replaceAll("01", "99").toInt)
             md.add(ip)
-            val f = new StoredField("pubDate",any.toInt)
+            md.add(ip2)
+            val f = new StoredField("pubDateStart",any.replaceAll("01","00").toInt)
+            val f2 = new StoredField("pubDateEnd", any.replaceAll("01", "99").toInt)
             md.add(f)
+            md.add(f2)
         }
         case EvElemStart(_,"totalPages",_,_) =>
           val tp = readContents
@@ -164,21 +238,36 @@ object ECCOIndexer {
           val f = new Field("module",c,StringField.TYPE_STORED)
           md.add(f)
         case EvElemStart(_,"fullTitle",_,_) => 
-          val f = new Field("fullTitle",readContents,storedContentFieldType)
+          val f = new Field("fullTitle",readContents,contentFieldType)
           md.add(f)
         case _ => 
       }
       xmls.close()
-      var tlength = 0
+      var sections = 0
       val pdocs = new ArrayBuffer[Document]
       val hdocs = new ArrayBuffer[Document]
-      val ddocs = new ArrayBuffer[Document]
+      val dpdocs = new ArrayBuffer[Document]
+      val dcontents = new StringBuilder
+      val d = new Document()
+      for (f <- md.asScala) d.add(f)
       for (file <- getFileTree(file.getParentFile)) if (file.getName.endsWith(".txt") && !file.getName.contains("_page")) {
-        val dcontents = new StringBuilder
-        val d = new Document()
-        for (f <- md) d.add(f)
+        val dpcontents = new StringBuilder
+        val dpd = new Document()
+        for (f <- md.asScala) dpd.add(f)
+        if (new File(file.getPath.replace(".txt","-graphics.csv")).exists)
+          for (r <- CSVReader(file.getPath.replace(".txt","-graphics.csv"))) {
+            val f = new Field("containsGraphicOfType",r(1), StringField.TYPE_STORED)
+            dpd.add(f)
+            d.add(f)
+            if (r(3)!="") {
+              val f = new Field("containsGraphicCaption", r(3), TextField.TYPE_STORED)
+              dpd.add(f)
+              d.add(f)
+            }
+          }
         var hds = Seq(1,2,3).map(w => None.asInstanceOf[Option[Document]]).toBuffer
-        val field = fileRegex.findFirstMatchIn(file.getName).get.group(1)
+        var currentSectionFields = Seq(1,2,3).map(w => None.asInstanceOf[Option[Field]]).toBuffer
+        val documentPart = fileRegex.findFirstMatchIn(file.getName).get.group(1)
         val hcontents = hds.map(w => new StringBuilder)
         val pcontents = new StringBuilder
         val fl = Source.fromFile(file)
@@ -186,10 +275,13 @@ object ECCOIndexer {
           if (line.isEmpty) {
             if (!pcontents.isEmpty) {
               val d2 = new Document()
-              for (f <- md) d2.add(f)
+              for (f <- md.asScala) d2.add(f)
               d2.add(new Field("content",pcontents.toString,contentFieldType))
-              d2.add(new IntPoint("contentTokens",getNumberOfTokens(pcontents.toString)))
-              d2.add(new Field("type", field, StringField.TYPE_STORED))
+              val tokens = getNumberOfTokens(pcontents.toString)
+              d2.add(new IntPoint("contentTokens",tokens))
+              d2.add(new StoredField("contentTokens",tokens))
+              d2.add(new Field("documentPart", documentPart, StringField.TYPE_STORED))
+              currentSectionFields.foreach(_.foreach(d2.add(_)))
               pcontents.clear()
               pdocs += d2
             }
@@ -207,23 +299,32 @@ object ECCOIndexer {
               hds(i).foreach { d2 => 
                 if (!contents.isEmpty) {
                   d2.add(new Field("content",contents.toString,contentFieldType))
-                  d2.add(new IntPoint("contentTokens",getNumberOfTokens(contents.toString)))
+                  val tokens = getNumberOfTokens(contents.toString)
+                  d2.add(new IntPoint("contentTokens",tokens))
+                  d2.add(new StoredField("contentTokens",tokens))
                   contents.clear()
                 }
-                d2.add(new Field("type", field, StringField.TYPE_STORED))
+                d2.add(new Field("documentPart", documentPart, StringField.TYPE_STORED))
                 hdocs += d2
               }
               hds(i) = None
             }
             val d2 = new Document()
-            for (f <- md) d2.add(f)
+            for (f <- md.asScala) d2.add(f)
+            d2.add(new IntPoint("headingLevel", level))
+            d2.add(new StoredField("headingLevel", level))
             hds(level) = Some(d2)
-            val f = new Field("heading",line.substring(level+2),storedContentFieldType)
+            val f = new Field("heading",line.substring(level+2),contentFieldType)
             d2.add(f)
+            val f2 = new Field("sectionID", documentID + "_" + sections, StringField.TYPE_STORED)
+            d2.add(f2)
+            for (i <- 0 until level) currentSectionFields(i).foreach(d2.add(_))
+            currentSectionFields(level) = Some(f2)
+            sections += 1
             for (i <- 0 until level) hcontents(i).append(line)
           } else
             for (i <- 0 until hds.length) hds(i).foreach(d=> hcontents(i).append(line))
-          dcontents.append(line)
+          dpcontents.append(line)
         }
         fl.close()
         for (
@@ -232,25 +333,39 @@ object ECCOIndexer {
         )
           hds(i).foreach { d2 => 
             if (!contents.isEmpty) {
-              d2.add(new Field("content",contents.toString,contentFieldType))
-              d2.add(new IntPoint("contentTokens",getNumberOfTokens(contents.toString)))
+              val scontents = contents.toString.trim
+              d2.add(new Field("content",scontents,contentFieldType))
+              val tokens = getNumberOfTokens(scontents)
+              d2.add(new IntPoint("contentTokens",tokens))
+              d2.add(new StoredField("contentTokens",tokens))
             }
-            d2.add(new Field("type", field, StringField.TYPE_STORED))
+            d2.add(new Field("documentPart", documentPart, StringField.TYPE_STORED))
             hdocs += d2
           }
-        d.add(new Field("type", field, StringField.TYPE_STORED))
-        d.add(new Field("content", dcontents.toString, contentFieldType))
-        val not = getNumberOfTokens(dcontents.toString)
-        tlength += dcontents.length
-        d.add(new IntPoint("contentTokens", not))
-        ddocs.add(d)
+        dpd.add(new Field("documentPart", documentPart, StringField.TYPE_STORED))
+        val dpcontentsS = dpcontents.toString.trim
+        dpd.add(new Field("content", dpcontentsS, contentFieldType))
+        val not = getNumberOfTokens(dpcontentsS)
+        dpd.add(new IntPoint("contentTokens", not))
+        dpd.add(new StoredField("contentTokens", not))
+        dpdocs += dpd
+        dcontents.append(dpcontentsS)
+        dcontents.append("\n\n")
       }
-      val f1 = new IntPoint("length", tlength)
-      val f2 = new StoredField("length", tlength)
-      for (d <- ddocs) {
+      val dcontentsS = dcontents.toString.trim
+      d.add(new Field("content", dcontentsS, contentFieldType))
+      val not = getNumberOfTokens(dcontentsS)
+      d.add(new IntPoint("contentTokens", not))
+      d.add(new StoredField("contentTokens", not))
+      val f1 = new IntPoint("documentLength", dcontentsS.length)
+      val f2 = new StoredField("documentLength", dcontentsS.length)
+      d.add(f1)
+      d.add(f2)
+      diw.addDocument(d)
+      for (d <- dpdocs) {
         d.add(f1)
         d.add(f2)
-        diw.addDocument(d)
+        dpiw.addDocument(d)
       }
       for (d <- hdocs) {
         d.add(f1)
@@ -262,17 +377,17 @@ object ECCOIndexer {
         piw.addDocument(d)
       }
     }
-    diw.forceMerge(1)
-    diw.commit()
     diw.close()
     diw.getDirectory.close()
-    hiw.forceMerge(1)
-    hiw.commit()
+    dpiw.close()
+    dpiw.getDirectory.close()
     hiw.close()
     hiw.getDirectory.close()
-    piw.forceMerge(1)
-    piw.commit()
     piw.close()
     piw.getDirectory.close()
+    merge(args.last+"/dindex")
+    merge(args.last+"/dpindex")
+    merge(args.last+"/sindex")
+    merge(args.last+"/pindex")
   }
 }

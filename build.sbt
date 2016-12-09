@@ -25,7 +25,7 @@ libraryDependencies ++= Seq(
 "org.apache.lucene" % "lucene-analyzers-common" % "6.3.0",
 "org.apache.lucene" % "lucene-queryparser" % "6.3.0",
 "org.apache.lucene" % "lucene-highlighter" % "6.3.0",
-"fi.seco" %% "ecco-codec" % "1.0.0",
+"fi.seco" %% "lucene-fstordtermvectorscodec" % "1.0.0",
 "com.sleepycat" % "je" % "7.0.6",
 "org.apache.commons" % "commons-math3" % "3.6.1"
 )
