@@ -22,9 +22,10 @@ libraryDependencies ++= Seq(
 "it.geosolutions.imageio-ext" % "imageio-ext-kakadu" % "1.1.13",
 "it.geosolutions.imageio-ext" % "imageio-ext-kakadujni" % "6.3.1",
 "it.geosolutions.imageio-ext" % "imageio-ext-tiff" % "1.1.13",
-"org.apache.lucene" % "lucene-analyzers-common" % "6.2.1",
-"org.apache.lucene" % "lucene-queryparser" % "6.2.1",
-"org.apache.lucene" % "lucene-codecs" % "6.2.1",
+"org.apache.lucene" % "lucene-analyzers-common" % "6.3.0",
+"org.apache.lucene" % "lucene-queryparser" % "6.3.0",
+"org.apache.lucene" % "lucene-highlighter" % "6.3.0",
+"fi.seco" %% "ecco-codec" % "1.0.0",
 "com.sleepycat" % "je" % "7.0.6",
 "org.apache.commons" % "commons-math3" % "3.6.1"
 )
