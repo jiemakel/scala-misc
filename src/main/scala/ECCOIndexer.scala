@@ -151,6 +151,7 @@ object ECCOIndexer {
      */
     for (dir<-args.toSeq.dropRight(1);file <- getFileTree(new File(dir))) if (file.getName.endsWith("_metadata.xml")) {
       println("Processing "+file.getParent)
+      var totalPages = 0
       val xmls = Source.fromFile(file)
       implicit val xml = new XMLEventReader(xmls)
       val md = new Document()
@@ -223,10 +224,10 @@ object ECCOIndexer {
         case EvElemStart(_,"totalPages",_,_) =>
           val tp = readContents
           if (!tp.isEmpty) {
-            val tpi = tp.toInt
-            val ip = new IntPoint("totalPages",tpi) 
+            totalPages = tp.toInt
+            val ip = new IntPoint("totalPages", totalPages) 
             md.add(ip)
-            val f = new StoredField("totalPages",tpi)
+            val f = new StoredField("totalPages", totalPages)
             md.add(f)
           }
         case EvElemStart(_,"language",_,_) =>
@@ -251,7 +252,10 @@ object ECCOIndexer {
       val dcontents = new StringBuilder
       val d = new Document()
       for (f <- md.asScala) d.add(f)
-      for (file <- getFileTree(file.getParentFile)) if (file.getName.endsWith(".txt") && !file.getName.contains("_page")) {
+      var lastPage = 0
+      for (file <- getFileTree(file.getParentFile)) if (file.getName.endsWith(".txt")) if (file.getName.contains("_page"))
+        for (curPage <- "_page([0-9]+)".r.findFirstMatchIn(file.getName).map(_.group(1).toInt); if curPage>lastPage) lastPage = curPage
+      else {
         val dpcontents = new StringBuilder
         val dpd = new Document()
         val dpf = new Field("partID", documentID + "_" + documentparts, StringField.TYPE_STORED)
@@ -365,6 +369,7 @@ object ECCOIndexer {
       d.add(new StoredField("contentTokens", not))
       val f1 = new IntPoint("documentLength", dcontentsS.length)
       val f2 = new StoredField("documentLength", dcontentsS.length)
+      if (totalPages != lastPage) println(s"total pages $totalPages != actual $lastPage")
       d.add(f1)
       d.add(f2)
       diw.addDocument(d)
