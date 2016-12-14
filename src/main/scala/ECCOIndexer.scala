@@ -244,6 +244,7 @@ object ECCOIndexer {
       }
       xmls.close()
       var sections = 0
+      var documentparts = 0
       val pdocs = new ArrayBuffer[Document]
       val hdocs = new ArrayBuffer[Document]
       val dpdocs = new ArrayBuffer[Document]
@@ -253,6 +254,8 @@ object ECCOIndexer {
       for (file <- getFileTree(file.getParentFile)) if (file.getName.endsWith(".txt") && !file.getName.contains("_page")) {
         val dpcontents = new StringBuilder
         val dpd = new Document()
+        val dpf = new Field("partID", documentID + "_" + documentparts, StringField.TYPE_STORED)
+        dpd.add(dpf)
         for (f <- md.asScala) dpd.add(f)
         if (new File(file.getPath.replace(".txt","-graphics.csv")).exists)
           for (r <- CSVReader(file.getPath.replace(".txt","-graphics.csv"))) {
@@ -281,6 +284,7 @@ object ECCOIndexer {
               d2.add(new IntPoint("contentTokens",tokens))
               d2.add(new StoredField("contentTokens",tokens))
               d2.add(new Field("documentPart", documentPart, StringField.TYPE_STORED))
+              d2.add(dpf)
               currentSectionFields.foreach(_.foreach(d2.add(_)))
               pcontents.clear()
               pdocs += d2
@@ -318,6 +322,7 @@ object ECCOIndexer {
             d2.add(f)
             val f2 = new Field("sectionID", documentID + "_" + sections, StringField.TYPE_STORED)
             d2.add(f2)
+            d2.add(dpf)
             for (i <- 0 until level) currentSectionFields(i).foreach(d2.add(_))
             currentSectionFields(level) = Some(f2)
             sections += 1
@@ -349,6 +354,7 @@ object ECCOIndexer {
         dpd.add(new IntPoint("contentTokens", not))
         dpd.add(new StoredField("contentTokens", not))
         dpdocs += dpd
+        documentparts += 1
         dcontents.append(dpcontentsS)
         dcontents.append("\n\n")
       }
