@@ -17,7 +17,6 @@ import java.io.PrintWriter
 import java.io.File
 import javax.imageio.ImageIO
 import scala.concurrent.Future
-import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Await
 import scala.concurrent.duration._
 import scala.xml.pull.EvEntityRef
@@ -42,6 +41,10 @@ import scala.collection.Searching.InsertionPoint
 import java.io.StringWriter
 import com.bizo.mighty.csv.CSVWriter
 import scala.xml.Utility
+import scala.concurrent.ExecutionContext
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.ArrayBlockingQueue
 
 object ECCOXML2Text extends LazyLogging {
   
@@ -57,8 +60,23 @@ object ECCOXML2Text extends LazyLogging {
       case _ => attrs.map( (m:MetaData) => " " + m.key + "='" + m.value +"'" ).reduceLeft(_+_)
     }
   }
+  
+  val numWorkers = sys.runtime.availableProcessors
+  val queueCapacity = 1000
+  val ec = ExecutionContext.fromExecutorService(
+   new ThreadPoolExecutor(
+     numWorkers, numWorkers,
+     0L, TimeUnit.SECONDS,
+     new ArrayBlockingQueue[Runnable](queueCapacity) {
+       override def offer(e: Runnable) = {
+         put(e)
+         true
+       }
+     }
+   )
+  )
 
-  def process(file: File, prefixLength: Int, dest: String, guessParagraphs: Boolean): Future[Unit] = Future {
+  def process(file: File, prefixLength: Int, dest: String, guessParagraphs: Boolean): Future[Unit] = Future({
     val dir = dest+file.getParentFile.getAbsolutePath.substring(prefixLength) + "/"
     new File(dir).mkdirs()
     val prefix = dir+file.getName.replace(".xml","")+"_"
@@ -103,6 +121,7 @@ object ECCOXML2Text extends LazyLogging {
     var lastLine: ArrayBuffer[(Int,Int,Int,String)] = null
     var currentLine = new ArrayBuffer[(Int,Int,Int,String)] //x,starty,endy,content
     var lastWasText = false
+    var partNum = 0
     while (xml.hasNext) xml.next match {
       case EvElemStart(_,"text",_,_) =>
         while (xml.hasNext && !break) xml.next match {
@@ -112,7 +131,8 @@ object ECCOXML2Text extends LazyLogging {
               if (gw!=null) gw.close()
               if (hw!=null) hw.close()
               currentSection = attrs("type")(0).text
-              sw = new PrintWriter(new File(prefix+currentSection.replaceAllLiterally("bodyPage","body")+".txt"))
+              partNum += 1
+              sw = new PrintWriter(new File(prefix+partNum+"_"+currentSection.replaceAllLiterally("bodyPage","body")+".txt"))
               gw = null
               hw = null
               currentLine.clear()
@@ -135,7 +155,7 @@ object ECCOXML2Text extends LazyLogging {
               case EvComment(_) => 
               case EvElemEnd(_,"sectionHeader") => break2 = true 
             }
-            if (hw == null) hw = CSVWriter(prefix+currentSection.replaceAllLiterally("bodyPage","body")+"-headings.csv")
+            if (hw == null) hw = CSVWriter(prefix+partNum+"_"+currentSection.replaceAllLiterally("bodyPage","body")+"-headings.csv")
             val wordS = word.toString.trim
             hw.write(Seq(""+page,htype,wordS))
             content.append(wordS)
@@ -153,7 +173,7 @@ object ECCOXML2Text extends LazyLogging {
               case EvComment(_) => 
               case EvElemEnd(_,"graphicCaption") => break2 = true 
             }
-            if (gw == null) gw = CSVWriter(prefix+currentSection.replaceAllLiterally("bodyPage","body")+"-graphics.csv")
+            if (gw == null) gw = CSVWriter(prefix+partNum+"_"+currentSection.replaceAllLiterally("bodyPage","body")+"-graphics.csv")
             gw.write(Seq(""+page,htype,attrs.get("colorimage").map(_(0).text).getOrElse(""),word.toString.trim))
           case EvElemStart(_,"wd",attrs,_) =>
             word.clear()
@@ -255,7 +275,8 @@ object ECCOXML2Text extends LazyLogging {
     sw = new PrintWriter(new File(prefix+"metadata.xml"))
     sw.append(metadata)
     sw.close()
-  }
+    logger.info("Processed: "+file)
+  })(ec)
   
   def getStackTraceAsString(t: Throwable) = {
     val sw = new StringWriter
@@ -265,29 +286,38 @@ object ECCOXML2Text extends LazyLogging {
   
   def main(args: Array[String]): Unit = {
     val dest = new File(args.last).getAbsolutePath
-    val f = Future.sequence(
-      for (
-        dirp<-args.dropRight(1).toSeq;
+    implicit val iec = ExecutionContext.Implicits.global
+    val toProcess = for (
+        dirp<-args.dropRight(1).toStream;
         guessParagraphs = dirp.endsWith("+");
         dir = if (guessParagraphs) dirp.dropRight(1) else dirp;
         fd=new File(dir);
         _ = if (!fd.exists()) logger.warn(dir+" doesn't exist!");
-        prefixLength = (if (!fd.isDirectory()) fd.getParentFile.getAbsolutePath else fd.getAbsolutePath).length;
-        file <- getFileTree(fd); if (file.getName().endsWith(".xml") && !file.getName().startsWith("ECCO_tiff_manifest_") && !file.getName().endsWith("_metadata.xml") && {
+        prefixLength = (if (!fd.isDirectory()) fd.getParentFile.getAbsolutePath else fd.getAbsolutePath).length
+    ) yield (guessParagraphs,fd,prefixLength)
+    val f = Future.sequence(toProcess.flatMap{ case (guessParagraphs,fd,prefixLength) => {
+      getFileTree(fd)
+        .filter(file => file.getName.endsWith(".xml") && !file.getName.startsWith("ECCO_tiff_manifest_") && !file.getName().endsWith("_metadata.xml") && {
           val dir = dest+file.getParentFile.getAbsolutePath.substring(prefixLength) + "/"
           val prefix = dir+file.getName.replace(".xml","")+"_"
           if (new File(prefix+"metadata.xml").exists) {
             logger.info("Already processed: "+file)
             false
           } else true
-      })) yield {
-      val f = process(file,prefixLength,dest, guessParagraphs)
-      f.onFailure { case t => logger.error("An error has occured processing "+file+": " + getStackTraceAsString(t)) }
-      f.onSuccess { case _ => logger.info("Processed: "+file) }
-      f.recover { case cause => throw new Exception("An error has occured processing "+file, cause) }
-    })
+        })
+        .map(file => {
+          val f = process(file, prefixLength, dest, guessParagraphs)
+          val path = file.getPath
+          f.recover { 
+            case cause =>
+              logger.error("An error has occured processing "+path+": " + getStackTraceAsString(cause))
+              throw new Exception("An error has occured processing "+path, cause) 
+          }
+        })
+    }})
     f.onFailure { case t => logger.error("Processing of at least one file resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t)) }
     f.onSuccess { case _ => logger.info("Successfully processed all files.") }
-    Await.result(f, Duration.Inf)
+    Await.ready(f, Duration.Inf)
+    ec.shutdown()
   }
 }

@@ -50,33 +50,15 @@ import org.apache.lucene.index.IndexUpgrader
 import org.apache.lucene.index.UpgradeIndexMergePolicy
 import fi.seco.lucene.FSTOrdTermVectorsCodec
 import org.apache.lucene.index.SegmentCommitInfo
+import com.typesafe.scalalogging.LazyLogging
+import org.apache.lucene.search.Sort
+import org.apache.lucene.search.SortField
 
-object ECCOIndexMerger {
-  val analyzer = new StandardAnalyzer()
-  
-  val codec = new FSTOrdTermVectorsCodec()
-  
- def merge(path: String): Unit = {
-    println("Merging "+path)
-    val iwc = new IndexWriterConfig(analyzer)
-    iwc.setCodec(codec)
-    iwc.setMergePolicy(new UpgradeIndexMergePolicy(iwc.getMergePolicy()) {
-      override protected def shouldUpgradeSegment(si: SegmentCommitInfo): Boolean =  !si.info.getCodec.equals(codec)
-    })
-    iwc.setUseCompoundFile(false)
-    val miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
-    miw.forceMerge(1)
-    miw.commit()
-    miw.close()
-    miw.getDirectory.close()
-  }
-
+object ECCOIndexMerger extends LazyLogging {
   def main(args: Array[String]): Unit = {
-    if (args.length!=0) args.foreach(merge(_)) else {
-      merge("/srv/ecco/dindex")
-      merge("/srv/ecco/dpindex")
-      merge("/srv/ecco/sindex")
-      merge("/srv/ecco/pindex")      
-    }
+    ECCOIndexer.merge(args.last+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING)))
+    ECCOIndexer.merge(args.last+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG)))
+    ECCOIndexer.merge(args.last+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG)))
+    ECCOIndexer.merge(args.last+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)))
   }
 }
