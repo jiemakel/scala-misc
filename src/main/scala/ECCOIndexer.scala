@@ -68,6 +68,8 @@ import scala.concurrent.ExecutionContext
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ArrayBlockingQueue
+import scala.concurrent.Promise
+import org.apache.lucene.document.SortedSetDocValuesField
 
 object ECCOIndexer extends LazyLogging {
   
@@ -133,24 +135,50 @@ object ECCOIndexer extends LazyLogging {
     return length
   }
 
-  val contentFieldType = new FieldType(TextField.TYPE_STORED)
+  private val contentFieldType = new FieldType(TextField.TYPE_STORED)
   contentFieldType.setOmitNorms(true)
 
   contentFieldType.setStoreTermVectors(true)
   
+  private val normsOmittingStoredTextField = new FieldType(TextField.TYPE_STORED)
+  
+  normsOmittingStoredTextField.setOmitNorms(true)
+  
+  private val notStoredStringFieldWithTermVectors = new FieldType(StringField.TYPE_NOT_STORED)
+  notStoredStringFieldWithTermVectors.setStoreTermVectors(true)
+  
   def merge(path: String, sort: Sort): Unit = {
     logger.info("Merging index at "+path)
     var size = getFileTreeSize(path) 
-    
-    val iwc = new IndexWriterConfig(analyzer)
-    iwc.setCodec(codec)
-    var mp = new UpgradeIndexMergePolicy(iwc.getMergePolicy()) {
-      override protected def shouldUpgradeSegment(si: SegmentCommitInfo): Boolean =  !si.info.getCodec.equals(codec)
-    }
-    iwc.setIndexSort(sort);
-    iwc.setMergePolicy(mp)
+    // First, go to max two segments with general codec
+    var iwc = new IndexWriterConfig(analyzer)
+    iwc.setIndexSort(sort)
     iwc.setUseCompoundFile(false)
-    val miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
+    var miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
+    miw.forceMerge(2)
+    miw.commit()
+    miw.close()
+    miw.getDirectory.close
+    // Go to max one segment with custom codec
+    iwc = new IndexWriterConfig(analyzer)
+    iwc.setCodec(codec)
+    iwc.setIndexSort(sort)
+    iwc.setUseCompoundFile(false)
+    miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
+    miw.forceMerge(1)
+    miw.commit()
+    miw.close()
+    miw.getDirectory.close()
+    // Make sure the one segment we have is encoded with the custom codec (if we accidentally got to one segment in the first phase)
+    iwc = new IndexWriterConfig(analyzer)
+    iwc.setCodec(codec)
+    iwc.setIndexSort(sort)
+    iwc.setUseCompoundFile(false)
+    var mp = new UpgradeIndexMergePolicy(iwc.getMergePolicy()) {
+      override protected def shouldUpgradeSegment(si: SegmentCommitInfo): Boolean =  si.info.getCodec.getName != codec.getName
+    }
+    iwc.setMergePolicy(mp)
+    miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
     miw.forceMerge(1)
     miw.commit()
     miw.close()
@@ -158,31 +186,52 @@ object ECCOIndexer extends LazyLogging {
     logger.info(f"Merged index ${path}%s. Went from ${size}%,d bytes to ${getFileTreeSize(path)}%,d bytes.")
   }
   
+  def mergeIndices(path: String, single: Boolean)(implicit ec: ExecutionContext): Unit = {
+    val df = Future { merge(path+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING))) }
+    if (single) Await.result(df, Duration.Inf)
+    val dpf = Future { merge(path+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG))) }
+    if (single) Await.result(dpf, Duration.Inf)
+    val sf = Future { merge(path+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG))) }
+    if (single) Await.result(sf, Duration.Inf)
+    val pf = Future { merge(path+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG))) }
+    if (single) Await.result(pf, Duration.Inf)
+    Await.result(df, Duration.Inf)
+    Await.result(dpf, Duration.Inf)
+    Await.result(sf, Duration.Inf)
+    Await.result(pf, Duration.Inf)
+  }
+  
   private val paragraphs = new AtomicLong
   private val sections = new AtomicLong
   private val documentparts = new AtomicLong
   
-  private def index(file: File): Future[Unit] = Future({
+  private def index(id: String, file: File): Future[Unit] = Future({
+    val filePrefix = file.getName.replace("_metadata.xml","")
     logger.info("Processing: "+file.getPath.replace("_metadata.xml","*"))
     var totalPages = 0
     val xmls = Source.fromFile(file)
     implicit val xml = new XMLEventReader(xmls)
     val md = new Document()
+    md.add(new Field("collectionID",id,StringField.TYPE_NOT_STORED))
+    md.add(new SortedDocValuesField("collectionID",new BytesRef(id)))
     var documentID: String = null
+    var estcID: String = null
     while (xml.hasNext) xml.next match {
       case EvElemStart(_,"documentID",_,_) | EvElemStart(_,"PSMID",_,_) =>
         documentID = readContents
-        val f = new Field("documentID",documentID,StringField.TYPE_STORED)
+        val f = new Field("documentID",documentID,StringField.TYPE_NOT_STORED)
         md.add(f)
         md.add(new SortedDocValuesField("documentID", new BytesRef(documentID)))
       case EvElemStart(_,"ESTCID",_,_) =>
-        val c = readContents
-        val f = new Field("ESTCID",c,StringField.TYPE_STORED)
+        estcID = readContents
+        val f = new Field("ESTCID",estcID,StringField.TYPE_NOT_STORED)
         md.add(f)
-      case EvElemStart(_,"bibliographicID",attr,_) if (attr("type")(0) == "ESTC") =>
-        val c = readContents
-        val f = new Field("ESTCID",c,StringField.TYPE_STORED)
+        md.add(new SortedDocValuesField("ESTCID", new BytesRef(estcID)))
+      case EvElemStart(_,"bibliographicID",attr,_) if (attr("type")(0).text == "ESTC") =>
+        estcID = readContents
+        val f = new Field("ESTCID",estcID,StringField.TYPE_NOT_STORED)
         md.add(f)
+        md.add(new SortedDocValuesField("ESTCID", new BytesRef(estcID))) 
       case EvElemStart(_,"pubDate",_,_) => readContents match {
         case null => // ECCO2
           var break = false
@@ -195,14 +244,15 @@ object ECCOIndexer extends LazyLogging {
                   startDate = any
                   val ip = new IntPoint("pubDateStart",any.toInt) 
                   md.add(ip)
-                  val f = new StoredField("pubDateStart",any.toInt)
+                  val f = new NumericDocValuesField("pubDateStart",any.toInt)
                   md.add(f)
               }
               case EvElemStart(_,"pubDateEnd",_,_) => readContents match {
-                case any =>                    
+                case any =>
+                  endDateFound = true
                   val ip = new IntPoint("pubDateEnd",any.replaceAll("00","99").toInt) 
                   md.add(ip)
-                  val f = new StoredField("pubDateEnd",any.replaceAll("00","99").toInt)
+                  val f = new NumericDocValuesField("pubDateEnd",any.replaceAll("00","99").toInt)
                   md.add(f)
               }
               case EvElemEnd(_,"pubDate") => break = true
@@ -212,7 +262,7 @@ object ECCOIndexer extends LazyLogging {
           if (!endDateFound && startDate != null) {
             val ip = new IntPoint("pubDateEnd",startDate.replaceAll("00","99").toInt) 
             md.add(ip)
-            val f = new StoredField("pubDateEnd",startDate.replaceAll("00","99").toInt)
+            val f = new NumericDocValuesField("pubDateEnd",startDate.replaceAll("00","99").toInt)
             md.add(f)
           }
         case "" =>
@@ -221,8 +271,8 @@ object ECCOIndexer extends LazyLogging {
           val ip2 = new IntPoint("pubDateEnd",18099999)
           md.add(ip)
           md.add(ip2)
-          val f = new StoredField("pubDateStart",18090000)
-          val f2 = new StoredField("pubDateEnd",18099999)
+          val f = new NumericDocValuesField("pubDateStart",18090000)
+          val f2 = new NumericDocValuesField("pubDateEnd",18099999)
           md.add(f)
           md.add(f2)
         case any => 
@@ -230,8 +280,8 @@ object ECCOIndexer extends LazyLogging {
           val ip2 = new IntPoint("pubDateEnd", any.replaceAll("01", "99").toInt)
           md.add(ip)
           md.add(ip2)
-          val f = new StoredField("pubDateStart",any.replaceAll("01","00").toInt)
-          val f2 = new StoredField("pubDateEnd", any.replaceAll("01", "99").toInt)
+          val f = new NumericDocValuesField("pubDateStart",any.replaceAll("01","00").toInt)
+          val f2 = new NumericDocValuesField("pubDateEnd", any.replaceAll("01", "99").toInt)
           md.add(f)
           md.add(f2)
       }
@@ -241,17 +291,19 @@ object ECCOIndexer extends LazyLogging {
           totalPages = tp.toInt
           val ip = new IntPoint("totalPages", totalPages) 
           md.add(ip)
-          val f = new StoredField("totalPages", totalPages)
+          val f = new NumericDocValuesField("totalPages", totalPages)
           md.add(f)
         }
       case EvElemStart(_,"language",_,_) =>
         val c = readContents
-        val f = new Field("language",c,StringField.TYPE_STORED)
+        val f = new Field("language",c,StringField.TYPE_NOT_STORED)
         md.add(f)
+        md.add(new SortedDocValuesField("language",new BytesRef(c)))
       case EvElemStart(_,"module",_,_) =>
         val c = readContents
-        val f = new Field("module",c,StringField.TYPE_STORED)
+        val f = new Field("module",c,StringField.TYPE_NOT_STORED)
         md.add(f)
+        md.add(new SortedDocValuesField("module",new BytesRef(c)))
       case EvElemStart(_,"fullTitle",_,_) => 
         val f = new Field("fullTitle",readContents,contentFieldType)
         md.add(f)
@@ -259,10 +311,11 @@ object ECCOIndexer extends LazyLogging {
     }
     xmls.close()
     if (documentID==null) logger.error("No document ID for "+file)
+    if (estcID==null) logger.error("No ESTC ID for "+file)
     val dcontents = new StringBuilder
     var lastPage = 0
     val filesToProcess = new ArrayBuffer[File] 
-    for (file <- getFileTree(file.getParentFile)) if (file.getName.endsWith(".txt")) if (file.getName.contains("_page"))
+    for (file <- getFileTree(file.getParentFile); if file.getName.endsWith(".txt") && file.getName.startsWith(filePrefix)) if (file.getName.contains("_page"))
       for (curPage <- "_page([0-9]+)".r.findFirstMatchIn(file.getName).map(_.group(1).toInt); if curPage>lastPage) lastPage = curPage
     else filesToProcess += file
     if (totalPages != lastPage) logger.warn(s"total pages $totalPages != actual $lastPage")
@@ -273,26 +326,27 @@ object ECCOIndexer extends LazyLogging {
       totalLength += line.length
     }
     md.add(new IntPoint("documentLength", totalLength))
-    md.add(new StoredField("documentLength", totalLength))
+    md.add(new NumericDocValuesField("documentLength", totalLength))
     md.add(new IntPoint("totalParagraphs", totalParagraphs))
-    md.add(new StoredField("totalParagraphs", totalParagraphs))
+    md.add(new NumericDocValuesField("totalParagraphs", totalParagraphs))
     val d = new Document()
     for (f <- md.asScala) d.add(f)
     for (file <- filesToProcess.sortBy(x => x.getName.substring(x.getName.indexOf('_') + 1, x.getName.indexOf('_', x.getName.indexOf('_') + 1).toInt))) {
       val dpcontents = new StringBuilder
       val dpd = new Document()
       val documentPartNum = documentparts.getAndIncrement
-      val dpf = new Field("partID", ""+documentPartNum, StringField.TYPE_STORED)
+      val dpf = new Field("partID", ""+documentPartNum, StringField.TYPE_NOT_STORED)
       dpd.add(new NumericDocValuesField("partID", documentPartNum))
       dpd.add(dpf)
       for (f <- md.asScala) dpd.add(f)
       if (new File(file.getPath.replace(".txt","-graphics.csv")).exists)
         for (r <- CSVReader(file.getPath.replace(".txt","-graphics.csv"))) {
-          val f = new Field("containsGraphicOfType",r(1), StringField.TYPE_STORED)
+          val gtype = if (r(1)=="") "unknown" else r(1)
+          val f = new Field("containsGraphicOfType",gtype, notStoredStringFieldWithTermVectors)
           dpd.add(f)
           d.add(f)
           if (r(3)!="") {
-            val f = new Field("containsGraphicCaption", r(3), TextField.TYPE_STORED)
+            val f = new Field("containsGraphicCaption", r(3), normsOmittingStoredTextField)
             dpd.add(f)
             d.add(f)
           }
@@ -313,8 +367,9 @@ object ECCOIndexer extends LazyLogging {
             d2.add(new Field("content",pcontents.toString,contentFieldType))
             val tokens = getNumberOfTokens(pcontents.toString)
             d2.add(new IntPoint("contentTokens",tokens))
-            d2.add(new StoredField("contentTokens",tokens))
-            d2.add(new Field("documentPartType", documentPartType, StringField.TYPE_STORED))
+            d2.add(new NumericDocValuesField("contentTokens",tokens))
+            d2.add(new Field("documentPartType", documentPartType, StringField.TYPE_NOT_STORED))
+            d2.add(new SortedDocValuesField("documentPartType", new BytesRef(documentPartType)))
             d2.add(dpf)
             currentSectionFields.foreach(_.foreach(d2.add(_)))
             pcontents.clear()
@@ -336,10 +391,11 @@ object ECCOIndexer extends LazyLogging {
                 d2.add(new Field("content",contents.toString,contentFieldType))
                 val tokens = getNumberOfTokens(contents.toString)
                 d2.add(new IntPoint("contentTokens",tokens))
-                d2.add(new StoredField("contentTokens",tokens))
+                d2.add(new NumericDocValuesField("contentTokens",tokens))
                 contents.clear()
               }
-              d2.add(new Field("documentPartType", documentPartType, StringField.TYPE_STORED))
+              d2.add(new Field("documentPartType", documentPartType, StringField.TYPE_NOT_STORED))
+              d2.add(new SortedDocValuesField("documentPartType", new BytesRef(documentPartType)))
               siw.addDocument(d2)
             }
             hds(i) = None
@@ -347,14 +403,14 @@ object ECCOIndexer extends LazyLogging {
           val d2 = new Document()
           for (f <- md.asScala) d2.add(f)
           d2.add(new IntPoint("headingLevel", level))
-          d2.add(new StoredField("headingLevel", level))
+          d2.add(new SortedDocValuesField("headingLevel", new BytesRef(level)))
           hds(level) = Some(d2)
           val f = new Field("heading",line.substring(level+2),contentFieldType)
           d2.add(f)
           val sectionNum = sections.getAndIncrement()
           d2.add(new NumericDocValuesField("sectionID", sectionNum))
           d2.add(dpf)
-          val sid = new Field("sectionID", ""+sectionNum, StringField.TYPE_STORED)
+          val sid = new Field("sectionID", ""+sectionNum, StringField.TYPE_NOT_STORED)
           d2.add(sid)
           currentSectionFields(level) = Some(sid)
           for (i <- 0 until level) hcontents(i).append(line)
@@ -373,17 +429,19 @@ object ECCOIndexer extends LazyLogging {
             d2.add(new Field("content",scontents,contentFieldType))
             val tokens = getNumberOfTokens(scontents)
             d2.add(new IntPoint("contentTokens",tokens))
-            d2.add(new StoredField("contentTokens",tokens))
+            d2.add(new NumericDocValuesField("contentTokens",tokens))
           }
-          d2.add(new Field("documentPartType", documentPartType, StringField.TYPE_STORED))
+          d2.add(new Field("documentPartType", documentPartType, StringField.TYPE_NOT_STORED))
+          d2.add(new SortedDocValuesField("documentPartType", new BytesRef(documentPartType)))
           siw.addDocument(d2)
         }
-      dpd.add(new Field("documentPartType", documentPartType, StringField.TYPE_STORED))
+      dpd.add(new Field("documentPartType", documentPartType, StringField.TYPE_NOT_STORED))
+      dpd.add(new SortedDocValuesField("documentPartType", new BytesRef(documentPartType)))
       val dpcontentsS = dpcontents.toString.trim
       dpd.add(new Field("content", dpcontentsS, contentFieldType))
       val not = getNumberOfTokens(dpcontentsS)
       dpd.add(new IntPoint("contentTokens", not))
-      dpd.add(new StoredField("contentTokens", not))
+      dpd.add(new NumericDocValuesField("contentTokens", not))
       dpiw.addDocument(dpd)
       dcontents.append(dpcontentsS)
       dcontents.append("\n\n")
@@ -392,7 +450,7 @@ object ECCOIndexer extends LazyLogging {
     d.add(new Field("content", dcontentsS, contentFieldType))
     val not = getNumberOfTokens(dcontentsS)
     d.add(new IntPoint("contentTokens", not))
-    d.add(new StoredField("contentTokens", not))
+    d.add(new NumericDocValuesField("contentTokens", not))
     diw.addDocument(d)
     logger.info("Processed: "+file.getPath.replace("_metadata.xml","*"))
   })(ec)
@@ -441,18 +499,34 @@ object ECCOIndexer extends LazyLogging {
    1481 volume
      */
     implicit val iec = ExecutionContext.Implicits.global
-    val f = Future.sequence(args.dropRight(1).toStream.flatMap(p => getFileTree(new File(p))).filter(_.getName.endsWith("_metadata.xml")).map(file => {
-      val path = file.getPath.replace("_metadata.xml","*")
-      val f = index(file)
-      f.recover { 
-        case cause =>
-          logger.error("An error has occured processing "+path+": " + getStackTraceAsString(cause))
-          throw new Exception("An error has occured processing "+path, cause) 
-      }
-    }))
-    f.onFailure { case t => logger.error("Processing of at least one file resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t)) }
-    f.onSuccess { case _ => logger.info("Successfully processed all files.") }
-    Await.ready(f, Duration.Inf)
+    val all = Promise[Unit]()
+    val poison = Future[Unit]()
+    val bq = new ArrayBlockingQueue[Future[Unit]](queueCapacity)
+    Future { 
+      args.dropRight(1).toStream.flatMap(p => {
+        val parts = p.split(':')
+        getFileTree(new File(parts(0))).map((parts(1),_))
+      }).filter(_._2.getName.endsWith("_metadata.xml")).foreach(pair => {
+        val path = pair._2.getPath.replace("_metadata.xml","*")
+        val f = index(pair._1, pair._2)
+        f.recover { 
+          case cause =>
+            logger.error("An error has occured processing "+path+": " + getStackTraceAsString(cause))
+            throw new Exception("An error has occured processing "+path, cause) 
+        }
+        bq.put(f)
+      })
+      bq.put(poison)
+    }
+    var f = bq.take()
+    while (f ne poison) {
+      Await.ready(f, Duration.Inf)
+      f.onFailure { case t => all.failure(t) }
+      f = bq.take()
+    }
+    if (!all.isCompleted) all.success()
+    all.future.onFailure { case t => logger.error("Processing of at least one file resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t)) }
+    all.future.onSuccess { case _ => logger.info("Successfully processed all files.") }
     ec.shutdown()
     diw.close()
     diw.getDirectory.close()
@@ -462,9 +536,6 @@ object ECCOIndexer extends LazyLogging {
     siw.getDirectory.close()
     piw.close()
     piw.getDirectory.close()
-    merge(args.last+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING)))
-    merge(args.last+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG)))
-    merge(args.last+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG)))
-    merge(args.last+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)))
+    mergeIndices(args.last, false)
   }
 }
