@@ -27,7 +27,9 @@ libraryDependencies ++= Seq(
 "org.apache.lucene" % "lucene-highlighter" % "6.3.0",
 "fi.seco" %% "lucene-fstordtermvectorscodec" % "1.0.0",
 "com.sleepycat" % "je" % "7.0.6",
-"org.apache.commons" % "commons-math3" % "3.6.1"
+"org.apache.commons" % "commons-math3" % "3.6.1",
+"com.google.guava" % "guava" % "21.0",
+"com.breinify" % "brein-time-utilities" % "1.5.0"
 )
 
 resolvers ++= Seq(
