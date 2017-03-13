@@ -33,6 +33,8 @@ import com.brein.time.timeintervals.indexes.IntervalTree
 import com.brein.time.timeintervals.collections.ListIntervalCollection
 import com.brein.time.timeintervals.intervals.Interval
 import com.brein.time.timeintervals.collections.IntervalCollection.IntervalFilters
+import java.io.FileWriter
+import java.io.StringWriter
 
 
 object DetectColumnsInALTO extends LazyLogging {
@@ -45,15 +47,18 @@ object DetectColumnsInALTO extends LazyLogging {
   case class Block(hpos1: Long, vpos1: Long, hpos2: Long, vpos2: Long) extends Interval(vpos1, vpos2) {
   }
   
+  var pw: PrintWriter = null
+  
   def process(altoFile: File): Future[Unit] = Future {
     val s = Source.fromFile(altoFile,"UTF-8")
     val xml = new XMLEventReader(s)
     val textBlocks: IntervalTree = new IntervalTree()
-    var url: String = ""
-    var title: String = ""
+    var issn: String = ""
+    var date: String = ""
+    var page: Int = Integer.parseInt(altoFile.getName.substring(altoFile.getName.lastIndexOf('_')+1,altoFile.getName.length-4))
     while (xml.hasNext) xml.next match {
-      case EvElemStart(_,"title",_,_) => title = xml.next.asInstanceOf[EvText].text
-      case EvElemStart(_,"browseURL",_,_) => url = xml.next.asInstanceOf[EvText].text
+      case EvElemStart(_,"identifier",_,_) => issn = xml.next.asInstanceOf[EvText].text
+      case EvElemStart(_,"published",_,_) => date = xml.next.asInstanceOf[EvText].text
       case EvElemStart(_,"TextBlock",attrs,_) =>
         val hpos = Integer.parseInt(attrs("HPOS")(0).text)
         val vpos = Integer.parseInt(attrs("VPOS")(0).text)
@@ -63,9 +68,10 @@ object DetectColumnsInALTO extends LazyLogging {
         textBlocks.insert(block)
       case _ =>
     }
-    val cols: Buffer[Int] = new ArrayBuffer[Int]
+    val cols: Buffer[(Int,Long)] = new ArrayBuffer[(Int,Long)]
     val rowIntervals: IntervalTree = new IntervalTree()
     val seen: HashSet[Interval] = new HashSet[Interval]
+    var sum: Long = 0l
     for (ablock <- textBlocks.asScala.asInstanceOf[Iterable[Block]]) {
       rowIntervals.clear()
       seen.clear()
@@ -76,22 +82,54 @@ object DetectColumnsInALTO extends LazyLogging {
         ccols += 1
         for (ointerval <- rowIntervals.overlap(interval).asScala) seen += ointerval
       }
-      cols += ccols
+      val area = (ablock.hpos2 - ablock.hpos1) * (ablock.vpos2 - ablock.vpos1)
+      sum += area
+      cols += ((ccols, area))
     }
     val scols = cols.sorted
-    println(title, url, scols(scols.length / 2))
+    sum = sum / 2
+    var csum: Long = 0l
+    var i = -1
+    while (csum < sum) {
+      i += 1
+      csum += scols(i)._2
+    }
+    synchronized {
+      if (scols.size==0) pw.println(issn+","+date+","+page+",0,0")
+      else pw.println(issn+","+date+","+page+","+scols(i)._1+","+scols(scols.length / 2)._1)
+    }
     s.close()
   }
 
+  def getStackTraceAsString(t: Throwable) = {
+    val sw = new StringWriter
+    t.printStackTrace(new PrintWriter(sw))
+    sw.toString
+  }
+
+  
   def main(args: Array[String]): Unit = {
-    val f = Future.sequence(for (dir<-args.toSeq;altoFile <- getFileTree(new File(dir)); if (altoFile.getName.endsWith(".xml") && !altoFile.getName.endsWith("metadata.xml") && !altoFile.getName.endsWith("mets.xml"))) yield {
-      val f = process(altoFile)
-      /* f.onFailure { case t => logger.error("An error has occured processing "+altoFile+": " + t.printStackTrace()) }
-      f.onSuccess { case _ => logger.info("Processed: "+altoFile) }*/
-      f
-    })
+    pw = new PrintWriter(new FileWriter(args(args.length-1)))
+    val toProcess = for (
+        dir<-args.dropRight(1).toStream;
+        fd=new File(dir);
+        _ = if (!fd.exists()) logger.warn(dir+" doesn't exist!")
+    ) yield fd
+    val f = Future.sequence(toProcess.flatMap(fd => {
+      getFileTree(fd)
+        .filter(altoFile => altoFile.getName.endsWith(".xml") && !altoFile.getName.endsWith("metadata.xml") && !altoFile.getName.endsWith("mets.xml"))
+        .map(altoFile => {
+          val f = process(altoFile)
+          f.recover { 
+            case cause =>
+              logger.error("An error has occured processing "+altoFile+": " + getStackTraceAsString(cause))
+              throw new Exception("An error has occured processing "+altoFile, cause) 
+          }
+        })
+    }))
     f.onFailure { case t => logger.error("Processing of at least one file resulted in an error.") }
     f.onSuccess { case _ => logger.info("Successfully processed all files.") }
-    Await.result(f, Duration.Inf)
+    Await.ready(f, Duration.Inf)
+    pw.close()
   }
 }
