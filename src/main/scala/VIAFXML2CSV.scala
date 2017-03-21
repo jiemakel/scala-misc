@@ -43,6 +43,8 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
 
+import scala.concurrent.ExecutionContext.Implicits.global
+
 object VIAFXML2CSV extends LazyLogging {
   
   def readContents(implicit xml: XMLEventReader): String = {

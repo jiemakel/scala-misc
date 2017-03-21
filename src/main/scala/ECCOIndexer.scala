@@ -500,7 +500,7 @@ object ECCOIndexer extends LazyLogging {
      */
     implicit val iec = ExecutionContext.Implicits.global
     val all = Promise[Unit]()
-    val poison = Future[Unit]()
+    val poison = Future(())
     val bq = new ArrayBlockingQueue[Future[Unit]](queueCapacity)
     Future { 
       args.dropRight(1).toStream.flatMap(p => {
@@ -524,7 +524,7 @@ object ECCOIndexer extends LazyLogging {
       f.onFailure { case t => all.failure(t) }
       f = bq.take()
     }
-    if (!all.isCompleted) all.success()
+    if (!all.isCompleted) all.success(())
     all.future.onFailure { case t => logger.error("Processing of at least one file resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t)) }
     all.future.onSuccess { case _ => logger.info("Successfully processed all files.") }
     ec.shutdown()
