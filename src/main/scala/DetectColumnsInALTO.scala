@@ -35,6 +35,7 @@ import com.brein.time.timeintervals.intervals.Interval
 import com.brein.time.timeintervals.collections.IntervalCollection.IntervalFilters
 import java.io.FileWriter
 import java.io.StringWriter
+import scala.util.Try
 
 
 object DetectColumnsInALTO extends LazyLogging {
@@ -55,17 +56,20 @@ object DetectColumnsInALTO extends LazyLogging {
     val textBlocks: IntervalTree = new IntervalTree()
     var issn: String = ""
     var date: String = ""
-    var page: Int = Integer.parseInt(altoFile.getName.substring(altoFile.getName.lastIndexOf('_')+1,altoFile.getName.length-4))
+    var page: Int = Try(Integer.parseInt(altoFile.getName.substring(altoFile.getName.lastIndexOf('_')+1,altoFile.getName.length-4))).getOrElse(0)
     while (xml.hasNext) xml.next match {
       case EvElemStart(_,"identifier",_,_) => issn = xml.next.asInstanceOf[EvText].text
       case EvElemStart(_,"published",_,_) => date = xml.next.asInstanceOf[EvText].text
-      case EvElemStart(_,"TextBlock",attrs,_) =>
+      case EvElemStart(_,"TextBlock",attrs,_) => try {
         val hpos = Integer.parseInt(attrs("HPOS")(0).text)
         val vpos = Integer.parseInt(attrs("VPOS")(0).text)
         val width = Integer.parseInt(attrs("WIDTH")(0).text)
         val height = Integer.parseInt(attrs("HEIGHT")(0).text)
         val block = new Block(hpos, vpos, hpos+width, vpos+height)
-        textBlocks.insert(block)
+        if (width>=0 && height>=0) textBlocks.insert(block)
+      } catch {
+        case e: Exception => logger.warn("Exception processing text block "+attrs,e)
+      }
       case _ =>
     }
     val cols: Buffer[(Int,Long)] = new ArrayBuffer[(Int,Long)]
