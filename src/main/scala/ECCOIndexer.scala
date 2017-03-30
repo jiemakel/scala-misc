@@ -70,29 +70,12 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.ArrayBlockingQueue
 import scala.concurrent.Promise
 import org.apache.lucene.document.SortedSetDocValuesField
+import org.apache.lucene.index.LogDocMergePolicy
+import scala.util.Failure
+import scala.util.Success
 
-object ECCOIndexer extends LazyLogging {
+object ECCOIndexer extends OctavoIndexer {
   
-  val numWorkers = sys.runtime.availableProcessors
-  val queueCapacity = 1000
-  val ec = ExecutionContext.fromExecutorService(
-   new ThreadPoolExecutor(
-     numWorkers, numWorkers,
-     0L, TimeUnit.SECONDS,
-     new ArrayBlockingQueue[Runnable](queueCapacity) {
-       override def offer(e: Runnable) = {
-         put(e)
-         true
-       }
-     }
-   )
-  )
-  
-  /** helper function to get a recursive stream of files for a directory */
-  def getFileTree(f: File): Stream[File] =
-    f #:: (if (f.isDirectory) f.listFiles().sorted.toStream.flatMap(getFileTree)
-      else Stream.empty)
-      
   def readContents(implicit xml: XMLEventReader): String = {
     var break = false
     val content = new StringBuilder()
@@ -113,94 +96,6 @@ object ECCOIndexer extends LazyLogging {
   
   val headingRegex = "^# ".r
 
-  val analyzer = new StandardAnalyzer(CharArraySet.EMPTY_SET)
-  
-  val codec = new FSTOrdTermVectorsCodec()
-  
-  def iw(path: String): IndexWriter = {
-    val iwc = new IndexWriterConfig(analyzer)
-    iwc.setUseCompoundFile(false)
-    new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
-  }
-  
-  def getNumberOfTokens(text: String): Int = {
-    val ts = analyzer.tokenStream("", text)
-    val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
-    ts.reset()
-    var length = 0
-    while (ts.incrementToken())
-      length += oa.getPositionIncrement
-    ts.end()
-    ts.close()
-    return length
-  }
-
-  private val contentFieldType = new FieldType(TextField.TYPE_STORED)
-  contentFieldType.setOmitNorms(true)
-
-  contentFieldType.setStoreTermVectors(true)
-  
-  private val normsOmittingStoredTextField = new FieldType(TextField.TYPE_STORED)
-  
-  normsOmittingStoredTextField.setOmitNorms(true)
-  
-  private val notStoredStringFieldWithTermVectors = new FieldType(StringField.TYPE_NOT_STORED)
-  notStoredStringFieldWithTermVectors.setStoreTermVectors(true)
-  
-  def merge(path: String, sort: Sort): Unit = {
-    logger.info("Merging index at "+path)
-    var size = getFileTreeSize(path) 
-    // First, go to max two segments with general codec
-    var iwc = new IndexWriterConfig(analyzer)
-    iwc.setIndexSort(sort)
-    iwc.setUseCompoundFile(false)
-    var miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
-    miw.forceMerge(2)
-    miw.commit()
-    miw.close()
-    miw.getDirectory.close
-    // Go to max one segment with custom codec
-    iwc = new IndexWriterConfig(analyzer)
-    iwc.setCodec(codec)
-    iwc.setIndexSort(sort)
-    iwc.setUseCompoundFile(false)
-    miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
-    miw.forceMerge(1)
-    miw.commit()
-    miw.close()
-    miw.getDirectory.close()
-    // Make sure the one segment we have is encoded with the custom codec (if we accidentally got to one segment in the first phase)
-    iwc = new IndexWriterConfig(analyzer)
-    iwc.setCodec(codec)
-    iwc.setIndexSort(sort)
-    iwc.setUseCompoundFile(false)
-    var mp = new UpgradeIndexMergePolicy(iwc.getMergePolicy()) {
-      override protected def shouldUpgradeSegment(si: SegmentCommitInfo): Boolean =  si.info.getCodec.getName != codec.getName
-    }
-    iwc.setMergePolicy(mp)
-    miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
-    miw.forceMerge(1)
-    miw.commit()
-    miw.close()
-    miw.getDirectory.close()
-    logger.info(f"Merged index ${path}%s. Went from ${size}%,d bytes to ${getFileTreeSize(path)}%,d bytes.")
-  }
-  
-  def mergeIndices(path: String, single: Boolean)(implicit ec: ExecutionContext): Unit = {
-    val df = Future { merge(path+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING))) }
-    if (single) Await.result(df, Duration.Inf)
-    val dpf = Future { merge(path+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG))) }
-    if (single) Await.result(dpf, Duration.Inf)
-    val sf = Future { merge(path+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG))) }
-    if (single) Await.result(sf, Duration.Inf)
-    val pf = Future { merge(path+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG))) }
-    if (single) Await.result(pf, Duration.Inf)
-    Await.result(df, Duration.Inf)
-    Await.result(dpf, Duration.Inf)
-    Await.result(sf, Duration.Inf)
-    Await.result(pf, Duration.Inf)
-  }
-  
   private val paragraphs = new AtomicLong
   private val sections = new AtomicLong
   private val documentparts = new AtomicLong
@@ -456,14 +351,7 @@ object ECCOIndexer extends LazyLogging {
   })(ec)
   
   var diw, dpiw, siw, piw = null.asInstanceOf[IndexWriter]
-  
-  def getFileTreeSize(path: String): Long = getFileTree(new File(path)).foldLeft(0l)((s,f) => s+f.length)    
-  
-  def getStackTraceAsString(t: Throwable) = {
-    val sw = new StringWriter
-    t.printStackTrace(new PrintWriter(sw))
-    sw.toString
-  }
+  var writers = Seq(diw, dpiw, siw, piw)
   
   def main(args: Array[String]): Unit = {
     // document level
@@ -471,18 +359,10 @@ object ECCOIndexer extends LazyLogging {
     // document part level
     dpiw = iw(args.last+"/dpindex")
     // section level
-    siw = iw(args.last+"/sindex") 
+    siw = iw(args.last+"/sindex")
     // paragraph level
     piw = iw(args.last+"/pindex")
-  
-    diw.deleteAll()
-    diw.commit()
-    dpiw.deleteAll()
-    dpiw.commit()
-    siw.deleteAll()
-    siw.commit()
-    piw.deleteAll()
-    piw.commit()
+    writers.foreach(clear(_))
     /*
      *
    6919 article
@@ -502,7 +382,7 @@ object ECCOIndexer extends LazyLogging {
     val all = Promise[Unit]()
     val poison = Future(())
     val bq = new ArrayBlockingQueue[Future[Unit]](queueCapacity)
-    Future { 
+    val sf = Future { 
       args.dropRight(1).toStream.flatMap(p => {
         val parts = p.split(':')
         getFileTree(new File(parts(0))).map((parts(1),_))
@@ -518,24 +398,32 @@ object ECCOIndexer extends LazyLogging {
       })
       bq.put(poison)
     }
+    sf.onComplete { 
+      case Failure(t) => logger.error("Processing of at least one file resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t))
+      case Success(_) =>
+    }
     var f = bq.take()
     while (f ne poison) {
       Await.ready(f, Duration.Inf)
-      f.onFailure { case t => all.failure(t) }
+      f.onComplete { 
+        case Failure(t) => all.failure(t)
+        case Success(_) =>
+      }
       f = bq.take()
     }
-    if (!all.isCompleted) all.success(())
-    all.future.onFailure { case t => logger.error("Processing of at least one file resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t)) }
-    all.future.onSuccess { case _ => logger.info("Successfully processed all files.") }
+    Await.ready(sf, Duration.Inf)
+    if (!all.isCompleted) all.success(Unit)
+    all.future.onComplete {
+      case Success(_) => logger.info("Successfully processed all files.")
+      case Failure(t) => logger.error("Processing of at least one file resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t))
+    }
     ec.shutdown()
-    diw.close()
-    diw.getDirectory.close()
-    dpiw.close()
-    dpiw.getDirectory.close()
-    siw.close()
-    siw.getDirectory.close()
-    piw.close()
-    piw.getDirectory.close()
-    mergeIndices(args.last, false)
+    writers.foreach(close)
+    mergeIndices(Seq(
+     (args.last+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING))),
+     (args.last+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG))),
+     (args.last+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG))),
+     (args.last+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)))
+    ))
   }
 }
