@@ -7,6 +7,8 @@ scalaVersion := "2.12.1"
 resolvers += "Oracle" at "http://download.oracle.com/maven/"
 
 libraryDependencies ++= Seq(
+"com.typesafe.play" %% "play-json" % "2.6.0-M6",
+"fi.seco" % "lexicalanalysis" % "1.5.5",
 "org.scala-lang.modules" %% "scala-java8-compat" % "0.8.0",
 "org.json4s" %% "json4s-native" % "3.5.1" ,
 "com.fasterxml" % "aalto-xml" % "1.0.0",

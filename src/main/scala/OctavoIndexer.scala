@@ -26,37 +26,15 @@ import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 import org.json4s._
 import org.json4s.JsonDSL._
+import scala.concurrent.Promise
+import scala.util.Failure
+import scala.util.Success
+import org.apache.lucene.codecs.lucene62.Lucene62Codec
+import org.apache.lucene.codecs.lucene50.Lucene50StoredFieldsFormat.Mode
+import org.apache.lucene.index.ConcurrentMergeScheduler
 
-class OctavoIndexer extends LazyLogging {
-  
-  private val numWorkers = sys.runtime.availableProcessors
-  val queueCapacity = 1000
-  val ec = ExecutionContext.fromExecutorService(
-   new ThreadPoolExecutor(
-     numWorkers, numWorkers,
-     0L, TimeUnit.SECONDS,
-     new ArrayBlockingQueue[Runnable](queueCapacity) {
-       override def offer(e: Runnable) = {
-         put(e)
-         true
-       }
-     }
-   )
-  )
-  
-  /** helper function to get a recursive stream of files for a directory */
-  def getFileTree(f: File): Stream[File] =
-    f #:: (if (f.isDirectory) f.listFiles().sorted.toStream.flatMap(getFileTree)
-      else Stream.empty)
-      
-  def getFileTreeSize(path: String): Long = getFileTree(new File(path)).foldLeft(0l)((s,f) => s+f.length)    
-  
-  def getStackTraceAsString(t: Throwable) = {
-    val sw = new StringWriter
-    t.printStackTrace(new PrintWriter(sw))
-    sw.toString
-  }
-      
+class OctavoIndexer extends ParallelProcessor {
+   
   val analyzer = new StandardAnalyzer(CharArraySet.EMPTY_SET)
   
   def getNumberOfTokens(text: String): Int = {
@@ -71,12 +49,11 @@ class OctavoIndexer extends LazyLogging {
     return length
   }
   
-  val codec = new FSTOrdTermVectorsCodec()
-  
   def iw(path: String): IndexWriter = {
     val iwc = new IndexWriterConfig(analyzer)
     iwc.setUseCompoundFile(false)
     iwc.setMergePolicy(new LogDocMergePolicy())
+    iwc.setCodec(new Lucene62Codec(Mode.BEST_SPEED))
     new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
   }
 
@@ -97,7 +74,12 @@ class OctavoIndexer extends LazyLogging {
     var iwc = new IndexWriterConfig(analyzer)
     iwc.setIndexSort(sort)
     iwc.setUseCompoundFile(false)
-    iwc.setMergePolicy(new LogDocMergePolicy())
+    val mergePolicy = new LogDocMergePolicy()
+    iwc.setMergePolicy(mergePolicy)
+    val mergeScheduler = new ConcurrentMergeScheduler()
+    mergeScheduler.setMaxMergesAndThreads(sys.runtime.availableProcessors + 5, sys.runtime.availableProcessors)
+    mergeScheduler.disableAutoIOThrottle()
+    iwc.setMergeScheduler(mergeScheduler)
     var miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
     miw.forceMerge(2)
     miw.commit()
@@ -105,10 +87,12 @@ class OctavoIndexer extends LazyLogging {
     miw.getDirectory.close
     // Go to max one segment with custom codec
     iwc = new IndexWriterConfig(analyzer)
-    iwc.setCodec(codec)
+    val finalCodec = new FSTOrdTermVectorsCodec()
+    iwc.setCodec(finalCodec)
     iwc.setIndexSort(sort)
     iwc.setUseCompoundFile(false)
-    iwc.setMergePolicy(new LogDocMergePolicy())
+    iwc.setMergePolicy(mergePolicy)
+    iwc.setMergeScheduler(mergeScheduler)
     miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
     miw.forceMerge(1)
     miw.commit()
@@ -116,13 +100,14 @@ class OctavoIndexer extends LazyLogging {
     miw.getDirectory.close()
     // Make sure the one segment we have is encoded with the custom codec (if we accidentally got to one segment in the first phase)
     iwc = new IndexWriterConfig(analyzer)
-    iwc.setCodec(codec)
+    iwc.setCodec(finalCodec)
     iwc.setIndexSort(sort)
     iwc.setUseCompoundFile(false)
-    val mp = new UpgradeIndexMergePolicy(new LogDocMergePolicy()) {
-      override protected def shouldUpgradeSegment(si: SegmentCommitInfo): Boolean =  si.info.getCodec.getName != codec.getName
+    val mp = new UpgradeIndexMergePolicy(mergePolicy) {
+      override protected def shouldUpgradeSegment(si: SegmentCommitInfo): Boolean =  si.info.getCodec.getName != finalCodec.getName
     }
     iwc.setMergePolicy(mp)
+    iwc.setMergeScheduler(mergeScheduler)
     miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
     miw.forceMerge(1)
     miw.commit()
@@ -131,9 +116,9 @@ class OctavoIndexer extends LazyLogging {
     logger.info(f"Merged index ${path}%s. Went from ${size}%,d bytes to ${getFileTreeSize(path)}%,d bytes.")
   }
   
-  def mergeIndices(iws: Traversable[(String, Sort)], single: Boolean = false)(implicit ec: ExecutionContext): Unit = {
+  def mergeIndices(iws: Traversable[(String, Sort)], single: Boolean = false): Unit = {
     iws.map(p => { 
-      val f = Future { merge(p._1, p._2) }
+      val f = Future { merge(p._1, p._2) }(ExecutionContext.Implicits.global)
       if (single) Await.result(f, Duration.Inf)
       f
      }).foreach(Await.result(_, Duration.Inf))
@@ -148,5 +133,5 @@ class OctavoIndexer extends LazyLogging {
     iw.close()
     iw.getDirectory.close()
   }
-    
+      
 }

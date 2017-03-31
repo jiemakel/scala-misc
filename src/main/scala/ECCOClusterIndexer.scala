@@ -83,96 +83,9 @@ import scala.util.Try
 import scala.util.Success
 import scala.util.Failure
 
-object ECCOClusterIndexer extends LazyLogging {
+object ECCOClusterIndexer extends OctavoIndexer {
   
-  val numWorkers = sys.runtime.availableProcessors
-  val queueCapacity = 1000
-  val ec = ExecutionContext.fromExecutorService(
-   new ThreadPoolExecutor(
-     numWorkers, numWorkers,
-     0L, TimeUnit.SECONDS,
-     new ArrayBlockingQueue[Runnable](queueCapacity) {
-       override def offer(e: Runnable) = {
-         put(e)
-         true
-       }
-     }
-   )
-  )
-  
-  /** helper function to get a recursive stream of files for a directory */
-  def getFileTree(f: File): Stream[File] =
-    f #:: (if (f.isDirectory) f.listFiles().sorted.toStream.flatMap(getFileTree)
-      else Stream.empty)
-      
-  val analyzer = new StandardAnalyzer(CharArraySet.EMPTY_SET)
-  
-  val codec = new FSTOrdTermVectorsCodec()
-  
-  def iw(path: String): IndexWriter = {
-    val iwc = new IndexWriterConfig(analyzer)
-    iwc.setUseCompoundFile(false)
-    new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
-  }
-
-  private val contentFieldType = new FieldType(TextField.TYPE_STORED)
-  contentFieldType.setOmitNorms(true)
-
-  contentFieldType.setStoreTermVectors(true)
-  
-  private val normsOmittingStoredTextField = new FieldType(TextField.TYPE_STORED)
-  
-  normsOmittingStoredTextField.setOmitNorms(true)
-  
-  private val notStoredStringFieldWithTermVectors = new FieldType(StringField.TYPE_NOT_STORED)
-  notStoredStringFieldWithTermVectors.setStoreTermVectors(true)
-  
-  def merge(path: String, sort: Sort): Unit = {
-    logger.info("Merging index at "+path)
-    var size = getFileTreeSize(path) 
-    // First, go to max two segments with general codec
-    var iwc = new IndexWriterConfig(analyzer)
-    iwc.setIndexSort(sort)
-    iwc.setUseCompoundFile(false)
-    var miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
-    miw.forceMerge(2)
-    miw.commit()
-    miw.close()
-    miw.getDirectory.close
-    // Go to max one segment with custom codec
-    iwc = new IndexWriterConfig(analyzer)
-    iwc.setCodec(codec)
-    iwc.setIndexSort(sort)
-    iwc.setUseCompoundFile(false)
-    miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
-    miw.forceMerge(1)
-    miw.commit()
-    miw.close()
-    miw.getDirectory.close()
-    // Make sure the one segment we have is encoded with the custom codec (if we accidentally got to one segment in the first phase)
-    iwc = new IndexWriterConfig(analyzer)
-    iwc.setCodec(codec)
-    iwc.setIndexSort(sort)
-    iwc.setUseCompoundFile(false)
-    var mp = new UpgradeIndexMergePolicy(iwc.getMergePolicy()) {
-      override protected def shouldUpgradeSegment(si: SegmentCommitInfo): Boolean =  si.info.getCodec.getName != codec.getName
-    }
-    iwc.setMergePolicy(mp)
-    miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
-    miw.forceMerge(1)
-    miw.commit()
-    miw.close()
-    miw.getDirectory.close()
-    logger.info(f"Merged index ${path}%s. Went from ${size}%,d bytes to ${getFileTreeSize(path)}%,d bytes.")
-  }
-  
-  def mergeIndices(path: String, single: Boolean)(implicit ec: ExecutionContext): Unit = {
-    val df = Future { merge(path+"/dindex", new Sort(new SortField("clusterID",SortField.Type.INT))) }
-    if (single) Await.result(df, Duration.Inf)
-    Await.result(df, Duration.Inf)
-  }
-  
-  private def index(id: String, cluster: Cluster): Future[Unit] = Future {
+  private def index(path: String, cluster: Cluster): Unit = {
     for (m <- cluster.matches) {
       val d = new Document()
       d.add(new NumericDocValuesField("clusterID", cluster.id))
@@ -193,17 +106,9 @@ object ECCOClusterIndexer extends LazyLogging {
       d.add(new NumericDocValuesField("year", m.year))
       diw.addDocument(d)
     }
-  }(ec)
+  }
   
   var diw = null.asInstanceOf[IndexWriter]
-  
-  def getFileTreeSize(path: String): Long = getFileTree(new File(path)).foldLeft(0l)((s,f) => s+f.length)    
-  
-  def getStackTraceAsString(t: Throwable) = {
-    val sw = new StringWriter
-    t.printStackTrace(new PrintWriter(sw))
-    sw.toString
-  }
   
   class Match {
     var estcID: String = null
@@ -225,30 +130,9 @@ object ECCOClusterIndexer extends LazyLogging {
   def main(args: Array[String]): Unit = {
     // document level
     diw = iw(args.last+"/dindex")
-  
-    diw.deleteAll()
-    diw.commit()
-    /*
-     *
-   6919 article
-  51226 backmatter
-  34276 book
-1377880 chapter
- 147743 frontmatter
-  13386 index
-  25772 other
-  38055 part
- 290959 section
-   3957 titlePage
-  32836 TOC
-   1481 volume
-     */
-    implicit val iec = ExecutionContext.Implicits.global
-    val all = Promise[Unit]()
-    val poison = Future(())
-    val bq = new ArrayBlockingQueue[Future[Unit]](queueCapacity)
-    val sf = Future {
-      args.dropRight(1).flatMap(n => getFileTree(new File(n))).parStream.filter(f => f.getName.endsWith(".gz")).forEach(file => {
+    clear(diw)
+    doFeed(() =>
+      args.dropRight(1).flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".gz")).forEach(file => {
         parse(new InputStreamReader(new GZIPInputStream(new FileInputStream(file))), (p: Parser) => {
           val path = file.getParentFile.getName
           var cluster: Cluster = null
@@ -284,44 +168,16 @@ object ECCOClusterIndexer extends LazyLogging {
                   }
                   token = p.nextToken
                 }
-                val f = index(path, cluster)
-                f.recover { 
-                  case cause =>
-                    logger.error("An error has occured processing "+path+": " + getStackTraceAsString(cause))
-                    throw new Exception("An error has occured processing "+path, cause) 
-                }
-                bq.put(f)
+                addTask(file.getName+": "+cluster.id,() => index(path, cluster))
               case _ =>
             }
             token = p.nextToken
           }
         })
         logger.info("File "+file+" processed.")
-      })
-      logger.info("All sources processed.")
-      bq.put(poison)
-    }
-    sf.onComplete { 
-      case Failure(t) => logger.error("Processing of at least one file resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t))
-      case Success(_) =>
-    }
-    var f = bq.take()
-    while (f ne poison) {
-      Await.ready(f, Duration.Inf)
-      f.onComplete { 
-        case Failure(t) => all.failure(t)
-        case Success(_) =>
-      }
-      f = bq.take()
-    }
-    if (!all.isCompleted) all.success(Unit)
-    all.future.onComplete {
-      case Success(_) => logger.info("Successfully processed all files.")
-      case Failure(t) => logger.error("Processing of at least one file resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t))
-    }
-    ec.shutdown()
-    diw.close()
-    diw.getDirectory.close()
-    mergeIndices(args.last, false)
+      }))
+    close(diw)
+    mergeIndices(Seq(
+     (args.last+"/dindex", new Sort(new SortField("clusterID",SortField.Type.INT)))))
   }
 }

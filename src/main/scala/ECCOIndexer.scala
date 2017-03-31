@@ -100,7 +100,7 @@ object ECCOIndexer extends OctavoIndexer {
   private val sections = new AtomicLong
   private val documentparts = new AtomicLong
   
-  private def index(id: String, file: File): Future[Unit] = Future({
+  private def index(id: String, file: File): Unit = {
     val filePrefix = file.getName.replace("_metadata.xml","")
     logger.info("Processing: "+file.getPath.replace("_metadata.xml","*"))
     var totalPages = 0
@@ -348,10 +348,9 @@ object ECCOIndexer extends OctavoIndexer {
     d.add(new NumericDocValuesField("contentTokens", not))
     diw.addDocument(d)
     logger.info("Processed: "+file.getPath.replace("_metadata.xml","*"))
-  })(ec)
+  }
   
   var diw, dpiw, siw, piw = null.asInstanceOf[IndexWriter]
-  var writers = Seq(diw, dpiw, siw, piw)
   
   def main(args: Array[String]): Unit = {
     // document level
@@ -362,6 +361,7 @@ object ECCOIndexer extends OctavoIndexer {
     siw = iw(args.last+"/sindex")
     // paragraph level
     piw = iw(args.last+"/pindex")
+    val writers = Seq(diw, dpiw, siw, piw)
     writers.foreach(clear(_))
     /*
      *
@@ -378,46 +378,15 @@ object ECCOIndexer extends OctavoIndexer {
   32836 TOC
    1481 volume
      */
-    implicit val iec = ExecutionContext.Implicits.global
-    val all = Promise[Unit]()
-    val poison = Future(())
-    val bq = new ArrayBlockingQueue[Future[Unit]](queueCapacity)
-    val sf = Future { 
+    doFeed(() => {
       args.dropRight(1).toStream.flatMap(p => {
         val parts = p.split(':')
         getFileTree(new File(parts(0))).map((parts(1),_))
       }).filter(_._2.getName.endsWith("_metadata.xml")).foreach(pair => {
         val path = pair._2.getPath.replace("_metadata.xml","*")
-        val f = index(pair._1, pair._2)
-        f.recover { 
-          case cause =>
-            logger.error("An error has occured processing "+path+": " + getStackTraceAsString(cause))
-            throw new Exception("An error has occured processing "+path, cause) 
-        }
-        bq.put(f)
+        addTask(path, () => index(pair._1, pair._2))
       })
-      bq.put(poison)
-    }
-    sf.onComplete { 
-      case Failure(t) => logger.error("Processing of at least one file resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t))
-      case Success(_) =>
-    }
-    var f = bq.take()
-    while (f ne poison) {
-      Await.ready(f, Duration.Inf)
-      f.onComplete { 
-        case Failure(t) => all.failure(t)
-        case Success(_) =>
-      }
-      f = bq.take()
-    }
-    Await.ready(sf, Duration.Inf)
-    if (!all.isCompleted) all.success(Unit)
-    all.future.onComplete {
-      case Success(_) => logger.info("Successfully processed all files.")
-      case Failure(t) => logger.error("Processing of at least one file resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t))
-    }
-    ec.shutdown()
+    })
     writers.foreach(close)
     mergeIndices(Seq(
      (args.last+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING))),
