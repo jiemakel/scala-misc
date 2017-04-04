@@ -88,13 +88,14 @@ object ECCOClusterIndexer extends OctavoIndexer {
   private def index(path: String, cluster: Cluster): Unit = {
     for (m <- cluster.matches) {
       val d = new Document()
+      d.add(new Field("clusterID",""+cluster.id,StringField.TYPE_NOT_STORED))
       d.add(new NumericDocValuesField("clusterID", cluster.id))
       d.add(new IntPoint("avgLength", cluster.avgLength))
       d.add(new NumericDocValuesField("avgLength", cluster.avgLength))
       d.add(new IntPoint("count", cluster.matches.size))
       d.add(new NumericDocValuesField("count", cluster.matches.size))
-      d.add(new Field("ESTCID",m.estcID,StringField.TYPE_NOT_STORED))
-      d.add(new SortedDocValuesField("ESTCID", new BytesRef(m.estcID)))
+      d.add(new Field("documentID",m.documentID,StringField.TYPE_NOT_STORED))
+      d.add(new SortedDocValuesField("documentID", new BytesRef(m.documentID)))
       d.add(new Field("title", m.title, contentFieldType))
       d.add(new Field("text", m.text, contentFieldType))
       if (!m.author.isEmpty) d.add(new Field("author", m.author, normsOmittingStoredTextField))
@@ -111,7 +112,7 @@ object ECCOClusterIndexer extends OctavoIndexer {
   var diw = null.asInstanceOf[IndexWriter]
   
   class Match {
-    var estcID: String = null
+    var documentID: String = null
     var title: String = null
     var author: String = null
     var startIndex: Int = -1
@@ -156,7 +157,7 @@ object ECCOClusterIndexer extends OctavoIndexer {
                           case FieldStart("start_index") => cm.startIndex = p.nextToken.asInstanceOf[IntVal].value.toInt
                           case FieldStart("title") => cm.title = p.nextToken.asInstanceOf[StringVal].value
                           case FieldStart("author") => cm.author = p.nextToken.asInstanceOf[StringVal].value
-                          case FieldStart("book_id") => cm.estcID = p.nextToken.asInstanceOf[StringVal].value
+                          case FieldStart("book_id") => cm.documentID = p.nextToken.asInstanceOf[StringVal].value
                           case FieldStart("year") => cm.year = Try(p.nextToken.asInstanceOf[StringVal].value.toInt).getOrElse(-1)
                           case FieldStart("text") => cm.text = p.nextToken.asInstanceOf[StringVal].value
                           case CloseObj => cluster.matches += cm
