@@ -134,7 +134,7 @@ object ECCOClusterIndexer extends OctavoIndexer {
     clear(diw)
     doFeed(() =>
       args.dropRight(1).flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".gz")).forEach(file => {
-        parse(new InputStreamReader(new GZIPInputStream(new FileInputStream(file))), (p: Parser) => {
+        Try(parse(new InputStreamReader(new GZIPInputStream(new FileInputStream(file))), (p: Parser) => {
           val path = file.getParentFile.getName
           var cluster: Cluster = null
           var token = p.nextToken
@@ -174,8 +174,10 @@ object ECCOClusterIndexer extends OctavoIndexer {
             }
             token = p.nextToken
           }
+        })) match {
+          case Success(_) => logger.info("File "+file+" processed.")
+          case Failure(f) => logger.error("An error has occurred in reading file "+file+".",f)
         })
-        logger.info("File "+file+" processed.")
       }))
     close(diw)
     mergeIndices(Seq(
