@@ -176,7 +176,7 @@ object ECCOClusterIndexer extends OctavoIndexer {
         })) match {
           case Success(_) => logger.info("File "+file+" processed.")
           case Failure(f) => logger.error("An error has occurred in reading file "+file+".",f)
-        })
+        }
       }))
     close(diw)
     mergeIndices(Seq(
