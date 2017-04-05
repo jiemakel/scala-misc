@@ -52,19 +52,19 @@ class ParallelProcessor extends LazyLogging {
       } catch {
         case cause: Exception =>
           logger.error("An error has occured processing source "+id+": " + getStackTraceAsString(cause))
-          throw new Exception("An error has occured processing source"+id, cause)       
+          throw new Exception("An error has occured processing source "+id, cause)       
       }
     }(ec))
   }
   
   private val processingQueue = new ArrayBlockingQueue[Future[Unit]](queueCapacity)
 
-  def doFeed(feeder: () => Unit) {
+  def feedAndProcessFedTasksInParallel(taskFeeder: () => Unit) {
     implicit val iec = ExecutionContext.Implicits.global 
     val all = Promise[Unit]()
     val poison = Future(())
     val sf = Future {
-      feeder()
+      taskFeeder()
       logger.info("All sources processed.")
       processingQueue.put(poison)
     }
@@ -76,7 +76,7 @@ class ParallelProcessor extends LazyLogging {
     while (f ne poison) {
       Await.ready(f, Duration.Inf)
       f.onComplete { 
-        case Failure(t) => all.failure(t)
+        case Failure(t) => if (!all.isCompleted) all.failure(t)
         case Success(_) =>
       }
       f = processingQueue.take()

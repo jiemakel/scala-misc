@@ -120,30 +120,30 @@ object YLEArticleAnalyzer extends ParallelProcessor {
   
   def main(args: Array[String]): Unit = {
     val dest = args.last
-    doFeed(() =>
+    feedAndProcessFedTasksInParallel(() =>
       args.dropRight(1).flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".json")).forEach(file => {
         parse(new InputStreamReader(new FileInputStream(file)), (p: Parser) => {
-          val path = file.getParentFile.getName
           var token = p.nextToken
           while (token != FieldStart("data")) token = p.nextToken
           token = p.nextToken // OpenArr
           token = p.nextToken // OpenObj/CloseArr
           while (token != CloseArr) {
-            assert(token == OpenObj, token)
+            //assert(token == OpenObj, token)
             val obj = objParser(p, Some(token))
             val id = (obj \ "id").asInstanceOf[JString].values
-            if ((obj \ "language").asInstanceOf[JString].values == "fi") {
-              val json = org.json4s.native.JsonMethods.pretty(org.json4s.native.JsonMethods.render(obj transform {
-                case o: JObject => 
-                  val text =  (o \ "text")
-                  if (text.isInstanceOf[JString])
-                    o merge JObject(JField("analyzedText",JArray(la.analyze(text.asInstanceOf[JString].values, fiLocale, Collections.EMPTY_LIST.asInstanceOf[java.util.List[String]], false, true, false, 2).asScala.map(Extraction.decompose).toList)))
-                  else o
-              }))
-              val writer = new PrintWriter(new File(dest+"/"+id+".analysis.json"))
-              writer.write(json)
-              writer.close()
-            }
+            if ((obj \ "language").asInstanceOf[JString].values == "fi")
+              addTask(file + "/" + id, () => {
+                val json = org.json4s.native.JsonMethods.pretty(org.json4s.native.JsonMethods.render(obj transform {
+                  case o: JObject => 
+                    val text =  (o \ "text")
+                    if (text.isInstanceOf[JString])
+                      o merge JObject(JField("analyzedText",JArray(la.analyze(text.asInstanceOf[JString].values, fiLocale, Collections.EMPTY_LIST.asInstanceOf[java.util.List[String]], false, true, false, 2).asScala.map(Extraction.decompose).toList)))
+                    else o
+                }))
+                val writer = new PrintWriter(new File(dest+"/"+id+".analysis.json"))
+                writer.write(json)
+                writer.close()
+              })
             token = p.nextToken // OpenObj/CloseArr
           }})
         logger.info("File "+file+" processed.")

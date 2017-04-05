@@ -378,7 +378,7 @@ object ECCOIndexer extends OctavoIndexer {
   32836 TOC
    1481 volume
      */
-    doFeed(() => {
+    feedAndProcessFedTasksInParallel(() => {
       args.dropRight(1).toStream.flatMap(p => {
         val parts = p.split(':')
         getFileTree(new File(parts(0))).map((parts(1),_))

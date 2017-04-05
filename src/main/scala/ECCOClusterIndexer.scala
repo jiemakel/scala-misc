@@ -85,7 +85,7 @@ import scala.util.Failure
 
 object ECCOClusterIndexer extends OctavoIndexer {
   
-  private def index(path: String, cluster: Cluster): Unit = {
+  private def index(cluster: Cluster): Unit = {
     for (m <- cluster.matches) {
       val d = new Document()
       d.add(new Field("clusterID",""+cluster.id,StringField.TYPE_NOT_STORED))
@@ -132,16 +132,15 @@ object ECCOClusterIndexer extends OctavoIndexer {
     // document level
     diw = iw(args.last+"/dindex")
     clear(diw)
-    doFeed(() =>
+    feedAndProcessFedTasksInParallel(() =>
       args.dropRight(1).flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".gz")).forEach(file => {
         Try(parse(new InputStreamReader(new GZIPInputStream(new FileInputStream(file))), (p: Parser) => {
           val path = file.getParentFile.getName
-          var cluster: Cluster = null
           var token = p.nextToken
           while (token != End) {
             token match {
               case FieldStart(field) if (field.startsWith("cluster_")) =>
-                cluster = new Cluster
+                val cluster = new Cluster
                 cluster.id = field.substring(8).toInt
                 while (token != CloseObj) {
                   token match {
@@ -169,7 +168,7 @@ object ECCOClusterIndexer extends OctavoIndexer {
                   }
                   token = p.nextToken
                 }
-                addTask(file.getName+": "+cluster.id,() => index(path, cluster))
+                addTask(file.getName+": "+cluster.id,() => index(cluster))
               case _ =>
             }
             token = p.nextToken
