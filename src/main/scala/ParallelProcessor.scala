@@ -17,6 +17,7 @@ import scala.concurrent.duration.Duration
 class ParallelProcessor extends LazyLogging {
   
   private val numWorkers = sys.runtime.availableProcessors
+  val availableMemory = Runtime.getRuntime().maxMemory() - (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory())
   private val queueCapacity = 1000
   private val ec = ExecutionContext.fromExecutorService(
    new ThreadPoolExecutor(

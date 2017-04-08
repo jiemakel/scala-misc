@@ -8,6 +8,9 @@ import org.json4s.JsonDSL._
 import org.apache.lucene.search.Sort
 import org.apache.lucene.search.SortField
 
+import org.rogach.scallop._
+import scala.language.postfixOps
+
 
 object FinnishNewspapersIndexer extends OctavoIndexer {
   
@@ -23,11 +26,19 @@ object FinnishNewspapersIndexer extends OctavoIndexer {
    */
   
   var diw, aiw, piw: IndexWriter = null.asInstanceOf[IndexWriter]
+
+  class Opts(arguments: Seq[String]) extends ScallopConf(arguments) {
+    val index = opt[String](required = true)
+    val indexMemoryMB = opt[Long](default = Some(Runtime.getRuntime.maxMemory()/1024/1024*3/4), validate = (0<))
+    val directories = trailArg[List[String]]()
+    verify()
+  }
   
   def main(args: Array[String]): Unit = {
-    diw = iw(args.last+"/dindex")
-    aiw = iw(args.last+"/aindex")
-    piw = iw(args.last+"/pindex")
+    val opts = new Opts(args)
+    diw = iw(opts.index()+"/dindex", new Sort(new SortField("newspaperID",SortField.Type.LONG)), opts.indexMemoryMB() / 3)
+    aiw = iw(opts.index()+"/aindex", new Sort(new SortField("newspaperID",SortField.Type.LONG),new SortField("articleID",SortField.Type.LONG)), opts.indexMemoryMB() / 3)
+    piw = iw(opts.index()+"/pindex", new Sort(new SortField("newspaperID",SortField.Type.LONG),new SortField("paragraphID",SortField.Type.LONG)), opts.indexMemoryMB() / 3)
     val writers = Seq(diw, aiw, piw)
     writers.foreach(clear(_))
     feedAndProcessFedTasksInParallel(() => {
@@ -35,8 +46,8 @@ object FinnishNewspapersIndexer extends OctavoIndexer {
     })
     writers.foreach(close(_))
     mergeIndices(Seq(
-     (args.last+"/dindex", new Sort(new SortField("newspaperID",SortField.Type.LONG))),
-     (args.last+"/aindex", new Sort(new SortField("newspaperID",SortField.Type.LONG),new SortField("articleID",SortField.Type.LONG))),
-     (args.last+"/pindex", new Sort(new SortField("newspaperID",SortField.Type.LONG),new SortField("paragraphID",SortField.Type.LONG)))))
+     (opts.index()+"/dindex", new Sort(new SortField("newspaperID",SortField.Type.LONG)), opts.indexMemoryMB() / 3),
+     (opts.index()+"/aindex", new Sort(new SortField("newspaperID",SortField.Type.LONG),new SortField("articleID",SortField.Type.LONG)), opts.indexMemoryMB() / 3),
+     (opts.index()+"/pindex", new Sort(new SortField("newspaperID",SortField.Type.LONG),new SortField("paragraphID",SortField.Type.LONG)), opts.indexMemoryMB() / 3)))
   }
 }

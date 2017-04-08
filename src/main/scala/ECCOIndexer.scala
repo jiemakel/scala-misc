@@ -74,6 +74,9 @@ import org.apache.lucene.index.LogDocMergePolicy
 import scala.util.Failure
 import scala.util.Success
 
+import org.rogach.scallop._
+import scala.language.postfixOps
+
 object ECCOIndexer extends OctavoIndexer {
   
   def readContents(implicit xml: XMLEventReader): String = {
@@ -100,13 +103,63 @@ object ECCOIndexer extends OctavoIndexer {
   private val sections = new AtomicLong
   private val documentparts = new AtomicLong
   
+  val tld = new ThreadLocal[Reuse] {
+    override def initialValue() = new Reuse()
+  }
+  
+  class Reuse {
+    val dd = new Document()
+    val dpd = new Document()
+    val sd = new Document()
+    val pd = new Document()
+    val collectionIDSField = new Field("collectionID","",StringField.TYPE_NOT_STORED)
+    dd.add(collectionIDSField)
+    dpd.add(collectionIDSField)
+    sd.add(collectionIDSField)
+    pd.add(collectionIDSField)
+/*    val clusterIDNField = new NumericDocValuesField("clusterID", 0)
+    dd.add(clusterIDNField)
+    val avgLengthIField = new IntPoint("avgLength", 0)
+    dd.add(avgLengthIField)
+    val avgLengthNField = new NumericDocValuesField("avgLength", 0)
+    dd.add(avgLengthNField)
+    val countIField = new IntPoint("count", 0)
+    dd.add(countIField)
+    val countNField = new NumericDocValuesField("count", 0)
+    dd.add(countNField)
+    val documentIDSField = new Field("documentID","",StringField.TYPE_NOT_STORED)
+    dd.add(documentIDSField)
+    val documentIDSDVField = new SortedDocValuesField("documentID", new BytesRef)
+    dd.add(documentIDSDVField)
+    val titleField = new Field("title", "", contentFieldType)
+    dd.add(titleField)
+    val textField = new Field("text", "", contentFieldType)
+    dd.add(textField)
+    val authorField = new Field("author", "", normsOmittingStoredTextField)
+    dd.add(authorField)
+    val startIndexIField = new IntPoint("startIndex", 0)
+    dd.add(startIndexIField)
+    val startIndexNField = new NumericDocValuesField("startIndex", 0)
+    dd.add(startIndexNField)
+    val endIndexIField = new IntPoint("endIndex", 0)
+    dd.add(endIndexIField)
+    val endIndexNField = new NumericDocValuesField("endIndex", 0)
+    dd.add(endIndexNField)
+    val yearIField = new IntPoint("year", 0)
+    dd.add(yearIField)
+    val yearNField = new NumericDocValuesField("year", 0)
+    dd.add(yearNField) */
+  }
+  
   private def index(id: String, file: File): Unit = {
     val filePrefix = file.getName.replace("_metadata.xml","")
     logger.info("Processing: "+file.getPath.replace("_metadata.xml","*"))
     var totalPages = 0
     val xmls = Source.fromFile(file)
     implicit val xml = new XMLEventReader(xmls)
+    val r = tld.get
     val md = new Document()
+    r.collectionIDSField.setStringValue(id)
     md.add(new Field("collectionID",id,StringField.TYPE_NOT_STORED))
     md.add(new SortedDocValuesField("collectionID",new BytesRef(id)))
     var documentID: String = null
@@ -352,15 +405,23 @@ object ECCOIndexer extends OctavoIndexer {
   
   var diw, dpiw, siw, piw = null.asInstanceOf[IndexWriter]
   
+  class Opts(arguments: Seq[String]) extends ScallopConf(arguments) {
+    val index = opt[String](required = true)
+    val indexMemoryMB = opt[Long](default = Some(Runtime.getRuntime.maxMemory()/1024/1024*3/4), validate = (0<))
+    val directories = trailArg[List[String]]()
+    verify()
+  }
+  
   def main(args: Array[String]): Unit = {
+    val opts = new Opts(args)
     // document level
-    diw = iw(args.last+"/dindex")
+    diw = iw(opts.index()+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING)), opts.indexMemoryMB()/4)
     // document part level
-    dpiw = iw(args.last+"/dpindex")
+    dpiw = iw(opts.index()+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG)), opts.indexMemoryMB()/4)
     // section level
-    siw = iw(args.last+"/sindex")
+    siw = iw(opts.index()+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG)), opts.indexMemoryMB()/4)
     // paragraph level
-    piw = iw(args.last+"/pindex")
+    piw = iw(opts.index()+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)), opts.indexMemoryMB()/4)
     val writers = Seq(diw, dpiw, siw, piw)
     writers.foreach(clear(_))
     /*
@@ -379,7 +440,7 @@ object ECCOIndexer extends OctavoIndexer {
    1481 volume
      */
     feedAndProcessFedTasksInParallel(() => {
-      args.dropRight(1).toStream.flatMap(p => {
+      opts.directories().toStream.flatMap(p => {
         val parts = p.split(':')
         getFileTree(new File(parts(0))).map((parts(1),_))
       }).filter(_._2.getName.endsWith("_metadata.xml")).foreach(pair => {
@@ -389,10 +450,10 @@ object ECCOIndexer extends OctavoIndexer {
     })
     writers.foreach(close)
     mergeIndices(Seq(
-     (args.last+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING))),
-     (args.last+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG))),
-     (args.last+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG))),
-     (args.last+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)))
+     (opts.index()+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING)), opts.indexMemoryMB()/4),
+     (opts.index()+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG)), opts.indexMemoryMB()/4),
+     (opts.index()+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG)), opts.indexMemoryMB()/4),
+     (opts.index()+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)), opts.indexMemoryMB()/4)
     ))
   }
 }

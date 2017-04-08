@@ -17,6 +17,10 @@ import scala.compat.java8.StreamConverters._
 import org.apache.lucene.search.Sort
 import org.apache.lucene.search.SortField
 
+import org.rogach.scallop._
+import scala.language.postfixOps
+
+
 object YLEArticleIndexer extends OctavoIndexer {
   
   /*
@@ -33,10 +37,16 @@ object YLEArticleIndexer extends OctavoIndexer {
   class Article {
     
   }
+   class Opts(arguments: Seq[String]) extends ScallopConf(arguments) {
+    val index = opt[String](required = true)
+    val indexMemoryMB = opt[Long](default = Some(Runtime.getRuntime.maxMemory()/1024/1024*3/4), validate = (0<))
+    val directories = trailArg[List[String]]()
+    verify()
+  }
   
   def main(args: Array[String]): Unit = {
-    // document level
-    diw = iw(args.last+"/dindex")
+    val opts = new Opts(args)
+    diw = iw(opts.index()+"/dindex",new Sort(new SortField("articleID",SortField.Type.INT)),opts.indexMemoryMB())
     clear(diw)
     feedAndProcessFedTasksInParallel(() =>
       args.dropRight(1).flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".json")).forEach(file => {
@@ -54,6 +64,6 @@ object YLEArticleIndexer extends OctavoIndexer {
       }))
     close(diw)
     mergeIndices(Seq(
-     (args.last+"/dindex", new Sort(new SortField("articleID",SortField.Type.INT)))))
+     (args.last+"/dindex", new Sort(new SortField("articleID",SortField.Type.INT)),opts.indexMemoryMB())))
   }
 }

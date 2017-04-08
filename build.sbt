@@ -32,7 +32,8 @@ libraryDependencies ++= Seq(
 "com.sleepycat" % "je" % "7.0.6",
 "org.apache.commons" % "commons-math3" % "3.6.1",
 "com.google.guava" % "guava" % "21.0",
-"com.breinify" % "brein-time-utilities" % "1.5.0" exclude("org.slf4j","slf4j-log4j12") exclude("log4j","log4j") exclude("commons-logging", "commons-logging")
+"com.breinify" % "brein-time-utilities" % "1.5.0" exclude("org.slf4j","slf4j-log4j12") exclude("log4j","log4j") exclude("commons-logging", "commons-logging"),
+"org.rogach" %% "scallop" % "2.1.1"
 )
 
 resolvers ++= Seq(

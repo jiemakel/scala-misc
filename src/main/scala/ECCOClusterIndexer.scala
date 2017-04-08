@@ -83,29 +83,75 @@ import scala.util.Try
 import scala.util.Success
 import scala.util.Failure
 
+import org.rogach.scallop._
+import scala.language.postfixOps
+import java.lang.ThreadLocal
+
 object ECCOClusterIndexer extends OctavoIndexer {
   
+  class Reuse {
+    val d = new Document()
+    val clusterIDSField = new Field("clusterID","",StringField.TYPE_NOT_STORED)
+    d.add(clusterIDSField)
+    val clusterIDNField = new NumericDocValuesField("clusterID", 0)
+    d.add(clusterIDNField)
+    val avgLengthIField = new IntPoint("avgLength", 0)
+    d.add(avgLengthIField)
+    val avgLengthNField = new NumericDocValuesField("avgLength", 0)
+    d.add(avgLengthNField)
+    val countIField = new IntPoint("count", 0)
+    d.add(countIField)
+    val countNField = new NumericDocValuesField("count", 0)
+    d.add(countNField)
+    val documentIDSField = new Field("documentID","",StringField.TYPE_NOT_STORED)
+    d.add(documentIDSField)
+    val documentIDSDVField = new SortedDocValuesField("documentID", new BytesRef)
+    d.add(documentIDSDVField)
+    val titleField = new Field("title", "", contentFieldType)
+    d.add(titleField)
+    val textField = new Field("text", "", contentFieldType)
+    d.add(textField)
+    val authorField = new Field("author", "", normsOmittingStoredTextField)
+    d.add(authorField)
+    val startIndexIField = new IntPoint("startIndex", 0)
+    d.add(startIndexIField)
+    val startIndexNField = new NumericDocValuesField("startIndex", 0)
+    d.add(startIndexNField)
+    val endIndexIField = new IntPoint("endIndex", 0)
+    d.add(endIndexIField)
+    val endIndexNField = new NumericDocValuesField("endIndex", 0)
+    d.add(endIndexNField)
+    val yearIField = new IntPoint("year", 0)
+    d.add(yearIField)
+    val yearNField = new NumericDocValuesField("year", 0)
+    d.add(yearNField)
+  }
+  
+  val tld = new ThreadLocal[Reuse] {
+    override def initialValue() = new Reuse()
+  }
+  
   private def index(cluster: Cluster): Unit = {
+    val d = tld.get
     for (m <- cluster.matches) {
-      val d = new Document()
-      d.add(new Field("clusterID",""+cluster.id,StringField.TYPE_NOT_STORED))
-      d.add(new NumericDocValuesField("clusterID", cluster.id))
-      d.add(new IntPoint("avgLength", cluster.avgLength))
-      d.add(new NumericDocValuesField("avgLength", cluster.avgLength))
-      d.add(new IntPoint("count", cluster.matches.size))
-      d.add(new NumericDocValuesField("count", cluster.matches.size))
-      d.add(new Field("documentID",m.documentID,StringField.TYPE_NOT_STORED))
-      d.add(new SortedDocValuesField("documentID", new BytesRef(m.documentID)))
-      d.add(new Field("title", m.title, contentFieldType))
-      d.add(new Field("text", m.text, contentFieldType))
-      if (!m.author.isEmpty) d.add(new Field("author", m.author, normsOmittingStoredTextField))
-      d.add(new IntPoint("startIndex", m.startIndex))
-      d.add(new NumericDocValuesField("startIndex", m.startIndex))
-      d.add(new IntPoint("endIndex", m.endIndex))
-      d.add(new NumericDocValuesField("endIndex", m.endIndex))
-      d.add(new IntPoint("year", m.year))
-      d.add(new NumericDocValuesField("year", m.year))
-      diw.addDocument(d)
+      d.clusterIDSField.setStringValue("" + cluster.id)
+      d.clusterIDNField.setLongValue(cluster.id)
+      d.avgLengthIField.setIntValue(cluster.avgLength)
+      d.avgLengthNField.setLongValue(cluster.avgLength)
+      d.countIField.setIntValue(cluster.matches.size)
+      d.countNField.setLongValue(cluster.matches.size)
+      d.documentIDSField.setStringValue("" + m.documentID)
+      d.documentIDSDVField.setBytesValue(new BytesRef(m.documentID))
+      d.titleField.setStringValue(m.title)
+      d.textField.setStringValue(m.text)
+      d.authorField.setStringValue(m.author)
+      d.startIndexIField.setIntValue(m.startIndex)
+      d.startIndexNField.setLongValue(m.startIndex)
+      d.endIndexIField.setIntValue(m.endIndex)
+      d.endIndexNField.setLongValue(m.endIndex)
+      d.yearIField.setIntValue(m.year)
+      d.yearNField.setLongValue(m.year)
+      diw.addDocument(d.d)
     }
   }
   
@@ -128,12 +174,19 @@ object ECCOClusterIndexer extends OctavoIndexer {
     var matches: ArrayBuffer[Match] = new ArrayBuffer()
   }
   
+  class Opts(arguments: Seq[String]) extends ScallopConf(arguments) {
+    val index = opt[String](required = true)
+    val indexMemoryMB = opt[Long](default = Some(availableMemory/1024/1024*3/4), validate = (0<))
+    val directories = trailArg[List[String]]()
+    verify()
+  }
+  
   def main(args: Array[String]): Unit = {
-    // document level
-    diw = iw(args.last+"/dindex")
+    val opts = new Opts(args)
+    diw = iw(opts.index()+"/dindex", new Sort(new SortField("clusterID",SortField.Type.INT)), opts.indexMemoryMB())
     clear(diw)
     feedAndProcessFedTasksInParallel(() =>
-      args.dropRight(1).flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".gz")).forEach(file => {
+      opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".gz")).forEach(file => {
         Try(parse(new InputStreamReader(new GZIPInputStream(new FileInputStream(file))), (p: Parser) => {
           val path = file.getParentFile.getName
           var token = p.nextToken
@@ -180,6 +233,7 @@ object ECCOClusterIndexer extends OctavoIndexer {
       }))
     close(diw)
     mergeIndices(Seq(
-     (args.last+"/dindex", new Sort(new SortField("clusterID",SortField.Type.INT)))))
+     (opts.index()+"/dindex", new Sort(new SortField("clusterID",SortField.Type.INT)), opts.indexMemoryMB()))
+    )
   }
 }

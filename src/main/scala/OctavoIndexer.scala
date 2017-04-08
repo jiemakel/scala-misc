@@ -32,6 +32,7 @@ import scala.util.Success
 import org.apache.lucene.codecs.lucene62.Lucene62Codec
 import org.apache.lucene.codecs.lucene50.Lucene50StoredFieldsFormat.Mode
 import org.apache.lucene.index.ConcurrentMergeScheduler
+import org.apache.lucene.index.IndexCommit
 
 class OctavoIndexer extends ParallelProcessor {
    
@@ -49,12 +50,22 @@ class OctavoIndexer extends ParallelProcessor {
     return length
   }
   
-  def iw(path: String): IndexWriter = {
+  def iwc(sort: Sort, bufferSizeInMB: Double): IndexWriterConfig = {
     val iwc = new IndexWriterConfig(analyzer)
     iwc.setUseCompoundFile(false)
     iwc.setMergePolicy(new LogDocMergePolicy())
     iwc.setCodec(new Lucene62Codec(Mode.BEST_SPEED))
-    new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
+    iwc.setRAMBufferSizeMB(bufferSizeInMB)
+    iwc.setIndexSort(sort)
+    val mergeScheduler = new ConcurrentMergeScheduler()
+    mergeScheduler.setMaxMergesAndThreads(sys.runtime.availableProcessors + 5, sys.runtime.availableProcessors)
+    mergeScheduler.disableAutoIOThrottle()
+    iwc.setMergeScheduler(mergeScheduler)
+    return iwc
+  }
+  
+  def iw(path: String, sort: Sort, bufferSizeInMB: Double): IndexWriter = {
+    new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc(sort, bufferSizeInMB))
   }
 
   val contentFieldType = new FieldType(TextField.TYPE_STORED)
@@ -67,48 +78,30 @@ class OctavoIndexer extends ParallelProcessor {
   val notStoredStringFieldWithTermVectors = new FieldType(StringField.TYPE_NOT_STORED)
   notStoredStringFieldWithTermVectors.setStoreTermVectors(true)
   
-  def merge(path: String, sort: Sort): Unit = {
+  def merge(path: String, sort: Sort, bufferSizeInMB: Double): Unit = {
     logger.info("Merging index at "+path)
     var size = getFileTreeSize(path) 
     // First, go to max two segments with general codec
-    var iwc = new IndexWriterConfig(analyzer)
-    iwc.setIndexSort(sort)
-    iwc.setUseCompoundFile(false)
-    val mergePolicy = new LogDocMergePolicy()
-    iwc.setMergePolicy(mergePolicy)
-    val mergeScheduler = new ConcurrentMergeScheduler()
-    mergeScheduler.setMaxMergesAndThreads(sys.runtime.availableProcessors + 5, sys.runtime.availableProcessors)
-    mergeScheduler.disableAutoIOThrottle()
-    iwc.setMergeScheduler(mergeScheduler)
-    var miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
+/*    var miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc(sort, bufferSizeInMB))
     miw.forceMerge(2)
     miw.commit()
     miw.close()
-    miw.getDirectory.close
+    miw.getDirectory.close */
     // Go to max one segment with custom codec
-    iwc = new IndexWriterConfig(analyzer)
+    var fiwc = iwc(sort, bufferSizeInMB)
     val finalCodec = new FSTOrdTermVectorsCodec()
-    iwc.setCodec(finalCodec)
-    iwc.setIndexSort(sort)
-    iwc.setUseCompoundFile(false)
-    iwc.setMergePolicy(mergePolicy)
-    iwc.setMergeScheduler(mergeScheduler)
-    miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
+    fiwc.setCodec(finalCodec)
+    var miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), fiwc)
     miw.forceMerge(1)
     miw.commit()
     miw.close()
     miw.getDirectory.close()
-    // Make sure the one segment we have is encoded with the custom codec (if we accidentally got to one segment in the first phase)
-    iwc = new IndexWriterConfig(analyzer)
-    iwc.setCodec(finalCodec)
-    iwc.setIndexSort(sort)
-    iwc.setUseCompoundFile(false)
-    val mp = new UpgradeIndexMergePolicy(mergePolicy) {
+    // Make sure the one segment we have is encoded with the custom codec (if we accidentally got to one segment before merging)
+    fiwc = iwc(sort, bufferSizeInMB)
+    fiwc.setMergePolicy(new UpgradeIndexMergePolicy(fiwc.getMergePolicy) {
       override protected def shouldUpgradeSegment(si: SegmentCommitInfo): Boolean =  si.info.getCodec.getName != finalCodec.getName
-    }
-    iwc.setMergePolicy(mp)
-    iwc.setMergeScheduler(mergeScheduler)
-    miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc)
+    })
+    miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), fiwc)
     miw.forceMerge(1)
     miw.commit()
     miw.close()
@@ -116,9 +109,9 @@ class OctavoIndexer extends ParallelProcessor {
     logger.info(f"Merged index ${path}%s. Went from ${size}%,d bytes to ${getFileTreeSize(path)}%,d bytes.")
   }
   
-  def mergeIndices(iws: Traversable[(String, Sort)], single: Boolean = false): Unit = {
+  def mergeIndices(iws: Traversable[(String, Sort, Double)], single: Boolean = false): Unit = {
     iws.map(p => { 
-      val f = Future { merge(p._1, p._2) }(ExecutionContext.Implicits.global)
+      val f = Future { merge(p._1, p._2, p._3) }(ExecutionContext.Implicits.global)
       if (single) Await.result(f, Duration.Inf)
       f
      }).foreach(Await.result(_, Duration.Inf))
