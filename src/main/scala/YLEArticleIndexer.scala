@@ -28,36 +28,6 @@ object YLEArticleIndexer extends OctavoIndexer {
 	 * Parallel index for additional metadata
    */
   
-  val la = new CombinedLexicalAnalysisService()
-  
-  implicit val WordPartWrites = new Writes[HFSTLexicalAnalysisService.Result.WordPart] {
-    def writes(r : HFSTLexicalAnalysisService.Result.WordPart) : JsValue = {
-      Json.obj(
-        "lemma" -> r.getLemma,
-        "tags" -> Json.toJson(r.getTags.asScala.toMap.mapValues(iterableAsScalaIterable(_)))
-      )
-    }
-  }
-
-  implicit val ResultWrites = new Writes[HFSTLexicalAnalysisService.Result] {
-    def writes(r : HFSTLexicalAnalysisService.Result) : JsValue = {
-      Json.obj(
-        "weight" -> r.getWeight,
-        "wordParts" -> Json.toJson(r.getParts.asScala.map(Json.toJson(_))),
-        "globalTags" -> Json.toJson(r.getGlobalTags.asScala.toMap.mapValues(iterableAsScalaIterable(_)))
-      )
-    }
-  }
-
-  implicit val wordToResultsWrites = new Writes[WordToResults] {
-    def writes(r: WordToResults) : JsValue = {
-      Json.obj(
-         "word" -> r.getWord,
-         "analysis" -> Json.toJson(r.getAnalysis.asScala.map(Json.toJson(_)))
-      )
-    }
-  }
-  
   var diw: IndexWriter = null.asInstanceOf[IndexWriter]
   
   class Article {
@@ -68,7 +38,7 @@ object YLEArticleIndexer extends OctavoIndexer {
     // document level
     diw = iw(args.last+"/dindex")
     clear(diw)
-    doFeed(() =>
+    feedAndProcessFedTasksInParallel(() =>
       args.dropRight(1).flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".json")).forEach(file => {
         parse(new InputStreamReader(new FileInputStream(file)), (p: Parser) => {
           val path = file.getParentFile.getName

@@ -30,7 +30,7 @@ object FinnishNewspapersIndexer extends OctavoIndexer {
     piw = iw(args.last+"/pindex")
     val writers = Seq(diw, aiw, piw)
     writers.foreach(clear(_))
-    doFeed(() => {
+    feedAndProcessFedTasksInParallel(() => {
       //addTask()
     })
     writers.foreach(close(_))
