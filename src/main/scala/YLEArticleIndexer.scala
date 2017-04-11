@@ -19,51 +19,223 @@ import org.apache.lucene.search.SortField
 
 import org.rogach.scallop._
 import scala.language.postfixOps
-
+import org.apache.lucene.document.StringField
+import org.apache.lucene.document.Field
+import org.apache.lucene.document.Document
+import org.apache.lucene.document.IntPoint
+import org.apache.lucene.document.NumericDocValuesField
+import org.apache.lucene.document.SortedDocValuesField
+import org.apache.lucene.util.BytesRef
+import org.apache.lucene.analysis.TokenStream
+import java.lang.ThreadLocal
+import org.apache.lucene.analysis.tokenattributes.CharTermAttribute
+import org.apache.lucene.analysis.tokenattributes.OffsetAttribute
+import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
+import scala.collection.mutable.ArrayBuffer
+import org.apache.lucene.analysis.tokenattributes.PayloadAttribute
+import org.apache.lucene.util.NumericUtils
+import scala.collection.mutable.HashSet
+import org.apache.lucene.index.IndexOptions
+import scala.util.Try
+import scala.util.Success
+import scala.util.Failure
+import java.util.function.Predicate
 
 object YLEArticleIndexer extends OctavoIndexer {
   
-  /*
-   * Needs to handle results from morphological analysis.
-	 * Plan:
-	 * Index for original data
-	 * Parallel index for best guess lemma
-	 * Parallel index for all guessed lemmas (with positionIncrementAttr set to zero, and weights [and/or morphological analysis] stored as payloads)
-	 * Parallel index for additional metadata
-   */
+/*  contentFieldType.setStoreTermVectorPositions(true)
+  contentFieldType.setStoreTermVectorPayloads(true) */
+  
+/*  indexingCodec.termVectorFilter = new Predicate[BytesRef]() {
+    override def test(b: BytesRef) = b.bytes(b.offset + 1) == 'L'
+  } */ 
+  
+  finalCodec.termVectorFilter = new Predicate[BytesRef]() {
+    override def test(b: BytesRef) = b.bytes(b.offset + 1) == 'L'
+  }
+  //contentFieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS)
+  
+  class Reuse {
+    val d = new Document()
+    val articleIDSField = new Field("articleID","",StringField.TYPE_NOT_STORED)
+    d.add(articleIDSField)
+    val articleIDSDVField = new SortedDocValuesField("articleID", new BytesRef)
+    d.add(articleIDSDVField)
+    val publisherSField = new Field("publisher", "", StringField.TYPE_NOT_STORED)
+    d.add(publisherSField)
+    val publisherSDVField = new SortedDocValuesField("publisher", new BytesRef)
+    d.add(publisherSDVField)
+    val textField = new Field("text", "", contentFieldType)
+    d.add(textField)
+  }
+  
+  val tld = new ThreadLocal[Reuse] {
+    override def initialValue() = new Reuse()
+  }
+  
+  def filterGlobalTag(tag: String): Boolean = tag match {
+    case "WHITESPACE" => true
+    case "POS_MATCH" => true
+    case "BEST_MATCH" => true
+    case "BASEFORM_FREQUENCY" => true
+    case _ => false
+  }
+
+  def filterTag(tag: String): Boolean = tag match {
+    case "BASEFORM_FREQUENCY" => true
+    case "SEGMENT" => true
+    case _ => false
+  }
+
+
+  private class LemmaTokenStream(text: List[WordToAnalysis]) extends TokenStream {
+    
+    private val termAttr: CharTermAttribute = addAttribute(classOf[CharTermAttribute])
+    val lemmas = new ArrayBuffer[String]
+    
+    for (word <- text; if !(word.analysis(0).globalTags.exists(_.contains("WHITESPACE"))); analysis <- word.analysis)
+      lemmas += (if (word.analysis(0).globalTags.exists(_.contains("BEST_MATCH"))) "B" else "O") + analysis.wordParts.map(_.lemma).mkString("")
+    
+    var ci: Iterator[String] = lemmas.iterator
+     
+    final override def incrementToken(): Boolean = {
+      if (!ci.hasNext) return false
+      termAttr.append(ci.next)
+      return true
+    }
+  }
+
+  private class AnalysisTokenStream(text: List[WordToAnalysis]) extends TokenStream {
+    
+    private val termAttr: CharTermAttribute = addAttribute(classOf[CharTermAttribute])
+    private val posAttr: PositionIncrementAttribute = addAttribute(classOf[PositionIncrementAttribute])
+    //private val offAttr: OffsetAttribute = addAttribute(classOf[OffsetAttribute])
+    //private val plAttr: PayloadAttribute = addAttribute(classOf[PayloadAttribute])
+    
+    val tokens = new ArrayBuffer[HashSet[String]]
+    
+    //var offset = 0
+    
+    for (word <- text; if !(word.analysis(0).globalTags.exists(_.contains("WHITESPACE")))) {
+/*      if (word.analysis(0).globalTags.exists(_.contains("WHITESPACE"))) offset += word.word.length 
+      else { */
+        val prefix = if (word.analysis(0).globalTags.exists(_.contains("BEST_MATCH"))) "B" else "O"
+        val ctokens = new HashSet[String]
+        ctokens += prefix+"W="+word.word
+        for (analysis <- word.analysis) {
+          for (globalTags <- analysis.globalTags; (tag, tagValues) <- globalTags.toSeq; if !filterGlobalTag(tag); tagValue <- tagValues) ctokens += prefix + tag+"="+tagValue
+          var lemma = ""
+          for (wordPart <- analysis.wordParts) {
+            lemma += wordPart.lemma
+            for (tags <- wordPart.tags; (tag, tagValues) <- tags; if !filterTag(tag); tagValue <- tagValues) ctokens += prefix + tag+"="+tagValue
+          }
+          ctokens += prefix + "L="+lemma
+        }
+        tokens += ctokens
+        /*tokens += ((offset, ctokens))
+        offset = 0
+      }*/
+    }
+    
+    //offset = 0
+    
+    var iterator: Iterator[HashSet[String]] = null
+    
+    override def reset(): Unit = {
+      iterator = tokens.iterator
+    }
+    
+    var ci: Iterator[String] = Iterator.empty
+     
+    final override def incrementToken(): Boolean = {
+      val t = if (!ci.hasNext) {
+        if (!iterator.hasNext) return false
+        /*val (wsoffset, ctokens) = iterator.next
+        offset += wsoffset
+        ci = ctokens.iterator*/
+        ci = iterator.next.iterator
+        posAttr.setPositionIncrement(1)
+        val t = ci.next
+        /*offAttr.setOffset(offset, offset + t.length)
+        offset += t.length*/
+        t
+      } else {
+        posAttr.setPositionIncrement(0)
+        ci.next
+      }
+      /*val payload = new BytesRef(8)
+      NumericUtils.longToSortableBytes(NumericUtils.doubleToSortableLong(30.1), payload.bytes, 0)
+      plAttr.setPayload(payload)*/
+      termAttr.setEmpty()
+      termAttr.append(t)
+      return true
+    }
+  }
+  
+  private def index(article: Article): Unit = {
+    val d = tld.get
+    d.articleIDSField.setStringValue(article.id)
+    d.articleIDSDVField.setBytesValue(new BytesRef(article.id))
+    d.publisherSField.setStringValue(article.publisher)
+    d.publisherSDVField.setBytesValue(new BytesRef(article.publisher))
+    for (paragraph <- article.text) {
+      d.textField.setStringValue(paragraph.map(_.word).mkString(""))
+      d.textField.setTokenStream(new AnalysisTokenStream(paragraph))
+      diw.addDocument(d.d)
+    }
+  }
   
   var diw: IndexWriter = null.asInstanceOf[IndexWriter]
   
-  class Article {
-    
-  }
-   class Opts(arguments: Seq[String]) extends ScallopConf(arguments) {
-    val index = opt[String](required = true)
+  case class Article(id: String, publisher: String, text: List[List[WordToAnalysis]])
+  
+  implicit val formats = DefaultFormats
+  
+  case class WordToAnalysis(
+    word: String,
+    analysis: List[Analysis]
+  )
+  
+  case class Analysis(
+    weight: Double,
+    wordParts: List[WordPart],
+    globalTags: List[Map[String,List[String]]]
+  )
+   
+  case class WordPart(
+    lemma: String, 
+    tags: List[Map[String,List[String]]]
+  )
+  
+  class Opts(arguments: Seq[String]) extends ScallopConf(arguments) {
+    val index = opt[String](default = Some("/srv/yle2017"))
     val indexMemoryMB = opt[Long](default = Some(Runtime.getRuntime.maxMemory()/1024/1024*3/4), validate = (0<))
-    val directories = trailArg[List[String]]()
+    val directories = trailArg[List[String]](required = true)
     verify()
   }
   
   def main(args: Array[String]): Unit = {
     val opts = new Opts(args)
-    diw = iw(opts.index()+"/dindex",new Sort(new SortField("articleID",SortField.Type.INT)),opts.indexMemoryMB())
+    diw = iw(opts.index()+"/dindex",new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMB())
     clear(diw)
     feedAndProcessFedTasksInParallel(() =>
-      args.dropRight(1).flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".json")).forEach(file => {
+      opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".json")).forEach(file => {
         parse(new InputStreamReader(new FileInputStream(file)), (p: Parser) => {
-          val path = file.getParentFile.getName
-          var token = p.nextToken
-          while (token != End) {
-            token match {
-              case _ =>
-            }
-            token = p.nextToken
+          val obj = ObjParser.parseObject(p)
+          val article = Try(new Article(
+              (obj \ "id").asInstanceOf[JString].values,
+              (obj \ "publisher" \ "name").asInstanceOf[JString].values,
+              (obj \\ "analyzedText").asInstanceOf[JObject].children.map(_.asInstanceOf[JArray].children.map(_.extract[WordToAnalysis]))
+              ))
+          article match {
+            case Success(a) => 
+              addTask(file.getName,() => index(a))
+              logger.info("File "+file+" processed.")
+            case Failure(e) => logger.error("Error processing file "+file, e)
           }
-        })
-        logger.info("File "+file+" processed.")
-      }))
+      })}))
     close(diw)
     mergeIndices(Seq(
-     (args.last+"/dindex", new Sort(new SortField("articleID",SortField.Type.INT)),opts.indexMemoryMB())))
+     (opts.index()+"/dindex", new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMB())))
   }
 }

@@ -133,13 +133,13 @@ object ECCOClusterIndexer extends OctavoIndexer {
   
   private def index(cluster: Cluster): Unit = {
     val d = tld.get
+    d.clusterIDSField.setStringValue("" + cluster.id)
+    d.clusterIDNField.setLongValue(cluster.id)
+    d.avgLengthIField.setIntValue(cluster.avgLength)
+    d.avgLengthNField.setLongValue(cluster.avgLength)
+    d.countIField.setIntValue(cluster.matches.size)
+    d.countNField.setLongValue(cluster.matches.size)
     for (m <- cluster.matches) {
-      d.clusterIDSField.setStringValue("" + cluster.id)
-      d.clusterIDNField.setLongValue(cluster.id)
-      d.avgLengthIField.setIntValue(cluster.avgLength)
-      d.avgLengthNField.setLongValue(cluster.avgLength)
-      d.countIField.setIntValue(cluster.matches.size)
-      d.countNField.setLongValue(cluster.matches.size)
       d.documentIDSField.setStringValue("" + m.documentID)
       d.documentIDSDVField.setBytesValue(new BytesRef(m.documentID))
       d.titleField.setStringValue(m.title)

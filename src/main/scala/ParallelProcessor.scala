@@ -82,7 +82,7 @@ class ParallelProcessor extends LazyLogging {
       }
       f = processingQueue.take()
     }
-    if (!all.isCompleted) all.success(Unit)
+    if (!all.isCompleted) all.trySuccess(Unit)
     all.future.onComplete {
       case Success(_) => logger.info("Successfully processed all sources.")
       case Failure(t) => logger.error("Processing of at least one source resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t))
