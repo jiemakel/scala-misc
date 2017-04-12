@@ -40,6 +40,7 @@ import scala.util.Try
 import scala.util.Success
 import scala.util.Failure
 import java.util.function.Predicate
+import java.util.concurrent.atomic.AtomicLong
 
 object YLEArticleIndexer extends OctavoIndexer {
   
@@ -55,18 +56,35 @@ object YLEArticleIndexer extends OctavoIndexer {
   }
   //contentFieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS)
   
+  case class Article(id: String, publisher: String, coverage: String, headline: String, lead: String, text: List[List[WordToAnalysis]])
+  
+  private val paragraphs = new AtomicLong
+  
   class Reuse {
-    val d = new Document()
+    val pd = new Document()
+    val ad = new Document()
     val articleIDSField = new Field("articleID","",StringField.TYPE_NOT_STORED)
-    d.add(articleIDSField)
+    pd.add(articleIDSField)
+    ad.add(articleIDSField)
     val articleIDSDVField = new SortedDocValuesField("articleID", new BytesRef)
-    d.add(articleIDSDVField)
+    pd.add(articleIDSDVField)
+    ad.add(articleIDSDVField)
     val publisherSField = new Field("publisher", "", StringField.TYPE_NOT_STORED)
-    d.add(publisherSField)
+    pd.add(publisherSField)
+    ad.add(publisherSField)
     val publisherSDVField = new SortedDocValuesField("publisher", new BytesRef)
-    d.add(publisherSDVField)
+    pd.add(publisherSDVField)
+    ad.add(publisherSDVField)
+    val coverageSDVField = new SortedDocValuesField("coverage", new BytesRef)
+    pd.add(coverageSDVField)
+    ad.add(coverageSDVField)
     val textField = new Field("text", "", contentFieldType)
-    d.add(textField)
+    pd.add(textField)
+    ad.add(textField)
+    val paragraphIDSField = new Field("paragraphID","",StringField.TYPE_NOT_STORED)
+    pd.add(paragraphIDSField)
+    val paragraphIDNField = new NumericDocValuesField("paragraphID", 0)
+    pd.add(paragraphIDNField)
   }
   
   val tld = new ThreadLocal[Reuse] {
@@ -78,6 +96,7 @@ object YLEArticleIndexer extends OctavoIndexer {
     case "POS_MATCH" => true
     case "BEST_MATCH" => true
     case "BASEFORM_FREQUENCY" => true
+    case "FIRST_IN_SENTENCE" => true
     case _ => false
   }
 
@@ -105,41 +124,16 @@ object YLEArticleIndexer extends OctavoIndexer {
     }
   }
 
-  private class AnalysisTokenStream(text: List[WordToAnalysis]) extends TokenStream {
+  private class AnalysisTokenStream(tokens: Iterable[Iterable[String]]) extends TokenStream {
     
     private val termAttr: CharTermAttribute = addAttribute(classOf[CharTermAttribute])
     private val posAttr: PositionIncrementAttribute = addAttribute(classOf[PositionIncrementAttribute])
     //private val offAttr: OffsetAttribute = addAttribute(classOf[OffsetAttribute])
     //private val plAttr: PayloadAttribute = addAttribute(classOf[PayloadAttribute])
-    
-    val tokens = new ArrayBuffer[HashSet[String]]
-    
-    //var offset = 0
-    
-    for (word <- text; if !(word.analysis(0).globalTags.exists(_.contains("WHITESPACE")))) {
-/*      if (word.analysis(0).globalTags.exists(_.contains("WHITESPACE"))) offset += word.word.length 
-      else { */
-        val prefix = if (word.analysis(0).globalTags.exists(_.contains("BEST_MATCH"))) "B" else "O"
-        val ctokens = new HashSet[String]
-        ctokens += prefix+"W="+word.word
-        for (analysis <- word.analysis) {
-          for (globalTags <- analysis.globalTags; (tag, tagValues) <- globalTags.toSeq; if !filterGlobalTag(tag); tagValue <- tagValues) ctokens += prefix + tag+"="+tagValue
-          var lemma = ""
-          for (wordPart <- analysis.wordParts) {
-            lemma += wordPart.lemma
-            for (tags <- wordPart.tags; (tag, tagValues) <- tags; if !filterTag(tag); tagValue <- tagValues) ctokens += prefix + tag+"="+tagValue
-          }
-          ctokens += prefix + "L="+lemma
-        }
-        tokens += ctokens
-        /*tokens += ((offset, ctokens))
-        offset = 0
-      }*/
-    }
-    
+        
     //offset = 0
     
-    var iterator: Iterator[HashSet[String]] = null
+    var iterator: Iterator[Iterable[String]] = null
     
     override def reset(): Unit = {
       iterator = tokens.iterator
@@ -178,16 +172,49 @@ object YLEArticleIndexer extends OctavoIndexer {
     d.articleIDSDVField.setBytesValue(new BytesRef(article.id))
     d.publisherSField.setStringValue(article.publisher)
     d.publisherSDVField.setBytesValue(new BytesRef(article.publisher))
-    for (paragraph <- article.text) {
-      d.textField.setStringValue(paragraph.map(_.word).mkString(""))
-      d.textField.setTokenStream(new AnalysisTokenStream(paragraph))
-      diw.addDocument(d.d)
+    
+    val textTokens = new ArrayBuffer[Iterable[Iterable[String]]]
+    var text = ""
+    //var offset = 0
+    for (paragraph <- article.text) { 
+      val ptext = paragraph.map(_.word).mkString("")
+      text += ptext + "\n\n"
+      d.textField.setStringValue(ptext)
+      val tokens = for (word <- paragraph; if !(word.analysis(0).globalTags.exists(_.contains("WHITESPACE")))) yield {
+  /*      if (word.analysis(0).globalTags.exists(_.contains("WHITESPACE"))) offset += word.word.length 
+        else { */
+          val ctokens = new HashSet[String]
+          ctokens += "W="+word.word
+          if (word.analysis(0).globalTags.contains("FIRST_IN_SENTENCE")) ctokens += "FIRST_IN_SENTENCE=TRUE"
+          for (analysis <- word.analysis) {
+            val prefix = if (analysis.globalTags.exists(_.contains("BEST_MATCH"))) "B" else "O"
+            for (globalTags <- analysis.globalTags; (tag, tagValues) <- globalTags.toSeq; if !filterGlobalTag(tag); tagValue <- tagValues) ctokens += prefix + tag+"="+tagValue
+            var lemma = ""
+            for (wordPart <- analysis.wordParts) {
+              lemma += wordPart.lemma
+              for (tags <- wordPart.tags; (tag, tagValues) <- tags; if !filterTag(tag); tagValue <- tagValues) ctokens += prefix + tag+"="+tagValue
+            }
+            ctokens += prefix + "L="+lemma
+          }
+          ctokens
+          /*tokens += ((offset, ctokens))
+          offset = 0
+        }*/
+      }
+      textTokens += tokens
+      d.textField.setTokenStream(new AnalysisTokenStream(tokens))
+      val paragraphNum = paragraphs.getAndIncrement
+      d.paragraphIDSField.setStringValue(""+paragraphNum)
+      d.paragraphIDNField.setLongValue(paragraphNum)
+      piw.addDocument(d.pd)
     }
+    d.textField.setStringValue(text.substring(0, text.length -2))
+    d.textField.setTokenStream(new AnalysisTokenStream(textTokens.flatten))
+    aiw.addDocument(d.ad)
   }
   
-  var diw: IndexWriter = null.asInstanceOf[IndexWriter]
-  
-  case class Article(id: String, publisher: String, text: List[List[WordToAnalysis]])
+  var aiw: IndexWriter = null.asInstanceOf[IndexWriter]
+  var piw: IndexWriter = null.asInstanceOf[IndexWriter]
   
   implicit val formats = DefaultFormats
   
@@ -216,8 +243,9 @@ object YLEArticleIndexer extends OctavoIndexer {
   
   def main(args: Array[String]): Unit = {
     val opts = new Opts(args)
-    diw = iw(opts.index()+"/dindex",new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMB())
-    clear(diw)
+    aiw = iw(opts.index()+"/aindex",new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMB())
+    clear(aiw)
+    piw = iw(opts.index()+"/pindex",new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMB())
     feedAndProcessFedTasksInParallel(() =>
       opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".json")).forEach(file => {
         parse(new InputStreamReader(new FileInputStream(file)), (p: Parser) => {
@@ -225,6 +253,9 @@ object YLEArticleIndexer extends OctavoIndexer {
           val article = Try(new Article(
               (obj \ "id").asInstanceOf[JString].values,
               (obj \ "publisher" \ "name").asInstanceOf[JString].values,
+              (obj \ "coverage").asInstanceOf[JString].values,
+              (obj \ "headline" \ "full").asInstanceOf[JString].values,
+              (obj \ "lead").asInstanceOf[JString].values,
               (obj \\ "analyzedText").asInstanceOf[JObject].children.map(_.asInstanceOf[JArray].children.map(_.extract[WordToAnalysis]))
               ))
           article match {
@@ -234,8 +265,10 @@ object YLEArticleIndexer extends OctavoIndexer {
             case Failure(e) => logger.error("Error processing file "+file, e)
           }
       })}))
-    close(diw)
+    close(aiw)
+    close(piw)
     mergeIndices(Seq(
-     (opts.index()+"/dindex", new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMB())))
+     (opts.index()+"/aindex", new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMB()),
+     (opts.index()+"/pindex", new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMB())))
   }
 }
