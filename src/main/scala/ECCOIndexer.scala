@@ -76,6 +76,7 @@ import scala.util.Success
 
 import org.rogach.scallop._
 import scala.language.postfixOps
+import org.apache.lucene.document.SortedNumericDocValuesField
 
 object ECCOIndexer extends OctavoIndexer {
   
@@ -112,43 +113,68 @@ object ECCOIndexer extends OctavoIndexer {
     val dpd = new Document()
     val sd = new Document()
     val pd = new Document()
-    val collectionIDSField = new Field("collectionID","",StringField.TYPE_NOT_STORED)
-    dd.add(collectionIDSField)
-    dpd.add(collectionIDSField)
-    sd.add(collectionIDSField)
-    pd.add(collectionIDSField)
-/*    val clusterIDNField = new NumericDocValuesField("clusterID", 0)
-    dd.add(clusterIDNField)
-    val avgLengthIField = new IntPoint("avgLength", 0)
-    dd.add(avgLengthIField)
-    val avgLengthNField = new NumericDocValuesField("avgLength", 0)
-    dd.add(avgLengthNField)
-    val countIField = new IntPoint("count", 0)
-    dd.add(countIField)
-    val countNField = new NumericDocValuesField("count", 0)
-    dd.add(countNField)
-    val documentIDSField = new Field("documentID","",StringField.TYPE_NOT_STORED)
-    dd.add(documentIDSField)
-    val documentIDSDVField = new SortedDocValuesField("documentID", new BytesRef)
-    dd.add(documentIDSDVField)
-    val titleField = new Field("title", "", contentFieldType)
-    dd.add(titleField)
-    val textField = new Field("text", "", contentFieldType)
-    dd.add(textField)
-    val authorField = new Field("author", "", normsOmittingStoredTextField)
-    dd.add(authorField)
-    val startIndexIField = new IntPoint("startIndex", 0)
-    dd.add(startIndexIField)
-    val startIndexNField = new NumericDocValuesField("startIndex", 0)
-    dd.add(startIndexNField)
-    val endIndexIField = new IntPoint("endIndex", 0)
-    dd.add(endIndexIField)
-    val endIndexNField = new NumericDocValuesField("endIndex", 0)
-    dd.add(endIndexNField)
-    val yearIField = new IntPoint("year", 0)
-    dd.add(yearIField)
-    val yearNField = new NumericDocValuesField("year", 0)
-    dd.add(yearNField) */
+    val collectionIDFields = new StringSDVFieldPair("collectionID", dd, dpd, sd, pd)
+    val documentIDFields = new StringSDVFieldPair("documentID", dd, dpd, sd, pd)
+    val estcIDFields = new StringSDVFieldPair("ESTCID", dd, dpd, sd, pd)
+    val pubDateStartFields = new IntPointNDVFieldPair("pubDateStart", dd, dpd, sd, pd)
+    val pubDateEndFields = new IntPointNDVFieldPair("pubDateEnd", dd, dpd, sd, pd)
+    val totalPagesFields = new IntPointNDVFieldPair("totalPages", dd, dpd, sd, pd)
+    val languageFields = new StringSDVFieldPair("language", dd, dpd, sd, pd)
+    val moduleFields = new StringSDVFieldPair("module", dd, dpd, sd, pd)
+    val fullTitleField = new Field("fullTitle","",contentFieldType)
+    dd.add(fullTitleField)
+    dpd.add(fullTitleField)
+    sd.add(fullTitleField)
+    pd.add(fullTitleField)
+    val documentLengthFields = new IntPointNDVFieldPair("documentLength", dd, dpd, sd, pd)
+    val totalParagraphsFields = new IntPointNDVFieldPair("totalParagraphs", dd, dpd, sd, pd)
+    def clearOptionalDocumentFields() {
+      pubDateStartFields.setValue(0)
+      pubDateEndFields.setValue(Int.MaxValue)
+      totalPagesFields.setValue(0)
+      languageFields.setValue("")
+      moduleFields.setValue("")
+      fullTitleField.setStringValue("")
+      dd.removeFields("containsGraphicOfType")
+      dd.removeFields("containsGraphicCaption")
+    }
+    def clearOptionalDocumentPartFields() {
+      dpd.removeFields("containsGraphicOfType")
+      dpd.removeFields("containsGraphicCaption")
+    }
+    def clearOptionalParagraphFields() {
+      pd.removeFields("sectionID")
+      pd.removeFields("headingLevel")
+      pd.removeFields("heading")
+    }
+    val documentPartIdFields = new StringNDVFieldPair("partID", dpd, sd, pd)
+    val paragraphIDField = new NumericDocValuesField("paragraphID", 0)
+    pd.add(paragraphIDField)
+    val contentField = new Field("content","",contentFieldType)
+    dd.add(contentField)
+    dpd.add(contentField)
+    sd.add(contentField)
+    pd.add(contentField)
+    val contentTokensFields = new IntPointNDVFieldPair("contentTokens", dd, dpd, sd, pd)
+    val documentPartTypeFields = new StringSDVFieldPair("documentPartType", dpd, sd, pd)
+    val sectionIDFields = new StringNDVFieldPair("sectionID", sd)
+    val headingField = new Field("heading","", contentFieldType)
+    sd.add(headingField)
+    val headingLevelFields = new IntPointNDVFieldPair("headingLevel", sd)
+  }
+  
+  class SectionInfo(val sectionID: Long, val headingLevel: Int, val heading: String) {
+    val paragraphSectionIDFields = new StringSNDVFieldPair("sectionID")
+    paragraphSectionIDFields.setValue(sectionID)
+    val paragraphHeadingLevelIDFields = new IntPointSNDVFieldPair("headingLevel")
+    paragraphHeadingLevelIDFields.setValue(headingLevel)
+    val paragraphHeadingField = new Field("heading","", contentFieldType)
+	  val content = new StringBuilder()
+    def addToParagraphDocument(pd: Document) {
+      paragraphSectionIDFields.add(pd)
+      paragraphHeadingLevelIDFields.add(pd)
+      pd.add(paragraphHeadingField)
+    }
   }
   
   private def index(id: String, file: File): Unit = {
@@ -158,28 +184,17 @@ object ECCOIndexer extends OctavoIndexer {
     val xmls = Source.fromFile(file)
     implicit val xml = new XMLEventReader(xmls)
     val r = tld.get
-    val md = new Document()
-    r.collectionIDSField.setStringValue(id)
-    md.add(new Field("collectionID",id,StringField.TYPE_NOT_STORED))
-    md.add(new SortedDocValuesField("collectionID",new BytesRef(id)))
+    r.clearOptionalDocumentFields()
+    r.collectionIDFields.setValue(id)
     var documentID: String = null
     var estcID: String = null
     while (xml.hasNext) xml.next match {
       case EvElemStart(_,"documentID",_,_) | EvElemStart(_,"PSMID",_,_) =>
-        documentID = readContents
-        val f = new Field("documentID",documentID,StringField.TYPE_NOT_STORED)
-        md.add(f)
-        md.add(new SortedDocValuesField("documentID", new BytesRef(documentID)))
+        r.documentIDFields.setValue(readContents)
       case EvElemStart(_,"ESTCID",_,_) =>
-        estcID = readContents
-        val f = new Field("ESTCID",estcID,StringField.TYPE_NOT_STORED)
-        md.add(f)
-        md.add(new SortedDocValuesField("ESTCID", new BytesRef(estcID)))
-      case EvElemStart(_,"bibliographicID",attr,_) if (attr("type")(0).text == "ESTC") =>
-        estcID = readContents
-        val f = new Field("ESTCID",estcID,StringField.TYPE_NOT_STORED)
-        md.add(f)
-        md.add(new SortedDocValuesField("ESTCID", new BytesRef(estcID))) 
+        r.estcIDFields.setValue(readContents)
+      case EvElemStart(_,"bibliographicID",attr,_) if (attr("type")(0).text == "ESTC") => // ECCO2
+        r.estcIDFields.setValue(readContents)
       case EvElemStart(_,"pubDate",_,_) => readContents match {
         case null => // ECCO2
           var break = false
@@ -190,71 +205,38 @@ object ECCOIndexer extends OctavoIndexer {
               case EvElemStart(_,"pubDateStart",_,_) => readContents match {
                 case any =>
                   startDate = any
-                  val ip = new IntPoint("pubDateStart",any.toInt) 
-                  md.add(ip)
-                  val f = new NumericDocValuesField("pubDateStart",any.toInt)
-                  md.add(f)
+                  r.pubDateStartFields.setValue(any.toInt)
               }
               case EvElemStart(_,"pubDateEnd",_,_) => readContents match {
                 case any =>
                   endDateFound = true
-                  val ip = new IntPoint("pubDateEnd",any.replaceAll("00","99").toInt) 
-                  md.add(ip)
-                  val f = new NumericDocValuesField("pubDateEnd",any.replaceAll("00","99").toInt)
-                  md.add(f)
+                  r.pubDateEndFields.setValue(any.replaceAll("00","99").toInt)
               }
               case EvElemEnd(_,"pubDate") => break = true
               case _ => 
             }
           }
           if (!endDateFound && startDate != null) {
-            val ip = new IntPoint("pubDateEnd",startDate.replaceAll("00","99").toInt) 
-            md.add(ip)
-            val f = new NumericDocValuesField("pubDateEnd",startDate.replaceAll("00","99").toInt)
-            md.add(f)
+            r.pubDateEndFields.setValue(startDate.replaceAll("00","99").toInt)
           }
         case "" =>
         case "1809" =>
-          val ip = new IntPoint("pubDateStart",18090000)
-          val ip2 = new IntPoint("pubDateEnd",18099999)
-          md.add(ip)
-          md.add(ip2)
-          val f = new NumericDocValuesField("pubDateStart",18090000)
-          val f2 = new NumericDocValuesField("pubDateEnd",18099999)
-          md.add(f)
-          md.add(f2)
+          r.pubDateStartFields.setValue(18090000)
+          r.pubDateEndFields.setValue(18099999)
         case any => 
-          val ip = new IntPoint("pubDateStart", any.replaceAll("01","00").toInt) 
-          val ip2 = new IntPoint("pubDateEnd", any.replaceAll("01", "99").toInt)
-          md.add(ip)
-          md.add(ip2)
-          val f = new NumericDocValuesField("pubDateStart",any.replaceAll("01","00").toInt)
-          val f2 = new NumericDocValuesField("pubDateEnd", any.replaceAll("01", "99").toInt)
-          md.add(f)
-          md.add(f2)
+          r.pubDateStartFields.setValue(any.toInt)
+          r.pubDateEndFields.setValue(any.replaceAll("01","99").toInt)
       }
       case EvElemStart(_,"totalPages",_,_) =>
         val tp = readContents
-        if (!tp.isEmpty) {
-          totalPages = tp.toInt
-          val ip = new IntPoint("totalPages", totalPages) 
-          md.add(ip)
-          val f = new NumericDocValuesField("totalPages", totalPages)
-          md.add(f)
-        }
+        if (!tp.isEmpty)
+          r.totalPagesFields.setValue(tp.toInt)
       case EvElemStart(_,"language",_,_) =>
-        val c = readContents
-        val f = new Field("language",c,StringField.TYPE_NOT_STORED)
-        md.add(f)
-        md.add(new SortedDocValuesField("language",new BytesRef(c)))
+        r.languageFields.setValue(readContents)
       case EvElemStart(_,"module",_,_) =>
-        val c = readContents
-        val f = new Field("module",c,StringField.TYPE_NOT_STORED)
-        md.add(f)
-        md.add(new SortedDocValuesField("module",new BytesRef(c)))
+        r.moduleFields.setValue(readContents)
       case EvElemStart(_,"fullTitle",_,_) => 
-        val f = new Field("fullTitle",readContents,contentFieldType)
-        md.add(f)
+        r.fullTitleField.setStringValue(readContents)
       case _ => 
     }
     xmls.close()
@@ -273,55 +255,39 @@ object ECCOIndexer extends OctavoIndexer {
       if (line.isEmpty) totalParagraphs += 1
       totalLength += line.length
     }
-    md.add(new IntPoint("documentLength", totalLength))
-    md.add(new NumericDocValuesField("documentLength", totalLength))
-    md.add(new IntPoint("totalParagraphs", totalParagraphs))
-    md.add(new NumericDocValuesField("totalParagraphs", totalParagraphs))
-    val d = new Document()
-    for (f <- md.asScala) d.add(f)
+    r.documentLengthFields.setValue(totalLength)
+    r.totalParagraphsFields.setValue(totalParagraphs)
     for (file <- filesToProcess.sortBy(x => x.getName.substring(x.getName.indexOf('_') + 1, x.getName.indexOf('_', x.getName.indexOf('_') + 1).toInt))) {
       val dpcontents = new StringBuilder
-      val dpd = new Document()
-      val documentPartNum = documentparts.getAndIncrement
-      val dpf = new Field("partID", ""+documentPartNum, StringField.TYPE_NOT_STORED)
-      dpd.add(new NumericDocValuesField("partID", documentPartNum))
-      dpd.add(dpf)
-      for (f <- md.asScala) dpd.add(f)
+      r.clearOptionalDocumentPartFields()
+      r.documentPartIdFields.setValue(documentparts.getAndIncrement)
+      r.documentPartTypeFields.setValue(fileRegex.findFirstMatchIn(file.getName).get.group(1))
       if (new File(file.getPath.replace(".txt","-graphics.csv")).exists)
-        for (r <- CSVReader(file.getPath.replace(".txt","-graphics.csv"))) {
-          val gtype = if (r(1)=="") "unknown" else r(1)
+        for (row <- CSVReader(file.getPath.replace(".txt","-graphics.csv"))) {
+          val gtype = if (row(1)=="") "unknown" else row(1)
           val f = new Field("containsGraphicOfType",gtype, notStoredStringFieldWithTermVectors)
-          dpd.add(f)
-          d.add(f)
-          if (r(3)!="") {
-            val f = new Field("containsGraphicCaption", r(3), normsOmittingStoredTextField)
-            dpd.add(f)
-            d.add(f)
+          r.dpd.add(f)
+          r.dd.add(f)
+          if (row(3)!="") {
+            val f = new Field("containsGraphicCaption", row(3), normsOmittingStoredTextField)
+            r.dpd.add(f)
+            r.dd.add(f)
           }
         }
-      var hds = Seq(1,2,3).map(w => None.asInstanceOf[Option[Document]]).toBuffer
-      var currentSectionFields = Seq(1,2,3).map(w => None.asInstanceOf[Option[Field]]).toBuffer
-      val documentPartType = fileRegex.findFirstMatchIn(file.getName).get.group(1)
-      val hcontents = hds.map(w => new StringBuilder)
+      val headingInfos = Seq(1,2,3).map(w => None.asInstanceOf[Option[SectionInfo]]).toBuffer
       val pcontents = new StringBuilder
       val fl = Source.fromFile(file)
       for (line <- fl.getLines) {
         if (line.isEmpty) {
           if (!pcontents.isEmpty) {
-            val d2 = new Document()
-            for (f <- md.asScala) d2.add(f)
-            val paragraphNum = paragraphs.getAndIncrement
-            d2.add(new NumericDocValuesField("paragraphID", paragraphNum))
-            d2.add(new Field("content",pcontents.toString,contentFieldType))
+        	r.clearOptionalParagraphFields()
+            r.paragraphIDField.setLongValue(paragraphs.getAndIncrement)
+            r.contentField.setStringValue(pcontents.toString)
             val tokens = getNumberOfTokens(pcontents.toString)
-            d2.add(new IntPoint("contentTokens",tokens))
-            d2.add(new NumericDocValuesField("contentTokens",tokens))
-            d2.add(new Field("documentPartType", documentPartType, StringField.TYPE_NOT_STORED))
-            d2.add(new SortedDocValuesField("documentPartType", new BytesRef(documentPartType)))
-            d2.add(dpf)
-            currentSectionFields.foreach(_.foreach(d2.add(_)))
+            r.contentTokensFields.setValue(getNumberOfTokens(pcontents.toString))
+            headingInfos.foreach(_.foreach(_.addToParagraphDocument(r.pd)))
             pcontents.clear()
-            piw.addDocument(d2)
+            piw.addDocument(r.pd)
           }
         } else
           pcontents.append(line)
@@ -331,75 +297,53 @@ object ECCOIndexer extends OctavoIndexer {
             else if (line.startsWith("## ")) 1
             else 0
           for (
-              i <- level until hds.length;
-              contents = hcontents(i)
+            i <- level until headingInfos.length;
+            headingInfoOpt = headingInfos(i);
+        	  headingInfo <- headingInfoOpt
           ) {
-            hds(i).foreach { d2 => 
-              if (!contents.isEmpty) {
-                d2.add(new Field("content",contents.toString,contentFieldType))
-                val tokens = getNumberOfTokens(contents.toString)
-                d2.add(new IntPoint("contentTokens",tokens))
-                d2.add(new NumericDocValuesField("contentTokens",tokens))
-                contents.clear()
+              r.sectionIDFields.setValue(headingInfo.sectionID)
+              r.headingLevelFields.setValue(headingInfo.headingLevel)
+              r.headingField.setStringValue(headingInfo.heading)
+              if (!headingInfo.content.isEmpty) {
+            	  val contentS = headingInfo.content.toString
+            	  r.contentField.setStringValue(contentS)
+            	  r.contentTokensFields.setValue(getNumberOfTokens(contentS))
               }
-              d2.add(new Field("documentPartType", documentPartType, StringField.TYPE_NOT_STORED))
-              d2.add(new SortedDocValuesField("documentPartType", new BytesRef(documentPartType)))
-              siw.addDocument(d2)
+              siw.addDocument(r.sd)
+              headingInfos(i) = None
             }
-            hds(i) = None
-          }
-          val d2 = new Document()
-          for (f <- md.asScala) d2.add(f)
-          d2.add(new IntPoint("headingLevel", level))
-          d2.add(new SortedDocValuesField("headingLevel", new BytesRef(level)))
-          hds(level) = Some(d2)
-          val f = new Field("heading",line.substring(level+2),contentFieldType)
-          d2.add(f)
-          val sectionNum = sections.getAndIncrement()
-          d2.add(new NumericDocValuesField("sectionID", sectionNum))
-          d2.add(dpf)
-          val sid = new Field("sectionID", ""+sectionNum, StringField.TYPE_NOT_STORED)
-          d2.add(sid)
-          currentSectionFields(level) = Some(sid)
-          for (i <- 0 until level) hcontents(i).append(line)
+          headingInfos(level) = Some(new SectionInfo(sections.getAndIncrement, level, line.substring(level+2)))
+          for (i <- 0 until level) headingInfos(i).get.content.append(line)
         } else
-          for (i <- 0 until hds.length) hds(i).foreach(d=> hcontents(i).append(line))
-        dpcontents.append(line)
+          headingInfos.foreach(_.foreach(_.content.append(line)))
+        dpcontents.append(line+"\n")
       }
       fl.close()
       for (
-          i <- 0 until hds.length;
-          contents = hcontents(i)
-      )
-        hds(i).foreach { d2 => 
-          if (!contents.isEmpty) {
-            val scontents = contents.toString.trim
-            d2.add(new Field("content",scontents,contentFieldType))
-            val tokens = getNumberOfTokens(scontents)
-            d2.add(new IntPoint("contentTokens",tokens))
-            d2.add(new NumericDocValuesField("contentTokens",tokens))
+          headingInfoOpt <- headingInfos;
+          headingInfo <- headingInfoOpt
+      ) { 
+          r.sectionIDFields.setValue(headingInfo.sectionID)
+          r.headingLevelFields.setValue(headingInfo.headingLevel)
+          r.headingField.setStringValue(headingInfo.heading)
+          if (!headingInfo.content.isEmpty) {
+        	  val contentS = headingInfo.content.toString.trim
+        	  r.contentField.setStringValue(contentS)
+        	  r.contentTokensFields.setValue(getNumberOfTokens(contentS))
           }
-          d2.add(new Field("documentPartType", documentPartType, StringField.TYPE_NOT_STORED))
-          d2.add(new SortedDocValuesField("documentPartType", new BytesRef(documentPartType)))
-          siw.addDocument(d2)
+          siw.addDocument(r.sd)
         }
-      dpd.add(new Field("documentPartType", documentPartType, StringField.TYPE_NOT_STORED))
-      dpd.add(new SortedDocValuesField("documentPartType", new BytesRef(documentPartType)))
       val dpcontentsS = dpcontents.toString.trim
-      dpd.add(new Field("content", dpcontentsS, contentFieldType))
-      val not = getNumberOfTokens(dpcontentsS)
-      dpd.add(new IntPoint("contentTokens", not))
-      dpd.add(new NumericDocValuesField("contentTokens", not))
-      dpiw.addDocument(dpd)
+      r.contentField.setStringValue(dpcontentsS)
+      r.contentTokensFields.setValue(getNumberOfTokens(dpcontentsS))
+      dpiw.addDocument(r.dpd)
       dcontents.append(dpcontentsS)
       dcontents.append("\n\n")
     }
     val dcontentsS = dcontents.toString.trim
-    d.add(new Field("content", dcontentsS, contentFieldType))
-    val not = getNumberOfTokens(dcontentsS)
-    d.add(new IntPoint("contentTokens", not))
-    d.add(new NumericDocValuesField("contentTokens", not))
-    diw.addDocument(d)
+    r.contentField.setStringValue(dcontentsS)
+    r.contentTokensFields.setValue(getNumberOfTokens(dcontentsS))
+    diw.addDocument(r.dd)
     logger.info("Processed: "+file.getPath.replace("_metadata.xml","*"))
   }
   

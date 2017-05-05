@@ -35,6 +35,14 @@ import org.apache.lucene.index.ConcurrentMergeScheduler
 import org.apache.lucene.index.IndexCommit
 import org.apache.lucene.index.KeepOnlyLastCommitDeletionPolicy
 import org.apache.lucene.index.IndexOptions
+import org.apache.lucene.document.Document
+import org.apache.lucene.document.Field
+import org.apache.lucene.util.BytesRef
+import org.apache.lucene.document.SortedDocValuesField
+import org.apache.lucene.document.NumericDocValuesField
+import org.apache.lucene.document.IntPoint
+import org.apache.lucene.document.LongPoint
+import org.apache.lucene.document.SortedNumericDocValuesField
 
 class OctavoIndexer extends ParallelProcessor {
    
@@ -54,6 +62,63 @@ class OctavoIndexer extends ParallelProcessor {
 
   val indexingCodec = new TermVectorFilteringLucene62Codec()
   
+  class FieldPair[F1 <: Field,F2 <: Field](val indexField: F1, val storedField: F2, docs: Document*) {
+    docs.foreach(add)
+    def add(d: Document) = {
+      d.add(indexField)
+      d.add(storedField)
+    }
+  }
+  
+  class StringSDVFieldPair(field: String, docs: Document*) extends FieldPair(new Field(field, "", StringField.TYPE_NOT_STORED), new SortedDocValuesField(field, new BytesRef()), docs:_*) {
+    def setValue(v: String) = {
+      indexField.setStringValue(v)
+      storedField.setBytesValue(new BytesRef(v))
+    }
+  }
+
+  class StringNDVFieldPair(field: String, docs: Document*) extends FieldPair(new Field(field, "", StringField.TYPE_NOT_STORED), new NumericDocValuesField(field, 0), docs:_*) {
+    def setValue(v: Long) = {
+      indexField.setStringValue(""+v)
+      storedField.setLongValue(v)
+    }
+  }
+  
+  class StringSNDVFieldPair(field: String, docs: Document*) extends FieldPair(new Field(field, "", StringField.TYPE_NOT_STORED), new SortedNumericDocValuesField(field, 0), docs:_*) {
+    def setValue(v: Long) = {
+      indexField.setStringValue(""+v)
+      storedField.setLongValue(v)
+    }
+  }
+  
+  class IntPointNDVFieldPair(field: String, docs: Document*) extends FieldPair(new IntPoint("field", 0), new NumericDocValuesField(field, 0), docs:_*) {
+    def setValue(v: Int) = {
+      indexField.setIntValue(v)
+      storedField.setLongValue(v)
+    }
+  }
+
+  class IntPointSNDVFieldPair(field: String, docs: Document*) extends FieldPair(new IntPoint("field", 0), new SortedNumericDocValuesField(field, 0), docs:_*) {
+    def setValue(v: Int) = {
+      indexField.setIntValue(v)
+      storedField.setLongValue(v)
+    }
+  }
+
+  class LongPointNDVFieldPair(field: String, docs: Document*) extends FieldPair(new LongPoint("field", 0l), new NumericDocValuesField(field, 0), docs:_*) {
+    def setValue(v: Long) = {
+      indexField.setLongValue(v)
+      storedField.setLongValue(v)
+    }
+  }
+
+  class LongPointSNDVFieldPair(field: String, docs: Document*) extends FieldPair(new LongPoint("field", 0l), new SortedNumericDocValuesField(field, 0), docs:_*) {
+    def setValue(v: Long) = {
+      indexField.setLongValue(v)
+      storedField.setLongValue(v)
+    }
+  }
+
   def iwc(sort: Sort, bufferSizeInMB: Double): IndexWriterConfig = {
     val iwc = new IndexWriterConfig(analyzer)
     iwc.setUseCompoundFile(false)

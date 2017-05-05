@@ -87,23 +87,44 @@ import org.rogach.scallop._
 import scala.language.postfixOps
 import java.lang.ThreadLocal
 
-object ECCOClusterIndexer extends OctavoIndexer {
+object BritishNewspaperIndexer extends OctavoIndexer {
   
   class Reuse {
     val d = new Document()
-    val clusterIDFields = new StringNDVFieldPair("clusterID", d)
-    val avgLengthFields = new IntPointNDVFieldPair("avgLength", d)
-    val countFields = new IntPointNDVFieldPair("count", d)
-    val documentIDFields = new StringSDVFieldPair("documentID", d)
+    val issueIDSField = new Field("issueID","",StringField.TYPE_NOT_STORED)
+    d.add(issueIDSField)
+    val issueIDSDVField = new SortedDocValuesField("issueID", new BytesRef)
+    d.add(issueIDSDVField)
+    val newspaperIDSField = new Field("newspaperID","",StringField.TYPE_NOT_STORED)
+    d.add(newspaperIDSField)
+    val newspaperIDSDVField = new SortedDocValuesField("newspaperID", new BytesRef)
+    d.add(newspaperIDSDVField)
+    val articleIDSField = new Field("articleID","",StringField.TYPE_NOT_STORED)
+    d.add(articleIDSField)
+    val articleIDSDVField = new SortedDocValuesField("articleID", new BytesRef)
+    d.add(articleIDSDVField)
+    val languageSField = new Field("language","",StringField.TYPE_NOT_STORED)
+    d.add(languageSField)
+    val languageSDVField = new SortedDocValuesField("language", new BytesRef)
+    d.add(languageSDVField)
+    val dayOfWeekSField = new Field("dayOfWeek","",StringField.TYPE_NOT_STORED)
+    d.add(dayOfWeekSField)
+    val dayOfWeekSDVField = new SortedDocValuesField("dayOfWeek", new BytesRef)
+    d.add(dayOfWeekSDVField)
+    val dateIField = new IntPoint("date", 0)
+    d.add(dateIField)
+    val dateNField = new NumericDocValuesField("date", 0)
+    d.add(dateNField)
+    val issueNumberIField = new IntPoint("issueNumber", 0)
+    d.add(issueNumberIField)
+    val issueNumberNField = new NumericDocValuesField("issueNumber", 0)
+    d.add(issueNumberNField)
     val titleField = new Field("title", "", contentFieldType)
     d.add(titleField)
+    val cttitleField = new Field("cttitle", "", contentFieldType)
+    d.add(cttitleField)
     val textField = new Field("text", "", contentFieldType)
     d.add(textField)
-    val authorField = new Field("author", "", normsOmittingStoredTextField)
-    d.add(authorField)
-    val startIndexFields = new IntPointNDVFieldPair("startIndex", d)
-    val endIndexFields = new IntPointNDVFieldPair("endIndex", d)
-    val yearFields = new IntPointNDVFieldPair("year", d)
   }
   
   val tld = new ThreadLocal[Reuse] {
@@ -112,19 +133,26 @@ object ECCOClusterIndexer extends OctavoIndexer {
   
   private def index(cluster: Cluster): Unit = {
     val d = tld.get
-    d.clusterIDFields.setValue(cluster.id)
-    d.avgLengthFields.setValue(cluster.avgLength)
-    d.countFields.setValue(cluster.matches.size)
+/*    d.clusterIDSField.setStringValue("" + cluster.id)
+    d.clusterIDNField.setLongValue(cluster.id)
+    d.avgLengthIField.setIntValue(cluster.avgLength)
+    d.avgLengthNField.setLongValue(cluster.avgLength)
+    d.countIField.setIntValue(cluster.matches.size)
+    d.countNField.setLongValue(cluster.matches.size)
     for (m <- cluster.matches) {
-      d.documentIDFields.setValue(m.documentID)
+      d.documentIDSField.setStringValue("" + m.documentID)
+      d.documentIDSDVField.setBytesValue(new BytesRef(m.documentID))
       d.titleField.setStringValue(m.title)
       d.textField.setStringValue(m.text)
       d.authorField.setStringValue(m.author)
-      d.startIndexFields.setValue(m.startIndex)
-      d.endIndexFields.setValue(m.endIndex)
-      d.yearFields.setValue(m.year)
+      d.startIndexIField.setIntValue(m.startIndex)
+      d.startIndexNField.setLongValue(m.startIndex)
+      d.endIndexIField.setIntValue(m.endIndex)
+      d.endIndexNField.setLongValue(m.endIndex)
+      d.yearIField.setIntValue(m.year)
+      d.yearNField.setLongValue(m.year)
       diw.addDocument(d.d)
-    }
+    } */
   }
   
   var diw = null.asInstanceOf[IndexWriter]

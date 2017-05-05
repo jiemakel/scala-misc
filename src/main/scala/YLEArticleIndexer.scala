@@ -41,6 +41,8 @@ import scala.util.Success
 import scala.util.Failure
 import java.util.function.Predicate
 import java.util.concurrent.atomic.AtomicLong
+import org.joda.time.format.ISODateTimeFormat
+import org.apache.lucene.document.LongPoint
 
 object YLEArticleIndexer extends OctavoIndexer {
   
@@ -56,35 +58,28 @@ object YLEArticleIndexer extends OctavoIndexer {
   }
   //contentFieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS)
   
-  case class Article(id: String, publisher: String, coverage: String, headline: String, lead: String, text: List[List[WordToAnalysis]])
+  case class Article(id: String, url: String, publisher: String, timestamp: Long, coverage: String, headline: String, lead: String, text: List[List[WordToAnalysis]])
   
   private val paragraphs = new AtomicLong
   
   class Reuse {
     val pd = new Document()
     val ad = new Document()
-    val articleIDSField = new Field("articleID","",StringField.TYPE_NOT_STORED)
-    pd.add(articleIDSField)
-    ad.add(articleIDSField)
-    val articleIDSDVField = new SortedDocValuesField("articleID", new BytesRef)
-    pd.add(articleIDSDVField)
-    ad.add(articleIDSDVField)
-    val publisherSField = new Field("publisher", "", StringField.TYPE_NOT_STORED)
-    pd.add(publisherSField)
-    ad.add(publisherSField)
-    val publisherSDVField = new SortedDocValuesField("publisher", new BytesRef)
-    pd.add(publisherSDVField)
-    ad.add(publisherSDVField)
-    val coverageSDVField = new SortedDocValuesField("coverage", new BytesRef)
-    pd.add(coverageSDVField)
-    ad.add(coverageSDVField)
+    val urlFields = new StringSDVFieldPair("url", pd, ad)
+    val articleIDFields = new StringSDVFieldPair("articleID", pd, ad)
+    val publisherFields = new StringSDVFieldPair("publisher", pd, ad)
+    val timeFields = new LongPointNDVFieldPair("timePublished", pd, ad) 
+    val coverageFields = new StringSDVFieldPair("coverage", pd, ad)
+    val leadField = new Field("lead", "", contentFieldType)
+    pd.add(leadField)
+    ad.add(leadField)
+    val headlineField = new Field("headline", "", contentFieldType)
+    pd.add(headlineField)
+    ad.add(headlineField)
     val textField = new Field("text", "", contentFieldType)
     pd.add(textField)
     ad.add(textField)
-    val paragraphIDSField = new Field("paragraphID","",StringField.TYPE_NOT_STORED)
-    pd.add(paragraphIDSField)
-    val paragraphIDNField = new NumericDocValuesField("paragraphID", 0)
-    pd.add(paragraphIDNField)
+    val paragraphIDFields = new StringNDVFieldPair("paragraphID", pd, ad)
   }
   
   val tld = new ThreadLocal[Reuse] {
@@ -168,11 +163,12 @@ object YLEArticleIndexer extends OctavoIndexer {
   
   private def index(article: Article): Unit = {
     val d = tld.get
-    d.articleIDSField.setStringValue(article.id)
-    d.articleIDSDVField.setBytesValue(new BytesRef(article.id))
-    d.publisherSField.setStringValue(article.publisher)
-    d.publisherSDVField.setBytesValue(new BytesRef(article.publisher))
-    
+    d.articleIDFields.setValue(article.id)
+    d.publisherFields.setValue(article.publisher)
+    d.timeFields.setValue(article.timestamp)
+    d.coverageFields.setValue(article.coverage)
+    d.headlineField.setStringValue(article.headline)
+    d.leadField.setStringValue(article.lead)
     val textTokens = new ArrayBuffer[Iterable[Iterable[String]]]
     var text = ""
     //var offset = 0
@@ -203,12 +199,10 @@ object YLEArticleIndexer extends OctavoIndexer {
       }
       textTokens += tokens
       d.textField.setTokenStream(new AnalysisTokenStream(tokens))
-      val paragraphNum = paragraphs.getAndIncrement
-      d.paragraphIDSField.setStringValue(""+paragraphNum)
-      d.paragraphIDNField.setLongValue(paragraphNum)
+      d.paragraphIDFields.setValue(paragraphs.getAndIncrement)
       piw.addDocument(d.pd)
     }
-    d.textField.setStringValue(text.substring(0, text.length -2))
+    if (text.length>2) d.textField.setStringValue(text.substring(0, text.length -2))
     d.textField.setTokenStream(new AnalysisTokenStream(textTokens.flatten))
     aiw.addDocument(d.ad)
   }
@@ -252,11 +246,13 @@ object YLEArticleIndexer extends OctavoIndexer {
           val obj = ObjParser.parseObject(p)
           val article = Try(new Article(
               (obj \ "id").asInstanceOf[JString].values,
+              (obj \ "url" \ "full").asInstanceOf[JString].values,
               (obj \ "publisher" \ "name").asInstanceOf[JString].values,
+              ISODateTimeFormat.dateTimeNoMillis.parseMillis((obj \ "datePublished").asInstanceOf[JString].values),
               (obj \ "coverage").asInstanceOf[JString].values,
               (obj \ "headline" \ "full").asInstanceOf[JString].values,
-              (obj \ "lead").asInstanceOf[JString].values,
-              (obj \\ "analyzedText").asInstanceOf[JObject].children.map(_.asInstanceOf[JArray].children.map(_.extract[WordToAnalysis]))
+              if ((obj \ "lead").isInstanceOf[JString]) (obj \ "lead").asInstanceOf[JString].values else "",
+              if ((obj \\ "analyzedText").isInstanceOf[JObject]) (obj \\ "analyzedText").asInstanceOf[JObject].children.map(_.asInstanceOf[JArray].children.map(_.extract[WordToAnalysis])) else List.empty
               ))
           article match {
             case Success(a) => 
