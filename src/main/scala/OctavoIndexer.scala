@@ -43,6 +43,8 @@ import org.apache.lucene.document.NumericDocValuesField
 import org.apache.lucene.document.IntPoint
 import org.apache.lucene.document.LongPoint
 import org.apache.lucene.document.SortedNumericDocValuesField
+import org.rogach.scallop.ScallopConf
+import scala.language.postfixOps
 
 class OctavoIndexer extends ParallelProcessor {
    
@@ -91,28 +93,28 @@ class OctavoIndexer extends ParallelProcessor {
     }
   }
   
-  class IntPointNDVFieldPair(field: String, docs: Document*) extends FieldPair(new IntPoint("field", 0), new NumericDocValuesField(field, 0), docs:_*) {
+  class IntPointNDVFieldPair(field: String, docs: Document*) extends FieldPair(new IntPoint(field, 0), new NumericDocValuesField(field, 0), docs:_*) {
     def setValue(v: Int) = {
       indexField.setIntValue(v)
       storedField.setLongValue(v)
     }
   }
 
-  class IntPointSNDVFieldPair(field: String, docs: Document*) extends FieldPair(new IntPoint("field", 0), new SortedNumericDocValuesField(field, 0), docs:_*) {
+  class IntPointSNDVFieldPair(field: String, docs: Document*) extends FieldPair(new IntPoint(field, 0), new SortedNumericDocValuesField(field, 0), docs:_*) {
     def setValue(v: Int) = {
       indexField.setIntValue(v)
       storedField.setLongValue(v)
     }
   }
 
-  class LongPointNDVFieldPair(field: String, docs: Document*) extends FieldPair(new LongPoint("field", 0l), new NumericDocValuesField(field, 0), docs:_*) {
+  class LongPointNDVFieldPair(field: String, docs: Document*) extends FieldPair(new LongPoint(field, 0l), new NumericDocValuesField(field, 0), docs:_*) {
     def setValue(v: Long) = {
       indexField.setLongValue(v)
       storedField.setLongValue(v)
     }
   }
 
-  class LongPointSNDVFieldPair(field: String, docs: Document*) extends FieldPair(new LongPoint("field", 0l), new SortedNumericDocValuesField(field, 0), docs:_*) {
+  class LongPointSNDVFieldPair(field: String, docs: Document*) extends FieldPair(new LongPoint(field, 0l), new SortedNumericDocValuesField(field, 0), docs:_*) {
     def setValue(v: Long) = {
       indexField.setLongValue(v)
       storedField.setLongValue(v)
@@ -135,6 +137,7 @@ class OctavoIndexer extends ParallelProcessor {
   }
   
   def iw(path: String, sort: Sort, bufferSizeInMB: Double): IndexWriter = {
+    logger.info("Creating IndexWriter "+path+" with a memory buffer of "+bufferSizeInMB+"MB")
     new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc(sort, bufferSizeInMB))
   }
 
@@ -197,5 +200,14 @@ class OctavoIndexer extends ParallelProcessor {
     iw.close()
     iw.getDirectory.close()
   }
+  
+  class OctavoOpts(arguments: Seq[String]) extends ScallopConf(arguments) {
+    val index = opt[String](required = true)
+    val indexMemoryMb = opt[Long](default = Some(Runtime.getRuntime.maxMemory()/1024/1024*2/3), validate = (0<))
+    val directories = trailArg[List[String]]()
+    verify()
+  }
+  
+
       
 }

@@ -127,18 +127,11 @@ object YLEArticleIndexer extends OctavoIndexer {
   
   implicit val formats = DefaultFormats
  
-  class Opts(arguments: Seq[String]) extends ScallopConf(arguments) {
-    val index = opt[String](default = Some("/srv/yle2017"))
-    val indexMemoryMB = opt[Long](default = Some(Runtime.getRuntime.maxMemory()/1024/1024*3/4), validate = (0<))
-    val directories = trailArg[List[String]](required = true)
-    verify()
-  }
-  
   def main(args: Array[String]): Unit = {
-    val opts = new Opts(args)
-    aiw = iw(opts.index()+"/aindex",new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMB())
+    val opts = new OctavoOpts(args)
+    aiw = iw(opts.index()+"/aindex",new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 2)
     clear(aiw)
-    piw = iw(opts.index()+"/pindex",new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMB())
+    piw = iw(opts.index()+"/pindex",new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 2)
     feedAndProcessFedTasksInParallel(() =>
       opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".json")).forEach(file => {
         Try(parse(new InputStreamReader(new FileInputStream(file)), (p: Parser) => {
@@ -168,7 +161,7 @@ Try(analyzedText.asInstanceOf[JObject].children).orElse(Try(List(analyzedText.as
     close(aiw)
     close(piw)
     mergeIndices(Seq(
-     (opts.index()+"/aindex", new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMB()),
-     (opts.index()+"/pindex", new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMB())))
+     (opts.index()+"/aindex", new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 2),
+     (opts.index()+"/pindex", new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 2)))
   }
 }

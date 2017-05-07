@@ -126,6 +126,7 @@ object ECCOIndexer extends OctavoIndexer {
     dpd.add(fullTitleField)
     sd.add(fullTitleField)
     pd.add(fullTitleField)
+    val contentLengthFields = new IntPointNDVFieldPair("contentLength", dd, dpd, sd, pd)
     val documentLengthFields = new IntPointNDVFieldPair("documentLength", dd, dpd, sd, pd)
     val totalParagraphsFields = new IntPointNDVFieldPair("totalParagraphs", dd, dpd, sd, pd)
     def clearOptionalDocumentFields() {
@@ -166,16 +167,19 @@ object ECCOIndexer extends OctavoIndexer {
   class SectionInfo(val sectionID: Long, val headingLevel: Int, val heading: String) {
     val paragraphSectionIDFields = new StringSNDVFieldPair("sectionID")
     paragraphSectionIDFields.setValue(sectionID)
-    val paragraphHeadingLevelIDFields = new IntPointSNDVFieldPair("headingLevel")
-    paragraphHeadingLevelIDFields.setValue(headingLevel)
+    val paragraphHeadingLevelFields = new IntPointSNDVFieldPair("headingLevel")
+    paragraphHeadingLevelFields.setValue(headingLevel)
     val paragraphHeadingField = new Field("heading","", contentFieldType)
 	  val content = new StringBuilder()
     def addToParagraphDocument(pd: Document) {
       paragraphSectionIDFields.add(pd)
-      paragraphHeadingLevelIDFields.add(pd)
+      paragraphHeadingLevelFields.add(pd)
       pd.add(paragraphHeadingField)
     }
   }
+  
+  private val emptySectionIDSNDVField = new SortedNumericDocValuesField("sectionID", 0)
+  private val emptyHeadingLevelSNDVField = new SortedNumericDocValuesField("headingLevel", 0)
   
   private def index(id: String, file: File): Unit = {
     val filePrefix = file.getName.replace("_metadata.xml","")
@@ -190,11 +194,14 @@ object ECCOIndexer extends OctavoIndexer {
     var estcID: String = null
     while (xml.hasNext) xml.next match {
       case EvElemStart(_,"documentID",_,_) | EvElemStart(_,"PSMID",_,_) =>
-        r.documentIDFields.setValue(readContents)
+        documentID = readContents
+        r.documentIDFields.setValue(documentID)
       case EvElemStart(_,"ESTCID",_,_) =>
-        r.estcIDFields.setValue(readContents)
+        estcID = readContents
+        r.estcIDFields.setValue(estcID)
       case EvElemStart(_,"bibliographicID",attr,_) if (attr("type")(0).text == "ESTC") => // ECCO2
-        r.estcIDFields.setValue(readContents)
+        estcID = readContents
+        r.estcIDFields.setValue(estcID)
       case EvElemStart(_,"pubDate",_,_) => readContents match {
         case null => // ECCO2
           var break = false
@@ -229,8 +236,10 @@ object ECCOIndexer extends OctavoIndexer {
       }
       case EvElemStart(_,"totalPages",_,_) =>
         val tp = readContents
-        if (!tp.isEmpty)
-          r.totalPagesFields.setValue(tp.toInt)
+        if (!tp.isEmpty) {
+          totalPages = tp.toInt
+          r.totalPagesFields.setValue(totalPages)
+        }
       case EvElemStart(_,"language",_,_) =>
         r.languageFields.setValue(readContents)
       case EvElemStart(_,"module",_,_) =>
@@ -260,7 +269,7 @@ object ECCOIndexer extends OctavoIndexer {
     for (file <- filesToProcess.sortBy(x => x.getName.substring(x.getName.indexOf('_') + 1, x.getName.indexOf('_', x.getName.indexOf('_') + 1).toInt))) {
       val dpcontents = new StringBuilder
       r.clearOptionalDocumentPartFields()
-      r.documentPartIdFields.setValue(documentparts.getAndIncrement)
+      r.documentPartIdFields.setValue(documentparts.incrementAndGet)
       r.documentPartTypeFields.setValue(fileRegex.findFirstMatchIn(file.getName).get.group(1))
       if (new File(file.getPath.replace(".txt","-graphics.csv")).exists)
         for (row <- CSVReader(file.getPath.replace(".txt","-graphics.csv"))) {
@@ -274,20 +283,29 @@ object ECCOIndexer extends OctavoIndexer {
             r.dd.add(f)
           }
         }
-      val headingInfos = Seq(1,2,3).map(w => None.asInstanceOf[Option[SectionInfo]]).toBuffer
+      val headingInfos = Seq(1,2,3).map(w => None.asInstanceOf[Option[SectionInfo]]).toArray
       val pcontents = new StringBuilder
       val fl = Source.fromFile(file)
       for (line <- fl.getLines) {
         if (line.isEmpty) {
           if (!pcontents.isEmpty) {
-        	r.clearOptionalParagraphFields()
-            r.paragraphIDField.setLongValue(paragraphs.getAndIncrement)
+        	  r.clearOptionalParagraphFields()
+            r.paragraphIDField.setLongValue(paragraphs.incrementAndGet)
             r.contentField.setStringValue(pcontents.toString)
             val tokens = getNumberOfTokens(pcontents.toString)
+            r.contentLengthFields.setValue(pcontents.length)
             r.contentTokensFields.setValue(getNumberOfTokens(pcontents.toString))
-            headingInfos.foreach(_.foreach(_.addToParagraphDocument(r.pd)))
-            pcontents.clear()
+            var hasHeadingInfos = false
+            headingInfos.foreach(_.foreach(hi => {
+              hi.addToParagraphDocument(r.pd)
+              hasHeadingInfos = true
+            }))
+/*            if (!hasHeadingInfos) {
+              r.pd.add(emptySectionIDSNDVField)
+              r.pd.add(emptyHeadingLevelSNDVField)
+            }*/
             piw.addDocument(r.pd)
+            pcontents.clear()
           }
         } else
           pcontents.append(line)
@@ -307,13 +325,14 @@ object ECCOIndexer extends OctavoIndexer {
               if (!headingInfo.content.isEmpty) {
             	  val contentS = headingInfo.content.toString
             	  r.contentField.setStringValue(contentS)
+            	  r.contentLengthFields.setValue(contentS.length)
             	  r.contentTokensFields.setValue(getNumberOfTokens(contentS))
               }
               siw.addDocument(r.sd)
               headingInfos(i) = None
             }
-          headingInfos(level) = Some(new SectionInfo(sections.getAndIncrement, level, line.substring(level+2)))
-          for (i <- 0 until level) headingInfos(i).get.content.append(line)
+          headingInfos(level) = Some(new SectionInfo(sections.incrementAndGet, level, line.substring(level+2)))
+          for (i <- 0 until level) headingInfos(i).foreach(_.content.append(line))
         } else
           headingInfos.foreach(_.foreach(_.content.append(line)))
         dpcontents.append(line+"\n")
@@ -329,12 +348,14 @@ object ECCOIndexer extends OctavoIndexer {
           if (!headingInfo.content.isEmpty) {
         	  val contentS = headingInfo.content.toString.trim
         	  r.contentField.setStringValue(contentS)
+        	  r.contentLengthFields.setValue(contentS.length)
         	  r.contentTokensFields.setValue(getNumberOfTokens(contentS))
           }
           siw.addDocument(r.sd)
         }
       val dpcontentsS = dpcontents.toString.trim
       r.contentField.setStringValue(dpcontentsS)
+      r.contentLengthFields.setValue(dpcontentsS.length)
       r.contentTokensFields.setValue(getNumberOfTokens(dpcontentsS))
       dpiw.addDocument(r.dpd)
       dcontents.append(dpcontentsS)
@@ -342,6 +363,7 @@ object ECCOIndexer extends OctavoIndexer {
     }
     val dcontentsS = dcontents.toString.trim
     r.contentField.setStringValue(dcontentsS)
+    r.contentLengthFields.setValue(dcontentsS.length)
     r.contentTokensFields.setValue(getNumberOfTokens(dcontentsS))
     diw.addDocument(r.dd)
     logger.info("Processed: "+file.getPath.replace("_metadata.xml","*"))
@@ -349,23 +371,16 @@ object ECCOIndexer extends OctavoIndexer {
   
   var diw, dpiw, siw, piw = null.asInstanceOf[IndexWriter]
   
-  class Opts(arguments: Seq[String]) extends ScallopConf(arguments) {
-    val index = opt[String](required = true)
-    val indexMemoryMB = opt[Long](default = Some(Runtime.getRuntime.maxMemory()/1024/1024*3/4), validate = (0<))
-    val directories = trailArg[List[String]]()
-    verify()
-  }
-  
   def main(args: Array[String]): Unit = {
-    val opts = new Opts(args)
+    val opts = new OctavoOpts(args)
     // document level
-    diw = iw(opts.index()+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING)), opts.indexMemoryMB()/4)
+    diw = iw(opts.index()+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING)), opts.indexMemoryMb()/4)
     // document part level
-    dpiw = iw(opts.index()+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG)), opts.indexMemoryMB()/4)
+    dpiw = iw(opts.index()+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG)), opts.indexMemoryMb()/4)
     // section level
-    siw = iw(opts.index()+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG)), opts.indexMemoryMB()/4)
+    siw = iw(opts.index()+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG)), opts.indexMemoryMb()/4)
     // paragraph level
-    piw = iw(opts.index()+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)), opts.indexMemoryMB()/4)
+    piw = iw(opts.index()+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)), opts.indexMemoryMb()/4)
     val writers = Seq(diw, dpiw, siw, piw)
     writers.foreach(clear(_))
     /*
@@ -394,10 +409,10 @@ object ECCOIndexer extends OctavoIndexer {
     })
     writers.foreach(close)
     mergeIndices(Seq(
-     (opts.index()+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING)), opts.indexMemoryMB()/4),
-     (opts.index()+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG)), opts.indexMemoryMB()/4),
-     (opts.index()+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG)), opts.indexMemoryMB()/4),
-     (opts.index()+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)), opts.indexMemoryMB()/4)
+     (opts.index()+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING)), opts.indexMemoryMb()/4),
+     (opts.index()+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG)), opts.indexMemoryMb()/4),
+     (opts.index()+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG)), opts.indexMemoryMb()/4),
+     (opts.index()+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)), opts.indexMemoryMb()/4)
     ))
   }
 }

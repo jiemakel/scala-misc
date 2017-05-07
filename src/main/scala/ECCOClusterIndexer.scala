@@ -99,6 +99,8 @@ object ECCOClusterIndexer extends OctavoIndexer {
     d.add(titleField)
     val textField = new Field("text", "", contentFieldType)
     d.add(textField)
+    val textLengthFields = new IntPointNDVFieldPair("textLength", d)
+    val textTokensFields = new IntPointNDVFieldPair("textTokens", d)
     val authorField = new Field("author", "", normsOmittingStoredTextField)
     d.add(authorField)
     val startIndexFields = new IntPointNDVFieldPair("startIndex", d)
@@ -119,6 +121,8 @@ object ECCOClusterIndexer extends OctavoIndexer {
       d.documentIDFields.setValue(m.documentID)
       d.titleField.setStringValue(m.title)
       d.textField.setStringValue(m.text)
+      d.textLengthFields.setValue(m.text.length)
+      d.textTokensFields.setValue(getNumberOfTokens(m.text.toString))
       d.authorField.setStringValue(m.author)
       d.startIndexFields.setValue(m.startIndex)
       d.endIndexFields.setValue(m.endIndex)
@@ -146,16 +150,9 @@ object ECCOClusterIndexer extends OctavoIndexer {
     var matches: ArrayBuffer[Match] = new ArrayBuffer()
   }
   
-  class Opts(arguments: Seq[String]) extends ScallopConf(arguments) {
-    val index = opt[String](required = true)
-    val indexMemoryMB = opt[Long](default = Some(availableMemory/1024/1024*3/4), validate = (0<))
-    val directories = trailArg[List[String]]()
-    verify()
-  }
-  
   def main(args: Array[String]): Unit = {
-    val opts = new Opts(args)
-    diw = iw(opts.index()+"/dindex", new Sort(new SortField("clusterID",SortField.Type.INT)), opts.indexMemoryMB())
+    val opts = new OctavoOpts(args)
+    diw = iw(opts.index()+"/dindex", new Sort(new SortField("clusterID",SortField.Type.INT)), opts.indexMemoryMb())
     clear(diw)
     feedAndProcessFedTasksInParallel(() =>
       opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".gz")).forEach(file => {
@@ -205,7 +202,7 @@ object ECCOClusterIndexer extends OctavoIndexer {
       }))
     close(diw)
     mergeIndices(Seq(
-     (opts.index()+"/dindex", new Sort(new SortField("clusterID",SortField.Type.INT)), opts.indexMemoryMB()))
+     (opts.index()+"/dindex", new Sort(new SortField("clusterID",SortField.Type.INT)), opts.indexMemoryMb()))
     )
   }
 }

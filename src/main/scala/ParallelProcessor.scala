@@ -12,25 +12,24 @@ import scala.util.Failure
 import scala.util.Success
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
+import java.util.concurrent.ForkJoinPool
+import java.util.concurrent.ForkJoinPool.ForkJoinWorkerThreadFactory
+import java.util.concurrent.ForkJoinWorkerThread
 
 
 class ParallelProcessor extends LazyLogging {
   
   private val numWorkers = sys.runtime.availableProcessors
   val availableMemory = Runtime.getRuntime().maxMemory() - (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory())
-  private val queueCapacity = 1000
-  private val ec = ExecutionContext.fromExecutorService(
-   new ThreadPoolExecutor(
-     numWorkers, numWorkers,
-     0L, TimeUnit.SECONDS,
-     new ArrayBlockingQueue[Runnable](queueCapacity) {
-       override def offer(e: Runnable) = {
-         put(e)
-         true
-       }
+  private val queueCapacity = 10000
+  private val fjp = new ForkJoinPool(numWorkers, new ForkJoinWorkerThreadFactory() {
+     override def newThread(pool: ForkJoinPool): ForkJoinWorkerThread = {
+       val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
+       worker.setName("indexing-worker-" + worker.getPoolIndex())
+       worker
      }
-   )
-  )
+   }, null, true)
+  private val indexingTaskExecutionContext = ExecutionContext.fromExecutorService(fjp)
   
   /** helper function to get a recursive stream of files for a directory */
   def getFileTree(f: File): Stream[File] =
@@ -47,6 +46,7 @@ class ParallelProcessor extends LazyLogging {
   
     
   def addTask(id: String, taskFunction: () => Unit): Unit = {
+    while (fjp.getQueuedTaskCount>queueCapacity) Thread.sleep(100)
     processingQueue.put(Future { 
       try {
         taskFunction()
@@ -55,7 +55,7 @@ class ParallelProcessor extends LazyLogging {
           logger.error("An error has occured processing source "+id+": " + getStackTraceAsString(cause))
           throw new Exception("An error has occured processing source "+id, cause)       
       }
-    }(ec))
+    }(indexingTaskExecutionContext))
   }
   
   private val processingQueue = new ArrayBlockingQueue[Future[Unit]](queueCapacity)
@@ -66,18 +66,20 @@ class ParallelProcessor extends LazyLogging {
     val poison = Future(())
     val sf = Future {
       taskFeeder()
-      logger.info("All sources processed.")
+      logger.info("All sources successfully fed.")
       processingQueue.put(poison)
     }
     sf.onComplete { 
-      case Failure(t) => logger.error("Processing of at least one source resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t))
+      case Failure(t) => 
+        logger.error("Feeding of at least one source resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t))
+        processingQueue.put(poison)
       case Success(_) =>
     }
     var f = processingQueue.take()
     while (f ne poison) {
       Await.ready(f, Duration.Inf)
       f.onComplete { 
-        case Failure(t) => if (!all.isCompleted) all.failure(t)
+        case Failure(t) => if (!all.isCompleted) all.tryFailure(t)
         case Success(_) =>
       }
       f = processingQueue.take()
@@ -87,7 +89,7 @@ class ParallelProcessor extends LazyLogging {
       case Success(_) => logger.info("Successfully processed all sources.")
       case Failure(t) => logger.error("Processing of at least one source resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t))
     }
-    ec.shutdown()
+    indexingTaskExecutionContext.shutdown()
   }
 
 }
