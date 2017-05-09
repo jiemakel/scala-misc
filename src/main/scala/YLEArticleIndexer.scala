@@ -46,6 +46,7 @@ import fi.seco.lucene.MorphologicalAnalyzer
 import fi.seco.lucene.WordToAnalysis
 import org.joda.time.format.ISODateTimeFormat
 import org.apache.lucene.document.LongPoint
+import org.apache.lucene.document.StoredField
 
 
 object YLEArticleIndexer extends OctavoIndexer {
@@ -83,6 +84,9 @@ object YLEArticleIndexer extends OctavoIndexer {
     val textField = new Field("text", "", contentFieldType)
     pd.add(textField)
     ad.add(textField)
+    val analyzedTextField = new StoredField("analyzedText", "")
+    pd.add(analyzedTextField)
+    ad.add(analyzedTextField)
     val paragraphIDFields = new StringNDVFieldPair("paragraphID", pd, ad)
   }
   
@@ -136,6 +140,8 @@ object YLEArticleIndexer extends OctavoIndexer {
       opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".json")).forEach(file => {
         Try(parse(new InputStreamReader(new FileInputStream(file)), (p: Parser) => {
           val obj = ObjParser.parseObject(p)
+          val analyzedText = (obj \\ "analyzedText")
+          val paragraphs = if (analyzedText.isInstanceOf[JObject]) analyzedText.asInstanceOf[JObject].children else if (analyzedText.isInstanceOf[JArray]) List(analyzedText.asInstanceOf[JArray]) else List.empty
           val article = new Article(
               (obj \ "id").asInstanceOf[JString].values,
               (obj \ "url" \ "full").asInstanceOf[JString].values,
@@ -144,14 +150,8 @@ object YLEArticleIndexer extends OctavoIndexer {
               if ((obj \ "coverage").isInstanceOf[JString]) (obj \ "coverage").asInstanceOf[JString].values else "",
               if ((obj \ "headline" \ "full").isInstanceOf[JString]) (obj \ "headline" \ "full").asInstanceOf[JString].values else "",
               if ((obj \ "lead").isInstanceOf[JString]) (obj \ "lead").asInstanceOf[JString].values else "",
-              {
-                val analyzedText = (obj \\ "analyzedText")
-                val paragraphs = {
-Try(analyzedText.asInstanceOf[JObject].children).orElse(Try(List(analyzedText.asInstanceOf[JArray]))).getOrElse(List.empty)
-}
-                paragraphs.map(_.asInstanceOf[JArray].children.map(_.extract[WordToAnalysis]))
-              }
-              )
+              paragraphs.map(_.asInstanceOf[JArray].children.map(_.extract[WordToAnalysis]))
+            )
             addTask(file.getName,() => index(article))
       })) match {
             case Success(_) => 
