@@ -29,7 +29,7 @@ libraryDependencies ++= Seq(
 "org.apache.lucene" % "lucene-analyzers-common" % "6.5.1",
 "org.apache.lucene" % "lucene-queryparser" % "6.5.1",
 "org.apache.lucene" % "lucene-highlighter" % "6.5.1",
-"fi.seco" %% "lucene-fstordtermvectorscodec" % "1.2.0",
+"fi.seco" %% "lucene-fstordtermvectorscodec" % "1.3.0",
 "com.sleepycat" % "je" % "7.0.6",
 "org.apache.commons" % "commons-math3" % "3.6.1",
 "com.google.guava" % "guava" % "21.0",

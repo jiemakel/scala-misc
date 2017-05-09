@@ -127,7 +127,7 @@ class OctavoIndexer extends ParallelProcessor {
     iwc.setMergePolicy(new LogDocMergePolicy())
     iwc.setCodec(indexingCodec)
     iwc.setRAMBufferSizeMB(bufferSizeInMB)
-    iwc.setIndexSort(sort)
+    if (sort!=null && sort.getSort.length!=0) iwc.setIndexSort(sort)
     val mergeScheduler = new ConcurrentMergeScheduler()
     mergeScheduler.setMaxMergesAndThreads(sys.runtime.availableProcessors + 5, sys.runtime.availableProcessors)
     mergeScheduler.disableAutoIOThrottle()
@@ -138,7 +138,9 @@ class OctavoIndexer extends ParallelProcessor {
   
   def iw(path: String, sort: Sort, bufferSizeInMB: Double): IndexWriter = {
     logger.info("Creating IndexWriter "+path+" with a memory buffer of "+bufferSizeInMB+"MB")
-    new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc(sort, bufferSizeInMB))
+    val d = new MMapDirectory(FileSystems.getDefault().getPath(path))
+    d.listAll().map(d.deleteFile(_))
+    new IndexWriter(d, iwc(sort, bufferSizeInMB))
   }
 
   val contentFieldType = new FieldType(TextField.TYPE_STORED)
@@ -162,7 +164,7 @@ class OctavoIndexer extends ParallelProcessor {
     miw.commit()
     miw.close()
     miw.getDirectory.close */
-    // Go to max one segment with custom codec
+    // Go to max one segment with general codec
     var fiwc = iwc(sort, bufferSizeInMB)
     var miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), fiwc)
     miw.forceMerge(1)

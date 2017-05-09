@@ -1,8 +1,5 @@
 import fi.seco.lexical.combined.CombinedLexicalAnalysisService
 import fi.seco.lexical.hfst.HFSTLexicalAnalysisService
-import play.api.libs.json.Writes
-import play.api.libs.json.JsValue
-import play.api.libs.json.Json
 import scala.collection.JavaConverters._
 import fi.seco.lexical.hfst.HFSTLexicalAnalysisService.WordToResults
 import org.apache.lucene.index.IndexWriter
@@ -12,6 +9,7 @@ import java.io.File
 import org.json4s._
 import org.json4s.native.JsonParser._
 import org.json4s.JsonDSL._
+import org.json4s.native.JsonMethods.{render, pretty}
 import scala.compat.java8.FunctionConverters._
 import scala.compat.java8.StreamConverters._
 import org.apache.lucene.search.Sort
@@ -47,6 +45,8 @@ import fi.seco.lucene.WordToAnalysis
 import org.joda.time.format.ISODateTimeFormat
 import org.apache.lucene.document.LongPoint
 import org.apache.lucene.document.StoredField
+import java.util.function.BiPredicate
+import org.apache.lucene.index.FieldInfo
 
 
 object YLEArticleIndexer extends OctavoIndexer {
@@ -54,8 +54,8 @@ object YLEArticleIndexer extends OctavoIndexer {
 /*  contentFieldType.setStoreTermVectorPositions(true)
   contentFieldType.setStoreTermVectorPayloads(true) */
   
-  indexingCodec.termVectorFilter = new Predicate[BytesRef]() {
-    override def test(b: BytesRef) = b.bytes(b.offset + 1) == 'L'
+  indexingCodec.termVectorFilter = new BiPredicate[FieldInfo,BytesRef]() {
+    override def test(f: FieldInfo, b: BytesRef) = b.bytes(b.offset + 1) == 'L'
   }
   
   /*finalCodec.termVectorFilter = new Predicate[BytesRef]() {
@@ -63,7 +63,7 @@ object YLEArticleIndexer extends OctavoIndexer {
   }*/
   contentFieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS)
   
-  case class Article(id: String, url: String, publisher: String, timestamp: Long, coverage: String, headline: String, lead: String, text: List[List[WordToAnalysis]])
+  case class Article(id: String, url: String, publisher: String, timestamp: Long, coverage: String, headline: String, lead: String, text: List[String], analyzedText: List[JValue])
   
   private val paragraphs = new AtomicLong
   
@@ -75,12 +75,15 @@ object YLEArticleIndexer extends OctavoIndexer {
     val publisherFields = new StringSDVFieldPair("publisher", pd, ad)
     val timeFields = new LongPointNDVFieldPair("timePublished", pd, ad) 
     val coverageFields = new StringSDVFieldPair("coverage", pd, ad)
+    /*
     val leadField = new Field("lead", "", contentFieldType)
     pd.add(leadField)
     ad.add(leadField)
     val headlineField = new Field("headline", "", contentFieldType)
     pd.add(headlineField)
-    ad.add(headlineField)
+    ad.add(headlineField)*/
+    val leadFields = new StringSDVFieldPair("lead", pd, ad)
+    val headlineFields = new StringSDVFieldPair("headline", pd, ad)
     val textField = new Field("text", "", contentFieldType)
     pd.add(textField)
     ad.add(textField)
@@ -94,27 +97,28 @@ object YLEArticleIndexer extends OctavoIndexer {
     override def initialValue() = new Reuse()
   }
   
-  
+  implicit val formats = DefaultFormats
+ 
   private def index(article: Article): Unit = {
     val d = tld.get
     d.articleIDFields.setValue(article.id)
     d.publisherFields.setValue(article.publisher)
     d.timeFields.setValue(article.timestamp)
     d.coverageFields.setValue(article.coverage)
-    d.headlineField.setStringValue(article.headline)
-    d.leadField.setStringValue(article.lead)
+    d.headlineFields.setValue(article.headline)
+    d.leadFields.setValue(article.lead)
     val textTokens = new ArrayBuffer[Iterable[(Int, String, Iterable[(Float,Iterable[Iterable[String]])])]]
     var text = ""
     var textOffset = 0
-    for (paragraph <- article.text) { 
-      val tokens = MorphologicalAnalyzer.scalaAnalysisToTokenStream(paragraph)
+    for ((paragraphText,paragraphAnalysis) <- article.text.zip(article.analyzedText)) { 
+      val tokens = MorphologicalAnalyzer.scalaAnalysisToTokenStream(paragraphAnalysis.asInstanceOf[JArray].children.map(_.extract[WordToAnalysis]))
+      d.textField.setStringValue(paragraphText)
       d.textField.setTokenStream(new MorphologicalAnalysisTokenStream(tokens))
-      val ptext = paragraph.map(_.word).mkString("")      
-      d.textField.setStringValue(ptext)
+      d.analyzedTextField.setStringValue(pretty(render(paragraphAnalysis)))
       d.paragraphIDFields.setValue(paragraphs.getAndIncrement)
       piw.addDocument(d.pd)
       if (!tokens.isEmpty) {
-        text += ptext + "\n\n"
+        text += paragraphText + "\n\n"
         textTokens += tokens.map(p => (textOffset + p._1, p._2, p._3))
         textOffset += tokens.last._1 + tokens.last._2.length // -2(w=) + 2(\n\n) = 0
       }
@@ -122,6 +126,7 @@ object YLEArticleIndexer extends OctavoIndexer {
     if (!text.isEmpty) {
       d.textField.setStringValue(text.substring(0, text.length -2))
       d.textField.setTokenStream(new MorphologicalAnalysisTokenStream(textTokens.flatten))
+      d.analyzedTextField.setStringValue(pretty(render(article.analyzedText)))
       aiw.addDocument(d.ad)
     }
   }
@@ -129,8 +134,6 @@ object YLEArticleIndexer extends OctavoIndexer {
   var aiw: IndexWriter = null.asInstanceOf[IndexWriter]
   var piw: IndexWriter = null.asInstanceOf[IndexWriter]
   
-  implicit val formats = DefaultFormats
- 
   def main(args: Array[String]): Unit = {
     val opts = new OctavoOpts(args)
     aiw = iw(opts.index()+"/aindex",new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 2)
@@ -150,7 +153,8 @@ object YLEArticleIndexer extends OctavoIndexer {
               if ((obj \ "coverage").isInstanceOf[JString]) (obj \ "coverage").asInstanceOf[JString].values else "",
               if ((obj \ "headline" \ "full").isInstanceOf[JString]) (obj \ "headline" \ "full").asInstanceOf[JString].values else "",
               if ((obj \ "lead").isInstanceOf[JString]) (obj \ "lead").asInstanceOf[JString].values else "",
-              paragraphs.map(_.asInstanceOf[JArray].children.map(_.extract[WordToAnalysis]))
+              if ((obj \\ "text").isInstanceOf[JObject]) (obj \\ "text").asInstanceOf[JObject].children.map(_.asInstanceOf[JString].values) else if ((obj \\ "text").isInstanceOf[JString]) List((obj \\ "text").asInstanceOf[JString].values) else List.empty,
+              paragraphs
             )
             addTask(file.getName,() => index(article))
       })) match {
