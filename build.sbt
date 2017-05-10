@@ -8,7 +8,7 @@ resolvers += "Oracle" at "http://download.oracle.com/maven/"
 
 libraryDependencies ++= Seq(
 "com.typesafe.play" %% "play-json" % "2.6.0-M6",
-"fi.seco" %% "lucene-morphologicalanalyzer" % "1.1.0",
+"fi.seco" %% "lucene-morphologicalanalyzer" % "1.1.1",
 "org.scala-lang.modules" %% "scala-java8-compat" % "0.8.0",
 "org.json4s" %% "json4s-native" % "3.5.1" ,
 "com.fasterxml" % "aalto-xml" % "1.0.0",
@@ -34,7 +34,9 @@ libraryDependencies ++= Seq(
 "org.apache.commons" % "commons-math3" % "3.6.1",
 "com.google.guava" % "guava" % "21.0",
 "com.breinify" % "brein-time-utilities" % "1.5.0" exclude("org.slf4j","slf4j-log4j12") exclude("log4j","log4j") exclude("commons-logging", "commons-logging"),
-"org.rogach" %% "scallop" % "2.1.1"
+"org.rogach" %% "scallop" % "2.1.1",
+"org.codehaus.groovy" % "groovy" "2.4.11",
+"com.optimaize.languagedetector" % "language-detector" % "0.6"
 )
 
 resolvers ++= Seq(

@@ -47,9 +47,16 @@ import org.apache.lucene.document.LongPoint
 import org.apache.lucene.document.StoredField
 import java.util.function.BiPredicate
 import org.apache.lucene.index.FieldInfo
+import scala.xml.pull.XMLEventReader
+import scala.io.Source
+import scala.xml.pull.EvElemStart
+import scala.xml.pull.EvText
+import scala.xml.pull.EvElemEnd
+import scala.xml.pull.EvEntityRef
+import scala.xml.parsing.XhtmlEntities
 
 
-object YLEArticleIndexer extends OctavoIndexer {
+object STTArticleIndexer extends OctavoIndexer {
   
 /*  contentFieldType.setStoreTermVectorPositions(true)
   contentFieldType.setStoreTermVectorPayloads(true) */
@@ -63,26 +70,26 @@ object YLEArticleIndexer extends OctavoIndexer {
   }*/
   contentFieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS)
   
-  case class Article(id: String, url: String, publisher: String, timestamp: Long, coverage: String, headline: String, lead: String, text: List[String], analyzedText: List[JValue])
+  case class Article(
+      id: String, 
+      genre: Int, 
+      department: Int,
+      timestamp: Long, 
+      topics: Seq[Int],
+      geoTopics: Seq[Int],
+      categories: Seq[Int],
+      headline: String,
+      analyzedText: List[JValue])
   
   private val paragraphs = new AtomicLong
   
   class Reuse {
     val pd = new Document()
     val ad = new Document()
-    val urlFields = new StringSDVFieldPair("url", pd, ad)
     val articleIDFields = new StringSDVFieldPair("articleID", pd, ad)
-    val publisherFields = new StringSDVFieldPair("publisher", pd, ad)
-    val timeFields = new LongPointNDVFieldPair("timePublished", pd, ad) 
-    val coverageFields = new StringSDVFieldPair("coverage", pd, ad)
-    /*
-    val leadField = new Field("lead", "", contentFieldType)
-    pd.add(leadField)
-    ad.add(leadField)
-    val headlineField = new Field("headline", "", contentFieldType)
-    pd.add(headlineField)
-    ad.add(headlineField)*/
-    val leadFields = new StringSDVFieldPair("lead", pd, ad)
+    val genreFields = new StringNDVFieldPair("genre", pd, ad)
+    val departmentFields = new StringNDVFieldPair("department", pd, ad)
+    val timeFields = new LongPointNDVFieldPair("timePublished", pd, ad)
     val headlineFields = new StringSDVFieldPair("headline", pd, ad)
     val textField = new Field("text", "", contentFieldType)
     pd.add(textField)
@@ -91,6 +98,12 @@ object YLEArticleIndexer extends OctavoIndexer {
     pd.add(analyzedTextField)
     ad.add(analyzedTextField)
     val paragraphIDFields = new StringNDVFieldPair("paragraphID", pd)
+    def clearOptionalDocumentFields() {
+      pd.removeFields("topic")
+      ad.removeFields("topic")
+      pd.removeFields("category")
+      ad.removeFields("category")
+    }
   }
   
   val tld = new ThreadLocal[Reuse] {
@@ -102,16 +115,26 @@ object YLEArticleIndexer extends OctavoIndexer {
   private def index(article: Article): Unit = {
     val d = tld.get
     d.articleIDFields.setValue(article.id)
-    d.publisherFields.setValue(article.publisher)
+    d.genreFields.setValue(article.genre)
+    d.departmentFields.setValue(article.department)
     d.timeFields.setValue(article.timestamp)
-    d.coverageFields.setValue(article.coverage)
     d.headlineFields.setValue(article.headline)
-    d.leadFields.setValue(article.lead)
+    d.clearOptionalDocumentFields()
+    for (topic <- article.topics) {
+      val f = new StringSNDVFieldPair("topic", d.ad, d.pd)
+      f.setValue(topic)
+    }
+    for (category <- article.categories) {
+      val f = new StringSNDVFieldPair("category", d.ad, d.pd)
+      f.setValue(category)
+    }
     val textTokens = new ArrayBuffer[Iterable[(Int, String, Iterable[(Float,Iterable[Iterable[String]])])]]
     var text = ""
     var textOffset = 0
-    for ((paragraphText,paragraphAnalysis) <- article.text.zip(article.analyzedText)) { 
-      val tokens = MorphologicalAnalyzer.scalaAnalysisToTokenStream(paragraphAnalysis.asInstanceOf[JArray].children.map(_.extract[WordToAnalysis]))
+    for (paragraphAnalysis <- article.analyzedText) { 
+      val unwrappedAnalysis = paragraphAnalysis.asInstanceOf[JArray].children.map(_.extract[WordToAnalysis])
+      val tokens = MorphologicalAnalyzer.scalaAnalysisToTokenStream(unwrappedAnalysis)
+      val paragraphText = unwrappedAnalysis.map(_.word).mkString("")
       d.textField.setStringValue(paragraphText)
       d.textField.setTokenStream(new MorphologicalAnalysisTokenStream(tokens))
       d.analyzedTextField.setStringValue(pretty(render(paragraphAnalysis)))
@@ -134,33 +157,73 @@ object YLEArticleIndexer extends OctavoIndexer {
   var aiw: IndexWriter = null.asInstanceOf[IndexWriter]
   var piw: IndexWriter = null.asInstanceOf[IndexWriter]
   
+  class STTOpts(arguments: Seq[String]) extends AOctavoOpts(arguments) {
+    val xml = opt[String](required = true)
+    verify()
+  }
+  
   def main(args: Array[String]): Unit = {
-    val opts = new OctavoOpts(args)
+    val opts = new STTOpts(args)
+    val xmlPath = opts.xml()
     aiw = iw(opts.index()+"/aindex",new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 2)
     piw = iw(opts.index()+"/pindex",new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 2)
     feedAndProcessFedTasksInParallel(() =>
-      opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".json")).forEach(file => {
-        Try(parse(new InputStreamReader(new FileInputStream(file)), (p: Parser) => {
-          val obj = ObjParser.parseObject(p)
-          val analyzedText = (obj \\ "analyzedText")
-          val paragraphs = if (analyzedText.isInstanceOf[JObject]) analyzedText.asInstanceOf[JObject].children else if (analyzedText.isInstanceOf[JArray]) List(analyzedText.asInstanceOf[JArray]) else List.empty
-          val article = new Article(
-              (obj \ "id").asInstanceOf[JString].values,
-              (obj \ "url" \ "full").asInstanceOf[JString].values,
-              (obj \ "publisher" \ "name").asInstanceOf[JString].values,
-              ISODateTimeFormat.dateTimeNoMillis.parseMillis((obj \ "datePublished").asInstanceOf[JString].values),
-              if ((obj \ "coverage").isInstanceOf[JString]) (obj \ "coverage").asInstanceOf[JString].values else "",
-              if ((obj \ "headline" \ "full").isInstanceOf[JString]) (obj \ "headline" \ "full").asInstanceOf[JString].values else "",
-              if ((obj \ "lead").isInstanceOf[JString]) (obj \ "lead").asInstanceOf[JString].values else "",
-              if ((obj \\ "text").isInstanceOf[JObject]) (obj \\ "text").asInstanceOf[JObject].children.map(_.asInstanceOf[JString].values) else if ((obj \\ "text").isInstanceOf[JString]) List((obj \\ "text").asInstanceOf[JString].values) else List.empty,
-              paragraphs
-            )
-            addTask(file.getName,() => index(article))
-      })) match {
+      opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".analysis.json")).forEach(file => Try({
+        val analyzedText = parse(new InputStreamReader(new FileInputStream(file))).asInstanceOf[JArray].children
+        val xml = new XMLEventReader(Source.fromFile(new File(xmlPath+"/"+file.getName.substring(0,file.getName.length - ".analysis.json".length)), "UTF-8"))
+        var id: String = file.getName.substring(0, file.getName.length - ".xml.analysis.json".length)
+        var genre = 0
+        var department = 0
+        var timestamp = 0l
+        val headline = new StringBuilder
+        val topics = new ArrayBuffer[Int]
+        val geoTopics = new ArrayBuffer[Int]
+        val categories = new ArrayBuffer[Int]
+        var break = false
+        while (xml.hasNext && !break) xml.next match {
+          case EvElemStart(_,"genre",attrs,_) =>
+            val qcode = attrs("qcode")(0).text
+            if (qcode.startsWith("sttgenre:")) genre = qcode.substring("sttgenre:".length).toInt
+          case EvElemStart(_,"subject",attrs,_) =>
+            val sType = attrs("type")(0).text
+            val qcode = attrs("qcode")(0).text
+            sType match {
+              case "cpnat:abstract" => topics += qcode.substring("stt-topics:".length).toInt
+              case "cpnat:department" => department = qcode.substring("sttdepartment:".length).toInt
+              case "cpnat:geoArea" => geoTopics += qcode.substring("sttlocationalias:".length).toInt
+            }
+          case EvElemStart(_,"contentModified",_,_) =>
+            timestamp = ISODateTimeFormat.dateTimeNoMillis.parseMillis(xml.next.asInstanceOf[EvText].text)
+          case EvElemStart(_,"headline",_,_) =>
+            var break = false
+            while (xml.hasNext & !break) xml.next match {
+              case EvText(text) => headline.append(text)
+              case er: EvEntityRef => 
+                headline.append(XhtmlEntities.entMap.get(er.entity) match {
+                  case Some(chr) => chr
+                  case _ => er.entity
+                })
+              case EvElemEnd(_,"headline") => break = true
+            }
+          case EvElemEnd(_,"contentMeta") => break = true
+          case _ => 
+        }
+        val article = Article(
+            id,
+            genre,
+            department,
+            timestamp,
+            topics,
+            geoTopics,
+            categories,
+            headline.toString,
+            analyzedText)
+        addTask(file.getName,() => index(article))
+      }) match {
             case Success(_) => 
               logger.info("File "+file+" processed.")
             case Failure(e) => logger.error("Error processing file "+file, e)
-          }}))
+          }))
     close(aiw)
     close(piw)
     mergeIndices(Seq(

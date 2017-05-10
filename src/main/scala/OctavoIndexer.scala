@@ -193,23 +193,19 @@ class OctavoIndexer extends ParallelProcessor {
      }).foreach(Await.result(_, Duration.Inf))
   }
   
-  def clear(iw: IndexWriter) {
-    iw.deleteAll()
-    iw.commit()
-  }
-  
   def close(iw: IndexWriter) {
     iw.close()
     iw.getDirectory.close()
   }
   
-  class OctavoOpts(arguments: Seq[String]) extends ScallopConf(arguments) {
+  abstract class AOctavoOpts(arguments: Seq[String]) extends ScallopConf(arguments) {
     val index = opt[String](required = true)
     val indexMemoryMb = opt[Long](default = Some(Runtime.getRuntime.maxMemory()/1024/1024*2/3), validate = (0<))
     val directories = trailArg[List[String]]()
-    verify()
   }
   
-
+  class OctavoOpts(arguments: Seq[String]) extends AOctavoOpts(arguments) {
+    verify()
+  }
       
 }

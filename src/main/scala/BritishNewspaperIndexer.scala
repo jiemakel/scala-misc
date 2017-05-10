@@ -184,7 +184,6 @@ object BritishNewspaperIndexer extends OctavoIndexer {
   def main(args: Array[String]): Unit = {
     val opts = new Opts(args)
     diw = iw(opts.index()+"/dindex", new Sort(new SortField("clusterID",SortField.Type.INT)), opts.indexMemoryMB())
-    clear(diw)
     feedAndProcessFedTasksInParallel(() =>
       opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".gz")).forEach(file => {
         Try(parse(new InputStreamReader(new GZIPInputStream(new FileInputStream(file))), (p: Parser) => {

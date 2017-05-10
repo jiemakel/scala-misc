@@ -382,7 +382,6 @@ object ECCOIndexer extends OctavoIndexer {
     // paragraph level
     piw = iw(opts.index()+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)), opts.indexMemoryMb()/4)
     val writers = Seq(diw, dpiw, siw, piw)
-    writers.foreach(clear(_))
     /*
      *
    6919 article

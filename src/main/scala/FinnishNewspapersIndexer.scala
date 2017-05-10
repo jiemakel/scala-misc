@@ -40,7 +40,6 @@ object FinnishNewspapersIndexer extends OctavoIndexer {
     aiw = iw(opts.index()+"/aindex", new Sort(new SortField("newspaperID",SortField.Type.LONG),new SortField("articleID",SortField.Type.LONG)), opts.indexMemoryMB() / 3)
     piw = iw(opts.index()+"/pindex", new Sort(new SortField("newspaperID",SortField.Type.LONG),new SortField("paragraphID",SortField.Type.LONG)), opts.indexMemoryMB() / 3)
     val writers = Seq(diw, aiw, piw)
-    writers.foreach(clear(_))
     feedAndProcessFedTasksInParallel(() => {
       //addTask()
     })
