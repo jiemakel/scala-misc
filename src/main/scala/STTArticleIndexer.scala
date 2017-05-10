@@ -74,7 +74,7 @@ object STTArticleIndexer extends OctavoIndexer {
       id: String, 
       genre: Int, 
       department: Int,
-      timestamp: Long, 
+      timePublished: String, 
       topics: Seq[Int],
       geoTopics: Seq[Int],
       categories: Seq[Int],
@@ -89,7 +89,12 @@ object STTArticleIndexer extends OctavoIndexer {
     val articleIDFields = new StringSDVFieldPair("articleID", pd, ad)
     val genreFields = new StringNDVFieldPair("genre", pd, ad)
     val departmentFields = new StringNDVFieldPair("department", pd, ad)
-    val timeFields = new LongPointNDVFieldPair("timePublished", pd, ad)
+    val timePublishedSField = new StoredField("timePublished", "")
+    pd.add(timePublishedSField)
+    ad.add(timePublishedSField)
+    val timePublishedLongPoint = new LongPoint("timePublished", 0)
+    pd.add(timePublishedLongPoint)
+    ad.add(timePublishedLongPoint)
     val headlineFields = new StringSDVFieldPair("headline", pd, ad)
     val textField = new Field("text", "", contentFieldType)
     pd.add(textField)
@@ -117,7 +122,8 @@ object STTArticleIndexer extends OctavoIndexer {
     d.articleIDFields.setValue(article.id)
     d.genreFields.setValue(article.genre)
     d.departmentFields.setValue(article.department)
-    d.timeFields.setValue(article.timestamp)
+    d.timePublishedSField.setStringValue(article.timePublished)
+    d.timePublishedLongPoint.setLongValue(ISODateTimeFormat.dateTimeNoMillis.parseMillis(article.timePublished))
     d.headlineFields.setValue(article.headline)
     d.clearOptionalDocumentFields()
     for (topic <- article.topics) {
@@ -174,7 +180,7 @@ object STTArticleIndexer extends OctavoIndexer {
         var id: String = file.getName.substring(0, file.getName.length - ".xml.analysis.json".length)
         var genre = 0
         var department = 0
-        var timestamp = 0l
+        var timePublished = ""
         val headline = new StringBuilder
         val topics = new ArrayBuffer[Int]
         val geoTopics = new ArrayBuffer[Int]
@@ -193,7 +199,7 @@ object STTArticleIndexer extends OctavoIndexer {
               case "cpnat:geoArea" => geoTopics += qcode.substring("sttlocationalias:".length).toInt
             }
           case EvElemStart(_,"contentModified",_,_) =>
-            timestamp = ISODateTimeFormat.dateTimeNoMillis.parseMillis(xml.next.asInstanceOf[EvText].text)
+            timePublished = xml.next.asInstanceOf[EvText].text
           case EvElemStart(_,"headline",_,_) =>
             var break = false
             while (xml.hasNext & !break) xml.next match {
@@ -212,7 +218,7 @@ object STTArticleIndexer extends OctavoIndexer {
             id,
             genre,
             department,
-            timestamp,
+            timePublished,
             topics,
             geoTopics,
             categories,

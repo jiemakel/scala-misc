@@ -63,7 +63,7 @@ object YLEArticleIndexer extends OctavoIndexer {
   }*/
   contentFieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS)
   
-  case class Article(id: String, url: String, publisher: String, timestamp: Long, coverage: String, headline: String, lead: String, text: List[String], analyzedText: List[JValue])
+  case class Article(id: String, url: String, publisher: String, timePublished: String, coverage: String, headline: String, lead: String, text: List[String], analyzedText: List[JValue])
   
   private val paragraphs = new AtomicLong
   
@@ -73,7 +73,12 @@ object YLEArticleIndexer extends OctavoIndexer {
     val urlFields = new StringSDVFieldPair("url", pd, ad)
     val articleIDFields = new StringSDVFieldPair("articleID", pd, ad)
     val publisherFields = new StringSDVFieldPair("publisher", pd, ad)
-    val timeFields = new LongPointNDVFieldPair("timePublished", pd, ad) 
+    val timePublishedSField = new StoredField("timePublished", "")
+    pd.add(timePublishedSField)
+    ad.add(timePublishedSField)
+    val timePublishedLongPoint = new LongPoint("timePublished", 0)
+    pd.add(timePublishedLongPoint)
+    ad.add(timePublishedLongPoint)
     val coverageFields = new StringSDVFieldPair("coverage", pd, ad)
     /*
     val leadField = new Field("lead", "", contentFieldType)
@@ -103,7 +108,8 @@ object YLEArticleIndexer extends OctavoIndexer {
     val d = tld.get
     d.articleIDFields.setValue(article.id)
     d.publisherFields.setValue(article.publisher)
-    d.timeFields.setValue(article.timestamp)
+    d.timePublishedSField.setStringValue(article.timePublished)
+    d.timePublishedLongPoint.setLongValue(ISODateTimeFormat.dateTimeNoMillis.parseMillis(article.timePublished))
     d.coverageFields.setValue(article.coverage)
     d.headlineFields.setValue(article.headline)
     d.leadFields.setValue(article.lead)
@@ -148,7 +154,7 @@ object YLEArticleIndexer extends OctavoIndexer {
               (obj \ "id").asInstanceOf[JString].values,
               (obj \ "url" \ "full").asInstanceOf[JString].values,
               (obj \ "publisher" \ "name").asInstanceOf[JString].values,
-              ISODateTimeFormat.dateTimeNoMillis.parseMillis((obj \ "datePublished").asInstanceOf[JString].values),
+              (obj \ "datePublished").asInstanceOf[JString].values,
               if ((obj \ "coverage").isInstanceOf[JString]) (obj \ "coverage").asInstanceOf[JString].values else "",
               if ((obj \ "headline" \ "full").isInstanceOf[JString]) (obj \ "headline" \ "full").asInstanceOf[JString].values else "",
               if ((obj \ "lead").isInstanceOf[JString]) (obj \ "lead").asInstanceOf[JString].values else "",
