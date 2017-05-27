@@ -49,7 +49,16 @@ import scala.language.postfixOps
 class OctavoIndexer extends ParallelProcessor {
    
   val analyzer = new StandardAnalyzer(CharArraySet.EMPTY_SET)
-  
+
+  def lsplit[A](str: List[A],pos: List[Int]): List[List[A]] = {
+    val (rest, result) = pos.foldRight((str, List[List[A]]())) {
+      case (curr, (s, res)) =>
+        val (rest, split) = s.splitAt(curr)
+        (rest, split :: res)
+    }
+    rest :: result
+  }
+
   def getNumberOfTokens(text: String): Int = {
     val ts = analyzer.tokenStream("", text)
     val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
@@ -193,14 +202,16 @@ class OctavoIndexer extends ParallelProcessor {
      }).foreach(Await.result(_, Duration.Inf))
   }
   
-  def close(iw: IndexWriter) {
-    iw.close()
-    iw.getDirectory.close()
+  def close(iws: Traversable[IndexWriter]) {
+    iws.map(iw => Future {
+      iw.close()
+      iw.getDirectory.close()
+    }(ExecutionContext.Implicits.global)).foreach(Await.result(_, Duration.Inf))
   }
   
   abstract class AOctavoOpts(arguments: Seq[String]) extends ScallopConf(arguments) {
     val index = opt[String](required = true)
-    val indexMemoryMb = opt[Long](default = Some(Runtime.getRuntime.maxMemory()/1024/1024*2/3), validate = (0<))
+    val indexMemoryMb = opt[Long](default = Some(Runtime.getRuntime.maxMemory()/1024/1024/2), validate = (0<))
     val directories = trailArg[List[String]]()
   }
   

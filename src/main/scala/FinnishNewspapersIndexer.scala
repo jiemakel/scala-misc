@@ -43,7 +43,7 @@ object FinnishNewspapersIndexer extends OctavoIndexer {
     feedAndProcessFedTasksInParallel(() => {
       //addTask()
     })
-    writers.foreach(close(_))
+    close(writers)
     mergeIndices(Seq(
      (opts.index()+"/dindex", new Sort(new SortField("newspaperID",SortField.Type.LONG)), opts.indexMemoryMB() / 3),
      (opts.index()+"/aindex", new Sort(new SortField("newspaperID",SortField.Type.LONG),new SortField("articleID",SortField.Type.LONG)), opts.indexMemoryMB() / 3),

@@ -35,7 +35,7 @@ libraryDependencies ++= Seq(
 "com.google.guava" % "guava" % "21.0",
 "com.breinify" % "brein-time-utilities" % "1.5.0" exclude("org.slf4j","slf4j-log4j12") exclude("log4j","log4j") exclude("commons-logging", "commons-logging"),
 "org.rogach" %% "scallop" % "2.1.1",
-"org.codehaus.groovy" % "groovy" "2.4.11",
+"org.jsoup" % "jsoup" % "1.10.2",
 "com.optimaize.languagedetector" % "language-detector" % "0.6"
 )
 

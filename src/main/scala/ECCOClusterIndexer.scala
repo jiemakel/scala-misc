@@ -199,7 +199,7 @@ object ECCOClusterIndexer extends OctavoIndexer {
           case Failure(f) => logger.error("An error has occurred in reading file "+file+".",f)
         }
       }))
-    close(diw)
+    close(Seq(diw))
     mergeIndices(Seq(
      (opts.index()+"/dindex", new Sort(new SortField("clusterID",SortField.Type.INT)), opts.indexMemoryMb()))
     )

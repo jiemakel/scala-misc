@@ -89,9 +89,9 @@ object STTArticleIndexer extends OctavoIndexer {
     val articleIDFields = new StringSDVFieldPair("articleID", pd, ad)
     val genreFields = new StringNDVFieldPair("genre", pd, ad)
     val departmentFields = new StringNDVFieldPair("department", pd, ad)
-    val timePublishedSField = new StoredField("timePublished", "")
-    pd.add(timePublishedSField)
-    ad.add(timePublishedSField)
+    val timePublishedSDVField = new SortedDocValuesField("timePublished", new BytesRef())
+    pd.add(timePublishedSDVField)
+    ad.add(timePublishedSDVField)
     val timePublishedLongPoint = new LongPoint("timePublished", 0)
     pd.add(timePublishedLongPoint)
     ad.add(timePublishedLongPoint)
@@ -99,6 +99,8 @@ object STTArticleIndexer extends OctavoIndexer {
     val textField = new Field("text", "", contentFieldType)
     pd.add(textField)
     ad.add(textField)
+    val contentLengthFields = new IntPointNDVFieldPair("contentLength", pd, ad)
+    val contentTokensFields = new IntPointNDVFieldPair("contentTokens", pd, ad)
     val analyzedTextField = new StoredField("analyzedText", "")
     pd.add(analyzedTextField)
     ad.add(analyzedTextField)
@@ -106,6 +108,8 @@ object STTArticleIndexer extends OctavoIndexer {
     def clearOptionalDocumentFields() {
       pd.removeFields("topic")
       ad.removeFields("topic")
+      pd.removeFields("geoTopic")
+      ad.removeFields("geoTopic")
       pd.removeFields("category")
       ad.removeFields("category")
     }
@@ -116,65 +120,8 @@ object STTArticleIndexer extends OctavoIndexer {
   }
   
   implicit val formats = DefaultFormats
- 
-  private def index(article: Article): Unit = {
-    val d = tld.get
-    d.articleIDFields.setValue(article.id)
-    d.genreFields.setValue(article.genre)
-    d.departmentFields.setValue(article.department)
-    d.timePublishedSField.setStringValue(article.timePublished)
-    d.timePublishedLongPoint.setLongValue(ISODateTimeFormat.dateTimeNoMillis.parseMillis(article.timePublished))
-    d.headlineFields.setValue(article.headline)
-    d.clearOptionalDocumentFields()
-    for (topic <- article.topics) {
-      val f = new StringSNDVFieldPair("topic", d.ad, d.pd)
-      f.setValue(topic)
-    }
-    for (category <- article.categories) {
-      val f = new StringSNDVFieldPair("category", d.ad, d.pd)
-      f.setValue(category)
-    }
-    val textTokens = new ArrayBuffer[Iterable[(Int, String, Iterable[(Float,Iterable[Iterable[String]])])]]
-    var text = ""
-    var textOffset = 0
-    for (paragraphAnalysis <- article.analyzedText) { 
-      val unwrappedAnalysis = paragraphAnalysis.asInstanceOf[JArray].children.map(_.extract[WordToAnalysis])
-      val tokens = MorphologicalAnalyzer.scalaAnalysisToTokenStream(unwrappedAnalysis)
-      val paragraphText = unwrappedAnalysis.map(_.word).mkString("")
-      d.textField.setStringValue(paragraphText)
-      d.textField.setTokenStream(new MorphologicalAnalysisTokenStream(tokens))
-      d.analyzedTextField.setStringValue(pretty(render(paragraphAnalysis)))
-      d.paragraphIDFields.setValue(paragraphs.getAndIncrement)
-      piw.addDocument(d.pd)
-      if (!tokens.isEmpty) {
-        text += paragraphText + "\n\n"
-        textTokens += tokens.map(p => (textOffset + p._1, p._2, p._3))
-        textOffset += tokens.last._1 + tokens.last._2.length // -2(w=) + 2(\n\n) = 0
-      }
-    }
-    if (!text.isEmpty) {
-      d.textField.setStringValue(text.substring(0, text.length -2))
-      d.textField.setTokenStream(new MorphologicalAnalysisTokenStream(textTokens.flatten))
-      d.analyzedTextField.setStringValue(pretty(render(article.analyzedText)))
-      aiw.addDocument(d.ad)
-    }
-  }
-  
-  var aiw: IndexWriter = null.asInstanceOf[IndexWriter]
-  var piw: IndexWriter = null.asInstanceOf[IndexWriter]
-  
-  class STTOpts(arguments: Seq[String]) extends AOctavoOpts(arguments) {
-    val xml = opt[String](required = true)
-    verify()
-  }
-  
-  def main(args: Array[String]): Unit = {
-    val opts = new STTOpts(args)
-    val xmlPath = opts.xml()
-    aiw = iw(opts.index()+"/aindex",new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 2)
-    piw = iw(opts.index()+"/pindex",new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 2)
-    feedAndProcessFedTasksInParallel(() =>
-      opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".analysis.json")).forEach(file => Try({
+
+  private def extractAndIndex(xmlPath: String, file: File): Unit = {
         val analyzedText = parse(new InputStreamReader(new FileInputStream(file))).asInstanceOf[JArray].children
         val xml = new XMLEventReader(Source.fromFile(new File(xmlPath+"/"+file.getName.substring(0,file.getName.length - ".analysis.json".length)), "UTF-8"))
         var id: String = file.getName.substring(0, file.getName.length - ".xml.analysis.json".length)
@@ -214,7 +161,7 @@ object STTArticleIndexer extends OctavoIndexer {
           case EvElemEnd(_,"contentMeta") => break = true
           case _ => 
         }
-        val article = Article(
+        index(Article(
             id,
             genre,
             department,
@@ -223,15 +170,78 @@ object STTArticleIndexer extends OctavoIndexer {
             geoTopics,
             categories,
             headline.toString,
-            analyzedText)
-        addTask(file.getName,() => index(article))
-      }) match {
-            case Success(_) => 
-              logger.info("File "+file+" processed.")
-            case Failure(e) => logger.error("Error processing file "+file, e)
-          }))
-    close(aiw)
-    close(piw)
+            analyzedText))
+  }
+  
+  private def index(article: Article): Unit = {
+    val d = tld.get
+    d.articleIDFields.setValue(article.id)
+    d.genreFields.setValue(article.genre)
+    d.departmentFields.setValue(article.department)
+    d.timePublishedSDVField.setBytesValue(new BytesRef(article.timePublished))
+    d.timePublishedLongPoint.setLongValue(ISODateTimeFormat.dateTimeNoMillis.parseMillis(article.timePublished))
+    d.headlineFields.setValue(article.headline)
+    d.clearOptionalDocumentFields()
+    for (topic <- article.topics) {
+      val f = new StringSNDVFieldPair("topic", d.ad, d.pd)
+      f.setValue(topic)
+    }
+    for (topic <- article.geoTopics) {
+      val f = new StringSNDVFieldPair("geoTopic", d.ad, d.pd)
+      f.setValue(topic)
+    }
+    for (category <- article.categories) {
+      val f = new StringSNDVFieldPair("category", d.ad, d.pd)
+      f.setValue(category)
+    }
+    val textTokens = new ArrayBuffer[Iterable[(Int, String, Iterable[(Float,Iterable[Iterable[String]])])]]
+    var text = ""
+    var textOffset = 0
+    for (paragraphAnalysis <- article.analyzedText) { 
+      val unwrappedAnalysis = paragraphAnalysis.asInstanceOf[JArray].children.map(_.extract[WordToAnalysis])
+      val tokens = MorphologicalAnalyzer.scalaAnalysisToTokenStream(unwrappedAnalysis)
+      val paragraphText = unwrappedAnalysis.map(_.word).mkString("")
+      d.textField.setStringValue(paragraphText)
+      d.contentLengthFields.setValue(paragraphText.length)
+      d.contentTokensFields.setValue(unwrappedAnalysis.length)
+      d.textField.setTokenStream(new MorphologicalAnalysisTokenStream(tokens))
+      d.analyzedTextField.setStringValue(pretty(render(paragraphAnalysis)))
+      d.paragraphIDFields.setValue(paragraphs.getAndIncrement)
+      piw.addDocument(d.pd)
+      if (!tokens.isEmpty) {
+        text += paragraphText + "\n\n"
+        textTokens += tokens.map(p => (textOffset + p._1, p._2, p._3))
+        textOffset += tokens.last._1 + tokens.last._2.length // -2(w=) + 2(\n\n) = 0
+      }
+    }
+    if (!text.isEmpty) {
+      d.textField.setStringValue(text.substring(0, text.length -2))
+      d.contentLengthFields.setValue(text.length - 2)
+      val flattenedTokens = textTokens.flatten
+      d.contentTokensFields.setValue(flattenedTokens.length)
+      d.textField.setTokenStream(new MorphologicalAnalysisTokenStream(flattenedTokens))
+      d.analyzedTextField.setStringValue(pretty(render(article.analyzedText)))
+      aiw.addDocument(d.ad)
+    }
+  }
+  
+  var aiw: IndexWriter = null.asInstanceOf[IndexWriter]
+  var piw: IndexWriter = null.asInstanceOf[IndexWriter]
+  
+  class STTOpts(arguments: Seq[String]) extends AOctavoOpts(arguments) {
+    val xml = opt[String](required = true)
+    verify()
+  }
+  
+  def main(args: Array[String]): Unit = {
+    val opts = new STTOpts(args)
+    val xmlPath = opts.xml()
+    aiw = iw(opts.index()+"/aindex",new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 2)
+    piw = iw(opts.index()+"/pindex",new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 2)
+    feedAndProcessFedTasksInParallel(() =>
+      opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".analysis.json")).forEach(file => addTask(file.getName,() => extractAndIndex(xmlPath, file)))
+    )
+    close(Seq(aiw,piw))
     mergeIndices(Seq(
      (opts.index()+"/aindex", new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 2),
      (opts.index()+"/pindex", new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 2)))

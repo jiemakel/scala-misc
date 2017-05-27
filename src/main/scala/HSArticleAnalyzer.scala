@@ -29,9 +29,11 @@ import fi.seco.lexical.hfst.HFSTLexicalAnalysisService
 import java.io.PrintWriter
 import scala.util.Success
 import scala.util.Failure
+import com.bizo.mighty.csv.CSVReader
+import org.jsoup.Jsoup
 
 
-object STTArticleAnalyzer extends ParallelProcessor {
+object HSArticleAnalyzer extends ParallelProcessor {
   val la = new CombinedLexicalAnalysisService()
   val fiLocale = new Locale("fi")
   
@@ -87,83 +89,51 @@ object STTArticleAnalyzer extends ParallelProcessor {
   
   private val langs = Seq("fi","sv","en")
   
-  val aRegex = "<a([^>]*)>([^< ]*)(?!.*</a>)".r
-  
-  def analyze(dest: String, file: File): Unit = {
-    val xml = new XMLEventReader(Source.fromFile(file, "UTF-8"))
-    var skip = false 
-    while (xml.hasNext && !skip) xml.next match {
-      case EvElemStart(_,"genre",attrs,_) =>
-        val qcode = attrs("qcode")(0).text
-        skip = qcode.startsWith("sttversion") && qcode != "sttversion:5"
-      case EvElemStart(_,"body",_,_) =>
-        var break = false
-        var content = new StringBuilder
-        content.append("<body>")
-        while (xml.hasNext && !break) xml.next match {
-          case EvElemStart(_, elem, attrs, _) => content.append("<" + elem + attrsToString(attrs) + ">")
-          case EvElemEnd(_,"body") => break = true
-          case EvText(text) => 
-            content.append(text)
-          case er: EvEntityRef => 
-            content.append(XhtmlEntities.entMap.get(er.entity) match {
-              case Some('&') => "&amp;"
-              case Some(chr) => chr
-              case _ => "&" + er.entity + ";"
-            })
-          case EvElemEnd(_, label) =>
-            content.append("</"+label+">")
-          case EvComment(_) =>
-        }
-        content.append("</body>")
-        val contentXML = new XMLEventReader(Source.fromString(aRegex.replaceAllIn(content.toString,"<a$1>$2</a>")))
-        val stringContent = new StringBuilder
-        contentXML.next // body
-        var inOrderedList = false
-        while (contentXML.hasNext) contentXML.next match {
-          case EvElemStart(_, "h1",_,_) => stringContent.append("\n # ") 
-          case EvElemStart(_, "h2",_,_) => stringContent.append("\n ## ")
-          case EvElemStart(_, "h3",_,_) => stringContent.append("\n ## ")
-          case EvElemStart(_, "h4",_,_) => stringContent.append("\n ## ")
-          case EvElemStart(_, "Company",_,_) => 
-          case EvElemStart(_, "p",_,_) => stringContent.append("\n")
-          case EvElemStart(_, "ul",_,_) =>
-            inOrderedList = false
-            stringContent.append('\n')
-          case EvElemStart(_, "ol",_,_) =>
-            inOrderedList = true
-          case EvElemEnd(_, "li") => stringContent.append('\n')
-          case EvElemStart(_, "li",_,_) =>
-            stringContent.append(if (inOrderedList) "1." else "* ")
-          case EvText(text) => stringContent.append(text)
-          case er: EvEntityRef => 
-            stringContent.append(XhtmlEntities.entMap.get(er.entity) match {
-              case Some(chr) => chr
-              case _ => er.entity
-            })
-          case _ => 
-        }
-        val contentS = stringContent.toString
-        val lang = getBestLang(contentS)
-        if (lang != Some("sv") && lang != Some("en")) {
-          if (lang != Some("fi")) logger.info("language of "+file+" detected as "+lang)
-          val paragraphs = contentS.split("\\s*\n\n\\s*")
-          val analysis = org.json4s.native.JsonMethods.pretty(org.json4s.native.JsonMethods.render(paragraphs.toList.filter(!_.isEmpty).map(la.analyze(_, fiLocale, Collections.EMPTY_LIST.asInstanceOf[java.util.List[String]], false, true, false, 0, 1).asScala.map(Extraction.decompose).toList)))
-          val writer = new PrintWriter(new File(dest+"/"+file.getName+".analysis.json"))
-          writer.write(analysis)
-          writer.close()
-        }
-      case _ =>
+  def analyze(outputFile: File, article: String): Unit = {
+    val contentDocument = Jsoup.parse("<article>"+article.replaceAllLiterally("&", "&amp;")+"</article>")
+    val paragraphs = contentDocument.select("p").asScala.map(_.text)
+    /*val contentXML = new XMLEventReader(Source.fromString("<article>"+article.replaceAllLiterally("&", "&amp;")+"</article>"))
+    val stringContent = new StringBuilder
+    while (contentXML.hasNext) contentXML.next match {
+      case EvElemStart(_, "p",_,_) => stringContent.append("\n")
+      case EvText(text) => stringContent.append(text)
+      case er: EvEntityRef => 
+        stringContent.append(XhtmlEntities.entMap.get(er.entity) match {
+          case Some(chr) => chr
+          case _ => er.entity
+        })
+      case _ => 
     }
-    logger.info("Successfully processed "+file)
+    val contentS = stringContent.toString
+    val paragraphs = contentS.split("\\s*\n\n\\s*") */
+    val analysis = org.json4s.native.JsonMethods.pretty(org.json4s.native.JsonMethods.render(paragraphs.toList.filter(!_.isEmpty).map(la.analyze(_, fiLocale, Collections.EMPTY_LIST.asInstanceOf[java.util.List[String]], false, true, false, 0, 1).asScala.map(Extraction.decompose).toList)))
+    val writer = new PrintWriter(outputFile)
+    writer.write(analysis)
+    writer.close()
+    logger.info("Successfully processed "+outputFile)
   }
       
   def main(args: Array[String]): Unit = {
     val opts = new Opts(args)
     val dest = opts.dest()
-    new File(dest).mkdirs()
+    createHashDirectories(dest)
     feedAndProcessFedTasksInParallel(() =>
-      opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".xml")).forEach(file => addTask(file.getPath, () => analyze(dest, file)))
+      opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.forEach(file => Try({
+        val wr = CSVReader(file.getPath)
+        // articleId, nodeId, nodeTitle, startDate, modifiedDate, title, byLine, ingress, body
+        for (
+          r <- wr;
+          outputFile = new File(dest+"/"+Math.abs(r(0).hashCode()%10)+"/"+Math.abs(r(0).hashCode()%100/10)+"/"+r(0)+".analysis.json")
+        ) if (!outputFile.exists) {
+          if (r.length>=9)
+            addTask(file+":"+r(0), () => analyze(outputFile, r(8)))
+          else logger.warn(r.toSeq+" is not 9 columns.")
+        }
+      }) match {
+            case Success(_) => 
+              logger.info("File "+file+" processed.")
+            case Failure(e) => logger.error("Error processing file "+file, e)
+          })
     )
   }
 }

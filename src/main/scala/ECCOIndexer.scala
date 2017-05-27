@@ -406,7 +406,7 @@ object ECCOIndexer extends OctavoIndexer {
         addTask(path, () => index(pair._1, pair._2))
       })
     })
-    writers.foreach(close)
+    close(writers)
     mergeIndices(Seq(
      (opts.index()+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING)), opts.indexMemoryMb()/4),
      (opts.index()+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG)), opts.indexMemoryMb()/4),

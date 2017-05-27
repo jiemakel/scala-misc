@@ -44,9 +44,17 @@ class ParallelProcessor extends LazyLogging {
     sw.toString
   }
   
+  def createHashDirectories(dest: String): Unit = {
+    for (
+        i <- 0 to 9;
+        j <- 0 to 9) new File(dest+"/"+i+"/"+j).mkdirs()
+  }
+  
+  private var tasks = 0
     
   def addTask(id: String, taskFunction: () => Unit): Unit = {
-    while (fjp.getQueuedTaskCount>queueCapacity) Thread.sleep(100)
+    tasks += 1
+    while (fjp.getQueuedTaskCount>queueCapacity) Thread.sleep(500)
     processingQueue.put(Future { 
       try {
         taskFunction()
@@ -66,7 +74,7 @@ class ParallelProcessor extends LazyLogging {
     val poison = Future(())
     val sf = Future {
       taskFeeder()
-      logger.info("All sources successfully fed.")
+      logger.info("All sources successfully fed, producing a total of "+tasks+" tasks.")
       processingQueue.put(poison)
     }
     sf.onComplete { 
