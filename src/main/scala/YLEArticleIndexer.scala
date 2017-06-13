@@ -61,7 +61,6 @@ object YLEArticleIndexer extends OctavoIndexer {
   /*finalCodec.termVectorFilter = new Predicate[BytesRef]() {
     override def test(b: BytesRef) = b.bytes(b.offset + 1) == 'L'
   }*/
-  contentFieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS)
   
   case class Article(id: String, url: String, publisher: String, timePublished: String, coverage: String, headline: String, lead: String, analyzedText: List[JValue])
   
@@ -96,7 +95,7 @@ object YLEArticleIndexer extends OctavoIndexer {
     sd.add(analyzedTextField)
     pd.add(analyzedTextField)
     ad.add(analyzedTextField)
-    val paragraphIDFields = new StringNDVFieldPair("paragraphID", pd)
+    val paragraphIDFields = new StringNDVFieldPair("paragraphID", pd, sd)
     val sentenceIDFields = new StringNDVFieldPair("sentenceID", sd)
     val paragraphsFields = new IntPointNDVFieldPair("paragraphs", ad)
     val sentencesFields = new IntPointNDVFieldPair("sentences", pd, ad)

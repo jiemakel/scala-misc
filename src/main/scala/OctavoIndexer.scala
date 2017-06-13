@@ -109,6 +109,14 @@ class OctavoIndexer extends ParallelProcessor {
     }
   }
 
+  class IntPointSDVFieldPair(field: String, docs: Document*) extends FieldPair(new IntPoint(field, 0), new SortedDocValuesField(field, new BytesRef()), docs:_*) {
+    def setValue(v: Int, sv: String) = {
+      indexField.setIntValue(v)
+      storedField.setBytesValue(new BytesRef(sv))
+    }
+  }
+
+  
   class IntPointSNDVFieldPair(field: String, docs: Document*) extends FieldPair(new IntPoint(field, 0), new SortedNumericDocValuesField(field, 0), docs:_*) {
     def setValue(v: Int) = {
       indexField.setIntValue(v)
@@ -155,6 +163,7 @@ class OctavoIndexer extends ParallelProcessor {
   val contentFieldType = new FieldType(TextField.TYPE_STORED)
   contentFieldType.setOmitNorms(true)
   contentFieldType.setStoreTermVectors(true)
+  contentFieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS)
   
   val normsOmittingStoredTextField = new FieldType(TextField.TYPE_STORED)
   normsOmittingStoredTextField.setOmitNorms(true)
