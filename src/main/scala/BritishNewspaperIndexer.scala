@@ -109,7 +109,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     
     val languageFields = new StringSDVFieldPair("language", pd, ad, id) // <language ocr="English" primary="Y">English</language>
     val dayOfWeekFields = new StringSDVFieldPair("dayOfWeek", pd, ad, id) // <dw>Saturday</dw>
-    val issueNumberFields = new IntPointNDVFieldPair("issueNumber", pd, ad, id) //<is>317</is> 
+    val issueNumberFields = new StringSDVFieldPair("issueNumber", pd, ad, id) //<is>317</is> 
     val dateStartFields = new IntPointNDVFieldPair("dateStart", pd, ad, id) // <searchableDateStart>17851129</searchableDateStart>
     val dateEndFields = new IntPointNDVFieldPair("dateEnd", pd, ad, id) // <searchableDateEnd>17851129</searchableDateEnd>
     
@@ -140,7 +140,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       articlesInIssue = 0
       issueContents.clear()
       dayOfWeekFields.setValue("")
-      issueNumberFields.setValue(0)
+      issueNumberFields.setValue("")
       dateStartFields.setValue(0)
       dateEndFields.setValue(Int.MaxValue)
       languageFields.setValue("")
@@ -263,7 +263,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       case EvElemStart(_,"newspaperID",_,_) => d.newspaperIDFields.setValue(readContents)
       case EvElemStart(_,"language",_,_) => d.languageFields.setValue(readContents)
       case EvElemStart(_,"dw",_,_) => d.dayOfWeekFields.setValue(readContents)
-      case EvElemStart(_,"is",_,_) => d.issueNumberFields.setValue(readContents.toInt)
+      case EvElemStart(_,"is",_,_) => d.issueNumberFields.setValue(readContents)
       case EvElemStart(_,"pc",_,_) => d.issuePagesFields.setValue(readContents.toInt)
       case EvElemStart(_,"searchableDateStart",_,_) => d.dateStartFields.setValue(readContents.toInt)
       case EvElemStart(_,"searchableDateEnd",_,_) => d.dateEndFields.setValue(readContents.toInt)
