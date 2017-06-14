@@ -268,7 +268,10 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       case EvElemStart(_,"dw",_,_) => d.dayOfWeekFields.setValue(readContents)
       case EvElemStart(_,"is",_,_) => d.issueNumberFields.setValue(readContents)
       case EvElemStart(_,"pc",_,_) => d.issuePagesFields.setValue(readContents.toInt)
-      case EvElemStart(_,"searchableDateStart",_,_) => d.dateStartFields.setValue(readContents.toInt)
+      case EvElemStart(_,"searchableDateStart",_,_) => 
+        val date = readContents.toInt
+        d.dateStartFields.setValue(date)
+        d.dateEndFields.setValue(date)
       case EvElemStart(_,"searchableDateEnd",_,_) => d.dateEndFields.setValue(readContents.toInt)
       case EvElemStart(_,"article",_,_) => d.clearOptionalArticleFields()
       case EvElemStart(_,"id",_,_) => d.articleIDFields.setValue(readContents)
