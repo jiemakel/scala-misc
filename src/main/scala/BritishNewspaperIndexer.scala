@@ -102,6 +102,8 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     val issueContents = new StringBuilder()
     val articleContents = new StringBuilder()
     
+    val collectionIDFields = new StringSDVFieldPair("collectionID", pd, ad, id) // given as parameter
+    
     val issueIDFields = new StringSDVFieldPair("issueID", pd, ad, id) // <issue ID="N0176185" FAID="BBCN0001" COLID="C00000" contentType="Newspaper">
     val newspaperIDFields = new StringSDVFieldPair("newspaperID", pd, ad, id) // <newspaperID>
     val articleIDFields = new StringSDVFieldPair("articleID", pd, ad) // <id>WO2_B0897WEJOSAPO_1724_11_28-0001-001</id>
@@ -253,9 +255,10 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     piw.addDocument(d.pd)
   }
   
-  private def index(file: File): Unit = {
+  private def index(collectionID: String, file: File): Unit = {
     val d = tld.get
     d.clearOptionalDocumentFields()
+    d.collectionIDFields.setValue(collectionID)
     implicit val xml = new XMLEventReader(Source.fromFile(file, "ISO-8859-1"))
     val state = new State()
     while (xml.hasNext) xml.next match {
@@ -321,7 +324,10 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     aiw = iw(opts.index()+"/aindex",new Sort(new SortField("issueID", SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 3)
     iiw = iw(opts.index()+"/iindex",new Sort(new SortField("issueID",SortField.Type.STRING)),opts.indexMemoryMb() / 3)
     feedAndProcessFedTasksInParallel(() =>
-      opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".xml")).forEach(file => addTask(file.getPath, () => index(file)))
+      opts.directories().toStream.par.flatMap(p => {
+        val parts = p.split(':')
+        getFileTree(new File(parts(0))).map((parts(1),_))
+      }).filter(_._2.getName.endsWith(".xml")).foreach(pair => addTask(pair._2.getPath, () => index(pair._1,pair._2)))
     )
     close(Seq(piw,aiw,iiw))
     mergeIndices(Seq(
