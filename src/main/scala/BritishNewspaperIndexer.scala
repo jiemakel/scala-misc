@@ -114,17 +114,22 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     val issueNumberFields = new StringSDVFieldPair("issueNumber", pd, ad, id) //<is>317</is> 
     val dateStartFields = new IntPointNDVFieldPair("dateStart", pd, ad, id) // <searchableDateStart>17851129</searchableDateStart>
     val dateEndFields = new IntPointNDVFieldPair("dateEnd", pd, ad, id) // <searchableDateEnd>17851129</searchableDateEnd>
+    val authorFields = new TextSDVFieldPair("author", pd, ad) // <au_composed>Tom Whipple</au_composed>
+    val sectionFields = new StringSDVFieldPair("section", pd, ad) // <sc>A</sc>
     
     val lengthFields = new IntPointNDVFieldPair("length", pd, ad, id)
     val tokensFields = new IntPointNDVFieldPair("tokens", pd, ad, id)
 
     var pagesInArticle = 0
     var paragraphsInArticle = 0
+    var illustrationsInArticle = 0
+    var illustrationsInIssue = 0
     var paragraphsInIssue = 0
     var articlesInIssue = 0
     
     val paragraphsFields = new IntPointNDVFieldPair("paragraphs", ad, id)
     val articlesFields = new IntPointNDVFieldPair("articles", id)
+    val illustrationsFields = new IntPointNDVFieldPair("illustrations", ad, id)
     
     val articlePagesFields = new IntPointNDVFieldPair("pages", ad)
     val issuePagesFields = new IntPointNDVFieldPair("pages", id)
@@ -133,26 +138,41 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     pd.add(textField)
     ad.add(textField)
     id.add(textField)
-    val titleField = new Field("title", "", contentFieldType) // <ti>The Ducal Shopkeepers and Petty Hucksters</ti>
-    pd.add(titleField)
-    ad.add(titleField)
+    
+    val supplementTitleFields = new TextSDVFieldPair("supplementTitle", pd, ad)
+    
+    val titleFields = new TextSDVFieldPair("title", pd, ad) // <ti>The Ducal Shopkeepers and Petty Hucksters</ti>
+    
+    val subtitles = new StringBuilder()
+    val subtitlesFields = new TextSDVFieldPair("subtitles", pd, ad) //   <ta>Sketch of the week</ta> <ta>Slurs and hyperbole vied with tosh to make the headlines, says Tom Whipple</ta>
+    
     val articleTypeFields = new StringSDVFieldPair("articleType", pd, ad, id) // <ct>Arts and entertainment</ct>
-    def clearOptionalDocumentFields() {
+    def clearOptionalIssueFields() {
       paragraphsInIssue = 0
       articlesInIssue = 0
+      illustrationsInIssue = 0
       issueContents.clear()
       dayOfWeekFields.setValue("")
       issueNumberFields.setValue("")
       dateStartFields.setValue(0)
       dateEndFields.setValue(Int.MaxValue)
       languageFields.setValue("")
+      id.removeFields("containsGraphicOfType")
+      id.removeFields("containsGraphicCaption")
     }
     def clearOptionalArticleFields() {
       pagesInArticle = 0
       paragraphsInArticle = 0
+      illustrationsInArticle = 0
       articleContents.clear()
       articleTypeFields.setValue("")
-      titleField.setStringValue("")
+      titleFields.setValue("")
+      authorFields.setValue("")
+      sectionFields.setValue("")
+      supplementTitleFields.setValue("")
+      subtitlesFields.setValue("")
+      ad.removeFields("containsGraphicOfType")
+      ad.removeFields("containsGraphicCaption")
     }
   }
 
@@ -257,7 +277,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
   
   private def index(collectionID: String, file: File): Unit = {
     val d = tld.get
-    d.clearOptionalDocumentFields()
+    d.clearOptionalIssueFields()
     d.collectionIDFields.setValue(collectionID)
     implicit val xml = new XMLEventReader(Source.fromFile(file, "ISO-8859-1"))
     val state = new State()
@@ -275,6 +295,31 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       case EvElemStart(_,"searchableDateEnd",_,_) => d.dateEndFields.setValue(readContents.toInt)
       case EvElemStart(_,"article",_,_) => d.clearOptionalArticleFields()
       case EvElemStart(_,"id",_,_) => d.articleIDFields.setValue(readContents)
+      case EvElemStart(_,"au_composed",_,_) => d.authorFields.setValue(readContents)
+      case EvElemStart(_,"sc",_,_) => d.sectionFields.setValue(readContents)
+      case EvElemStart(_,"supptitle",_,_) => d.supplementTitleFields.setValue(readContents)
+      case EvElemStart(_,"ti",_,_) =>
+        val title = readContents
+        d.titleFields.setValue(title)
+        d.issueContents.append(title + "\n\n")
+      case EvElemStart(_,"ta",_,_) =>
+        val subtitle = readContents + "\n\n"
+        d.issueContents.append(subtitle)
+        d.subtitles.append(subtitle)
+      case EvElemStart(_,"il",attrs,_) =>
+        d.illustrationsInArticle += 1
+        d.illustrationsInIssue += 1
+        attrs("type").headOption.foreach(n => {
+          val f = new Field("containsGraphicOfType",n.text, notStoredStringFieldWithTermVectors)
+          d.id.add(f)
+          d.ad.add(f)
+        })
+        val c = readContents
+        if (!c.isEmpty) {
+          val f = new Field("containsGraphicCaption", c, normsOmittingStoredTextField)
+          d.id.add(f)
+          d.ad.add(f)
+        }
       case EvElemStart(_,"pi",_,_) => d.pagesInArticle += 1
       case EvElemEnd(_,"article") =>
         val article = d.articleContents.toString
@@ -283,12 +328,10 @@ object BritishNewspaperIndexer extends OctavoIndexer {
         d.tokensFields.setValue(getNumberOfTokens(article))
         d.paragraphsFields.setValue(d.paragraphsInArticle)
         d.articlePagesFields.setValue(d.pagesInArticle)
+        d.subtitlesFields.setValue(d.subtitles.toString)
+        d.illustrationsFields.setValue(d.illustrationsInArticle)
         aiw.addDocument(d.ad)
         d.articlesInIssue += 1
-      case EvElemStart(_,"ti",_,_) =>
-        val title = readContents
-        d.titleField.setStringValue(title)
-        d.issueContents.append(title + "\n\n")
       case EvElemStart(_,"ct",_,_) => d.articleTypeFields.setValue(readContents)
       case EvElemStart(_,"wd",attrs,_) => readNextWordPossiblyEmittingAParagraph(attrs, state, true) match {
         case Some(paragraph) => processParagraph(paragraph, d)
@@ -313,6 +356,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     d.lengthFields.setValue(issue.length)
     d.tokensFields.setValue(getNumberOfTokens(issue))
     d.paragraphsFields.setValue(d.paragraphsInIssue)
+    d.illustrationsFields.setValue(d.illustrationsInIssue)
     iiw.addDocument(d.id)
     logger.info("File "+file+" processed.")
   }
@@ -327,7 +371,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     aiw = iw(opts.index()+"/aindex",new Sort(new SortField("issueID", SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 3)
     iiw = iw(opts.index()+"/iindex",new Sort(new SortField("issueID",SortField.Type.STRING)),opts.indexMemoryMb() / 3)
     feedAndProcessFedTasksInParallel(() =>
-      opts.directories().toStream.par.flatMap(p => {
+      opts.directories().toStream.flatMap(p => {
         val parts = p.split(':')
         getFileTree(new File(parts(0))).map((parts(1),_))
       }).filter(_._2.getName.endsWith(".xml")).foreach(pair => addTask(pair._2.getPath, () => index(pair._1,pair._2)))

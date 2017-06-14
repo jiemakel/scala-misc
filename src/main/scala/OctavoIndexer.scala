@@ -81,6 +81,16 @@ class OctavoIndexer extends ParallelProcessor {
     }
   }
   
+  val normsOmittingNotStoredTextField = new FieldType(TextField.TYPE_NOT_STORED)
+  normsOmittingNotStoredTextField.setOmitNorms(true)
+  
+  class TextSDVFieldPair(field: String, docs: Document*)  extends FieldPair(new Field(field, "", normsOmittingNotStoredTextField), new SortedDocValuesField(field, new BytesRef()), docs:_*) {
+    def setValue(v: String) = {
+      indexField.setStringValue(v)
+      storedField.setBytesValue(new BytesRef(v))
+    }
+  }
+  
   class StringSDVFieldPair(field: String, docs: Document*) extends FieldPair(new Field(field, "", StringField.TYPE_NOT_STORED), new SortedDocValuesField(field, new BytesRef()), docs:_*) {
     def setValue(v: String) = {
       indexField.setStringValue(v)
@@ -159,6 +169,7 @@ class OctavoIndexer extends ParallelProcessor {
     d.listAll().map(d.deleteFile(_))
     new IndexWriter(d, iwc(sort, bufferSizeInMB))
   }
+  
 
   val contentFieldType = new FieldType(TextField.TYPE_STORED)
   contentFieldType.setOmitNorms(true)
