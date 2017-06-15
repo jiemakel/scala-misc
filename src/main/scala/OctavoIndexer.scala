@@ -45,6 +45,7 @@ import org.apache.lucene.document.LongPoint
 import org.apache.lucene.document.SortedNumericDocValuesField
 import org.rogach.scallop.ScallopConf
 import scala.language.postfixOps
+import fi.seco.lucene.PerFieldFSTOrdTermVectorsCodec
 
 class OctavoIndexer extends ParallelProcessor {
    
@@ -182,7 +183,7 @@ class OctavoIndexer extends ParallelProcessor {
   val notStoredStringFieldWithTermVectors = new FieldType(StringField.TYPE_NOT_STORED)
   notStoredStringFieldWithTermVectors.setStoreTermVectors(true)
   
-  val finalCodec = new FSTOrdTermVectorsCodec()
+  val finalCodec = new PerFieldFSTOrdTermVectorsCodec()
   
   def merge(path: String, sort: Sort, bufferSizeInMB: Double): Unit = {
     logger.info("Merging index at "+path)

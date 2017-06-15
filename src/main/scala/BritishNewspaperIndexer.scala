@@ -89,6 +89,7 @@ import java.lang.ThreadLocal
 import scala.xml.parsing.XhtmlEntities
 import scala.xml.MetaData
 import scala.collection.Searching
+import scala.collection.immutable.Set
 
 object BritishNewspaperIndexer extends OctavoIndexer {
 
@@ -135,6 +136,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     val issuePagesFields = new IntPointNDVFieldPair("pages", id)
     
     val textField = new Field("text", "", contentFieldType)
+    finalCodec.termVectorFields = Set("text")
     pd.add(textField)
     ad.add(textField)
     id.add(textField)
@@ -170,6 +172,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       authorFields.setValue("")
       sectionFields.setValue("")
       supplementTitleFields.setValue("")
+      subtitles.clear()
       subtitlesFields.setValue("")
       ad.removeFields("containsGraphicOfType")
       ad.removeFields("containsGraphicCaption")
