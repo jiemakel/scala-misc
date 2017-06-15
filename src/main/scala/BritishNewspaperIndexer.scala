@@ -136,7 +136,6 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     val issuePagesFields = new IntPointNDVFieldPair("pages", id)
     
     val textField = new Field("text", "", contentFieldType)
-    finalCodec.termVectorFields = Set("text")
     pd.add(textField)
     ad.add(textField)
     id.add(textField)
@@ -178,6 +177,8 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       ad.removeFields("containsGraphicCaption")
     }
   }
+  
+  finalCodec.termVectorFields = Set("text","containsGraphicOfType")
 
   val tld = new ThreadLocal[Reuse] {
     override def initialValue() = new Reuse()
