@@ -77,19 +77,22 @@ import scala.util.Success
 import org.rogach.scallop._
 import scala.language.postfixOps
 import org.apache.lucene.document.SortedNumericDocValuesField
+import scala.xml.parsing.XhtmlEntities
+import scala.xml.MetaData
+import scala.collection.Searching
 
 object ECCOIndexer extends OctavoIndexer {
   
-  def readContents(implicit xml: XMLEventReader): String = {
+  private def readContents(implicit xml: XMLEventReader): String = {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
       case EvElemStart(_,_,_,_) => return null
       case EvText(text) => content.append(text)
-      case er: EvEntityRef =>
-        content.append('&')
-        content.append(er.entity)
-        content.append(';')
+      case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
+        case Some(chr) => content.append(chr)
+        case _ => content.append(er.entity)
+      }
       case EvComment(_) => 
       case EvElemEnd(_,_) => break = true 
     }
@@ -116,26 +119,22 @@ object ECCOIndexer extends OctavoIndexer {
     val collectionIDFields = new StringSDVFieldPair("collectionID", dd, dpd, sd, pd)
     val documentIDFields = new StringSDVFieldPair("documentID", dd, dpd, sd, pd)
     val estcIDFields = new StringSDVFieldPair("ESTCID", dd, dpd, sd, pd)
-    val pubDateStartFields = new IntPointNDVFieldPair("pubDateStart", dd, dpd, sd, pd)
-    val pubDateEndFields = new IntPointNDVFieldPair("pubDateEnd", dd, dpd, sd, pd)
+    val dateStartFields = new IntPointNDVFieldPair("dateStart", dd, dpd, sd, pd)
+    val dateEndFields = new IntPointNDVFieldPair("dateEnd", dd, dpd, sd, pd)
     val totalPagesFields = new IntPointNDVFieldPair("totalPages", dd, dpd, sd, pd)
     val languageFields = new StringSDVFieldPair("language", dd, dpd, sd, pd)
     val moduleFields = new StringSDVFieldPair("module", dd, dpd, sd, pd)
-    val fullTitleField = new Field("fullTitle","",contentFieldType)
-    dd.add(fullTitleField)
-    dpd.add(fullTitleField)
-    sd.add(fullTitleField)
-    pd.add(fullTitleField)
+    val fullTitleFields = new TextSDVFieldPair("fullTitle",dd,dpd,sd,pd)
     val contentLengthFields = new IntPointNDVFieldPair("contentLength", dd, dpd, sd, pd)
     val documentLengthFields = new IntPointNDVFieldPair("documentLength", dd, dpd, sd, pd)
     val totalParagraphsFields = new IntPointNDVFieldPair("totalParagraphs", dd, dpd, sd, pd)
     def clearOptionalDocumentFields() {
-      pubDateStartFields.setValue(0)
-      pubDateEndFields.setValue(Int.MaxValue)
+      dateStartFields.setValue(0)
+      dateEndFields.setValue(Int.MaxValue)
       totalPagesFields.setValue(0)
       languageFields.setValue("")
       moduleFields.setValue("")
-      fullTitleField.setStringValue("")
+      fullTitleFields.setValue("")
       dd.removeFields("containsGraphicOfType")
       dd.removeFields("containsGraphicCaption")
     }
@@ -159,27 +158,25 @@ object ECCOIndexer extends OctavoIndexer {
     val contentTokensFields = new IntPointNDVFieldPair("contentTokens", dd, dpd, sd, pd)
     val documentPartTypeFields = new StringSDVFieldPair("documentPartType", dpd, sd, pd)
     val sectionIDFields = new StringNDVFieldPair("sectionID", sd)
-    val headingField = new Field("heading","", contentFieldType)
-    sd.add(headingField)
+    val headingFields = new TextSDVFieldPair("heading",sd)
     val headingLevelFields = new IntPointNDVFieldPair("headingLevel", sd)
   }
+  
+  finalCodec.termVectorFields = Set("content","containsGraphicOfType")
   
   class SectionInfo(val sectionID: Long, val headingLevel: Int, val heading: String) {
     val paragraphSectionIDFields = new StringSNDVFieldPair("sectionID")
     paragraphSectionIDFields.setValue(sectionID)
     val paragraphHeadingLevelFields = new IntPointSNDVFieldPair("headingLevel")
     paragraphHeadingLevelFields.setValue(headingLevel)
-    val paragraphHeadingField = new Field("heading","", contentFieldType)
+    val paragraphHeadingFields = new TextSSDVFieldPair("heading")
 	  val content = new StringBuilder()
     def addToParagraphDocument(pd: Document) {
       paragraphSectionIDFields.add(pd)
       paragraphHeadingLevelFields.add(pd)
-      pd.add(paragraphHeadingField)
+      paragraphHeadingFields.add(pd)
     }
   }
-  
-  private val emptySectionIDSNDVField = new SortedNumericDocValuesField("sectionID", 0)
-  private val emptyHeadingLevelSNDVField = new SortedNumericDocValuesField("headingLevel", 0)
   
   private def index(id: String, file: File): Unit = {
     val filePrefix = file.getName.replace("_metadata.xml","")
@@ -212,27 +209,27 @@ object ECCOIndexer extends OctavoIndexer {
               case EvElemStart(_,"pubDateStart",_,_) => readContents match {
                 case any =>
                   startDate = any
-                  r.pubDateStartFields.setValue(any.toInt)
+                  r.dateStartFields.setValue(any.toInt)
               }
               case EvElemStart(_,"pubDateEnd",_,_) => readContents match {
                 case any =>
                   endDateFound = true
-                  r.pubDateEndFields.setValue(any.replaceAll("00","99").toInt)
+                  r.dateEndFields.setValue(any.replaceAll("00","99").toInt)
               }
               case EvElemEnd(_,"pubDate") => break = true
               case _ => 
             }
           }
           if (!endDateFound && startDate != null) {
-            r.pubDateEndFields.setValue(startDate.replaceAll("00","99").toInt)
+            r.dateEndFields.setValue(startDate.replaceAll("00","99").toInt)
           }
         case "" =>
         case "1809" =>
-          r.pubDateStartFields.setValue(18090000)
-          r.pubDateEndFields.setValue(18099999)
+          r.dateStartFields.setValue(18090000)
+          r.dateEndFields.setValue(18099999)
         case any => 
-          r.pubDateStartFields.setValue(any.toInt)
-          r.pubDateEndFields.setValue(any.replaceAll("01","99").toInt)
+          r.dateStartFields.setValue(any.toInt)
+          r.dateEndFields.setValue(any.replaceAll("01","99").toInt)
       }
       case EvElemStart(_,"totalPages",_,_) =>
         val tp = readContents
@@ -245,7 +242,7 @@ object ECCOIndexer extends OctavoIndexer {
       case EvElemStart(_,"module",_,_) =>
         r.moduleFields.setValue(readContents)
       case EvElemStart(_,"fullTitle",_,_) => 
-        r.fullTitleField.setStringValue(readContents)
+        r.fullTitleFields.setValue(readContents)
       case _ => 
     }
     xmls.close()
@@ -300,10 +297,6 @@ object ECCOIndexer extends OctavoIndexer {
               hi.addToParagraphDocument(r.pd)
               hasHeadingInfos = true
             }))
-/*            if (!hasHeadingInfos) {
-              r.pd.add(emptySectionIDSNDVField)
-              r.pd.add(emptyHeadingLevelSNDVField)
-            }*/
             piw.addDocument(r.pd)
             pcontents.clear()
           }
@@ -321,7 +314,7 @@ object ECCOIndexer extends OctavoIndexer {
           ) {
               r.sectionIDFields.setValue(headingInfo.sectionID)
               r.headingLevelFields.setValue(headingInfo.headingLevel)
-              r.headingField.setStringValue(headingInfo.heading)
+              r.headingFields.setValue(headingInfo.heading)
               if (!headingInfo.content.isEmpty) {
             	  val contentS = headingInfo.content.toString
             	  r.contentField.setStringValue(contentS)
@@ -344,7 +337,7 @@ object ECCOIndexer extends OctavoIndexer {
       ) { 
           r.sectionIDFields.setValue(headingInfo.sectionID)
           r.headingLevelFields.setValue(headingInfo.headingLevel)
-          r.headingField.setStringValue(headingInfo.heading)
+          r.headingFields.setValue(headingInfo.heading)
           if (!headingInfo.content.isEmpty) {
         	  val contentS = headingInfo.content.toString.trim
         	  r.contentField.setStringValue(contentS)

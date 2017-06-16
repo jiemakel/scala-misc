@@ -268,8 +268,10 @@ object BritishNewspaperIndexer extends OctavoIndexer {
   }
   
   private def processParagraph(paragraph: String, d: Reuse): Unit = {
-    d.articleContents.append(paragraph + "\n\n")
-    d.issueContents.append(paragraph + "\n\n")
+    d.articleContents.append(paragraph)
+    d.articleContents.append("\n\n")
+    d.issueContents.append(paragraph)
+    d.articleContents.append("\n\n")
     d.paragraphIDFields.setValue(paragraphs.getAndIncrement)
     d.textField.setStringValue(paragraph)
     d.lengthFields.setValue(paragraph.length)

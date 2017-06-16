@@ -45,6 +45,8 @@ import scala.concurrent.ExecutionContext
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ArrayBlockingQueue
+import scala.util.Failure
+import scala.util.Success
 
 object ECCOXML2Text extends LazyLogging {
   
@@ -75,6 +77,89 @@ object ECCOXML2Text extends LazyLogging {
      }
    )
   )
+  
+    case class Word(midX: Int, startX: Int, endX: Int, startY: Int, endY: Int, word: String) extends Ordered[Word] {
+    def compare(that: Word): Int = this.midX-that.midX
+  }
+  
+  class State {
+    val content = new StringBuilder()
+    var currentLine: ArrayBuffer[Word] = new ArrayBuffer //midx,startx,endx,starty,endy,content  
+    var lastLine: ArrayBuffer[Word] = null
+    def testParagraphBreakAtEndOfLine(guessParagraphs: Boolean): Option[String] = {
+      var ret: Option[String] = None
+      if (lastLine != null) { // we have two lines, check for a paragraph change between them.
+        content.append(lastLine.map(_.word).mkString(" "))
+        if (guessParagraphs) {
+          val (lastSumEndY, lastSumHeight) = lastLine.foldLeft((0,0))((t,v) => (t._1 + v.endY, t._2 + (v.endY - v.startY)))
+          val lastAvgHeight = lastSumHeight / lastLine.length
+          val lastAvgEndY = lastSumEndY / lastLine.length
+          val (currentSumStartY, currentSumHeight) = currentLine.foldLeft((0,0))((t,v) => (t._1 + v.startY, t._2 + (v.endY - v.startY)))
+          val currentAvgHeight = currentSumHeight / currentLine.length
+          val currentAvgStartY = currentSumStartY / currentLine.length
+          
+          val lastMaxHeight = lastLine.map(p => p.endY - p.startY).max
+          val currentMaxHeight = currentLine.map(p => p.endY - p.startY).max
+
+          val (lastSumWidth, lastSumChars) = lastLine.foldLeft((0,0))((t,v) => (t._1 + (v.endX - v.startX), t._2 + v.word.length))
+          val (currentSumWidth, currentSumChars) = currentLine.foldLeft((0,0))((t,v) => (t._1 + (v.endX - v.startX), t._2 + v.word.length))
+          
+          val lastAvgCharWidth = lastSumWidth / lastSumChars
+          val currentAvgCharWidth = currentSumWidth / currentSumChars
+
+          val lastStartX = lastLine(0).startX
+          val currentStartX = currentLine(0).startX
+          if (
+            (currentAvgStartY - lastAvgEndY > 0.90*math.min(lastMaxHeight, currentMaxHeight)) || // spacing 
+            (currentStartX > lastStartX + 1.5*math.min(lastAvgCharWidth,currentAvgCharWidth)) || // indentation 
+            (lastStartX > currentStartX + 2*math.min(lastAvgCharWidth,currentAvgCharWidth)) // catch edge cases
+          ) {
+            ret = Some(content.toString)
+            content.clear()
+          } else content.append('\n')
+        } else content.append('\n')
+      }
+      lastLine = currentLine
+      currentLine = new ArrayBuffer
+      ret
+    }
+  }
+  
+  private def readContents(implicit xml: XMLEventReader): String = {
+    var break = false
+    val content = new StringBuilder()
+    while (xml.hasNext && !break) xml.next match {
+      case EvElemStart(_,_,_,_) => return null
+      case EvText(text) => content.append(text)
+      case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
+        case Some(chr) => content.append(chr)
+        case _ => content.append(er.entity)
+      }
+      case EvComment(_) => 
+      case EvElemEnd(_,_) => break = true 
+    }
+    return content.toString.trim
+  }
+  
+  private def readNextWordPossiblyEmittingAParagraph(attrs: MetaData, state: State, guessParagraphs: Boolean)(implicit xml: XMLEventReader): Option[String] = {
+    val word = readContents
+    val pos = attrs("pos")(0).text.split(",")
+    val curStartX = pos(0).toInt
+    val curEndX = pos(2).toInt
+    val curMidX = (curStartX + curEndX) / 2
+    val curStartY = pos(1).toInt
+    val curEndY = pos(3).toInt
+    val curHeight = curEndY - curStartY
+    var ret: Option[String] = None 
+    if (!state.currentLine.isEmpty) {
+      var pos = Searching.search(state.currentLine).search(Word(curMidX,-1,-1,-1,-1,"")).insertionPoint - 1
+      val Word(_,_,_,lastStartY, lastEndY, _) = state.currentLine(if (pos == -1) 0 else pos)
+      if (curStartY > lastEndY || curMidX < state.currentLine.last.midX) // new line or new paragraph
+        ret = state.testParagraphBreakAtEndOfLine(guessParagraphs)
+      state.currentLine += (Word(curMidX, curStartX, curEndX, curStartY, curEndY, word.toString))
+    } else state.currentLine += (Word(curMidX, curStartX, curEndX, curStartY, curEndY, word.toString))
+    ret
+  }
 
   def process(file: File, prefixLength: Int, dest: String, guessParagraphs: Boolean): Future[Unit] = Future({
     val dir = dest+file.getParentFile.getAbsolutePath.substring(prefixLength) + "/"
@@ -107,10 +192,9 @@ object ECCOXML2Text extends LazyLogging {
     } while (first == '<' && (second=='?' || second=='!'))
     fis.unread(second)
     fis.unread(first)
-    val xml = new XMLEventReader(Source.fromInputStream(fis,encoding))
+    implicit val xml = new XMLEventReader(Source.fromInputStream(fis,encoding))
     var currentSection: String = null
     val content = new StringBuilder()
-    val word = new StringBuilder()
     var page = 1
     var sw: PrintWriter = null
     var gw: CSVWriter = null
@@ -122,6 +206,7 @@ object ECCOXML2Text extends LazyLogging {
     var currentLine = new ArrayBuffer[(Int,Int,Int,String)] //x,starty,endy,content
     var lastWasText = false
     var partNum = 0
+    val state = new State()
     while (xml.hasNext) xml.next match {
       case EvElemStart(_,"text",_,_) =>
         while (xml.hasNext && !break) xml.next match {
@@ -144,103 +229,37 @@ object ECCOXML2Text extends LazyLogging {
               case "section" => "## "
               case _ =>  "# "
             })
-            word.clear()
-            var break2 = false
-            while (xml.hasNext && !break2) xml.next match {
-              case EvText(text) => word.append(text)
-              case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
-                case Some(chr) => word.append(chr)
-                case _ => word.append(er.entity)
-              }
-              case EvComment(_) => 
-              case EvElemEnd(_,"sectionHeader") => break2 = true 
-            }
+            val heading = readContents.trim
             if (hw == null) hw = CSVWriter(prefix+partNum+"_"+currentSection.replaceAllLiterally("bodyPage","body")+"-headings.csv")
-            val wordS = word.toString.trim
-            hw.write(Seq(""+page,htype,wordS))
-            content.append(wordS)
+            hw.write(Seq(""+page,htype,heading))
+            content.append(heading)
             content.append("\n\n")
           case EvElemStart(_,"graphicCaption",attrs,_) =>
             val htype = attrs.get("type").map(_(0).text).getOrElse("").toLowerCase
-            word.clear()
-            var break2 = false
-            while (xml.hasNext && !break2) xml.next match {
-              case EvText(text) => word.append(text)
-              case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
-                case Some(chr) => word.append(chr)
-                case _ => word.append(er.entity)
-              }
-              case EvComment(_) => 
-              case EvElemEnd(_,"graphicCaption") => break2 = true 
-            }
+            val caption = readContents.trim
             if (gw == null) gw = CSVWriter(prefix+partNum+"_"+currentSection.replaceAllLiterally("bodyPage","body")+"-graphics.csv")
-            gw.write(Seq(""+page,htype,attrs.get("colorimage").map(_(0).text).getOrElse(""),word.toString.trim))
-          case EvElemStart(_,"wd",attrs,_) =>
-            word.clear()
-            var break2 = false
-            while (xml.hasNext && !break2) xml.next match {
-              case EvText(text) => word.append(text)
-              case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
-                case Some(chr) => word.append(chr)
-                case _ => word.append(er.entity)
-              }
-              case EvComment(_) => 
-              case EvElemEnd(_,"wd") => break2 = true 
-            }
-            val pos = attrs("pos")(0).text.split(",")
-            val curX = (pos(2).toInt + pos(0).toInt) / 2
-            val curStartY = pos(1).toInt
-            val curEndY = pos(3).toInt
-            val curHeight = curEndY - curStartY
-            if (!currentLine.isEmpty) {
-              var pos = Searching.search(currentLine).search((curX,-1,-1,"")).insertionPoint - 1
-              val (_, lastStartY, lastEndY, _) = currentLine(if (pos == -1) 0 else pos)
-              if (curStartY > lastEndY || curX < currentLine.last._1) { // new line or new paragraph
-                if (lastLine != null) { // we have two lines, check for a paragraph change between them.
-                  content.append(lastLine.map(_._4).mkString(" "))
-                  if (guessParagraphs) {
-                    val (lastSumEndY, lastSumHeight) = lastLine.foldLeft((0,0))((t,v) => (t._1 + v._3, t._2 + (v._3 - v._2)))
-                    val lastAvgHeight = lastSumHeight / lastLine.length
-                    val lastAvgEndY = lastSumEndY / lastLine.length
-                    val (currentSumStartY, currentSumHeight) = currentLine.foldLeft((0,0))((t,v) => (t._1 + v._2, t._2 + (v._3 - v._2)))
-                    val currentAvgHeight = currentSumHeight / currentLine.length
-                    val currentAvgStartY = currentSumStartY / currentLine.length
-                    val lastMaxHeight = lastLine.map(p => p._3 - p._2).max
-                    val currentMaxHeight = currentLine.map(p => p._3 - p._2).max
-                    if (currentAvgStartY - lastAvgEndY > 0.95*math.min(lastMaxHeight, currentMaxHeight))
-                      content.append('\n')
-                  }
-                  content.append('\n')
-                }
-                lastLine = currentLine
-                currentLine = new ArrayBuffer
-                currentLine += ((curX, curStartY, curEndY, word.toString))
-              } else currentLine += ((curX, curStartY, curEndY, word.toString))
-            } else currentLine += ((curX, curStartY, curEndY, word.toString))
+            gw.write(Seq(""+page,htype,attrs.get("colorimage").map(_(0).text).getOrElse(""),caption))
+          case EvElemStart(_,"wd",attrs,_) => readNextWordPossiblyEmittingAParagraph(attrs, state, true) match {
+            case Some(paragraph) => 
+              content.append(paragraph)
+              content.append("\n\n")
+            case None => 
+          }
           case EvElemEnd(_,"p") =>
-            if (!currentLine.isEmpty) {
-              if (lastLine != null) { // we have two lines, check for a paragraph change between them.
-                  content.append(lastLine.map(_._4).mkString(" "))
-                  if (guessParagraphs) {
-                    val (lastSumEndY, lastSumHeight) = lastLine.foldLeft((0,0))((t,v) => (t._1 + v._3, t._2 + (v._3 - v._2)))
-                    val lastAvgHeight = lastSumHeight / lastLine.length
-                    val lastAvgEndY = lastSumEndY / lastLine.length
-                    val (currentSumStartY, currentSumHeight) = currentLine.foldLeft((0,0))((t,v) => (t._1 + v._2, t._2 + (v._3 - v._2)))
-                    val currentAvgHeight = currentSumHeight / currentLine.length
-                    val currentAvgStartY = currentSumStartY / currentLine.length
-                    val lastMaxHeight = lastLine.map(p => p._3 - p._2).max
-                    val currentMaxHeight = currentLine.map(p => p._3 - p._2).max
-                    if (currentAvgStartY - lastAvgEndY > 0.95*math.min(lastMaxHeight, currentMaxHeight))
-                      content.append('\n')
-                  }
-                  content.append('\n')
-                }
-              content.append(currentLine.map(_._4).mkString(" "))
-              lastLine = null
-              currentLine.clear()
+            state.testParagraphBreakAtEndOfLine(true) match {
+              case Some(paragraph) => 
+                content.append(paragraph)
+                content.append("\n\n")
+              case None => 
             }
-            if (content.length < 2 || content.last!='\n') content.append("\n\n")
-            else if (content.substring(content.length - 2)!="\n\n") content.append("\n")
+            state.content.append(state.lastLine.map(_.word).mkString(" "))
+            if (state.content.length>0) {
+              content.append(state.content.toString)
+              content.append("\n\n")
+            }
+            state.content.clear()
+            state.lastLine = null
+            state.currentLine.clear
           case EvElemEnd(_,"page") =>
             val pw = new PrintWriter(new File(prefix+"page"+page+".txt"))
             pw.append(content)
@@ -315,8 +334,10 @@ object ECCOXML2Text extends LazyLogging {
           }
         })
     }})
-    f.onFailure { case t => logger.error("Processing of at least one file resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t)) }
-    f.onSuccess { case _ => logger.info("Successfully processed all files.") }
+    f.onComplete {
+      case Success(_) => logger.info("Successfully processed all sources.")
+      case Failure(t) => logger.error("Processing of at least one source resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t))
+    }
     Await.ready(f, Duration.Inf)
     ec.shutdown()
   }

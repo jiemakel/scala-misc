@@ -46,6 +46,7 @@ import org.apache.lucene.document.SortedNumericDocValuesField
 import org.rogach.scallop.ScallopConf
 import scala.language.postfixOps
 import fi.seco.lucene.PerFieldFSTOrdTermVectorsCodec
+import org.apache.lucene.document.SortedSetDocValuesField
 
 class OctavoIndexer extends ParallelProcessor {
    
@@ -86,6 +87,13 @@ class OctavoIndexer extends ParallelProcessor {
   normsOmittingNotStoredTextField.setOmitNorms(true)
   
   class TextSDVFieldPair(field: String, docs: Document*)  extends FieldPair(new Field(field, "", normsOmittingNotStoredTextField), new SortedDocValuesField(field, new BytesRef()), docs:_*) {
+    def setValue(v: String) = {
+      indexField.setStringValue(v)
+      storedField.setBytesValue(new BytesRef(v))
+    }
+  }
+  
+  class TextSSDVFieldPair(field: String, docs: Document*)  extends FieldPair(new Field(field, "", normsOmittingNotStoredTextField), new SortedSetDocValuesField(field, new BytesRef()), docs:_*) {
     def setValue(v: String) = {
       indexField.setStringValue(v)
       storedField.setBytesValue(new BytesRef(v))
