@@ -86,6 +86,8 @@ import scala.util.Failure
 import org.rogach.scallop._
 import scala.language.postfixOps
 import java.lang.ThreadLocal
+import fi.seco.lucene.OrdExposingFSTOrdPostingsFormat
+import language.reflectiveCalls
 
 object ECCOClusterIndexer extends OctavoIndexer {
   
@@ -105,11 +107,54 @@ object ECCOClusterIndexer extends OctavoIndexer {
     val endIndexFields = new IntPointNDVFieldPair("endIndex", d)
     val yearFields = new IntPointNDVFieldPair("year", d)
   }
-  finalCodec.termVectorFields = Set("text")
+  
+  val termVectorFields = Seq("text")
   
   val tld = new ThreadLocal[Reuse] {
     override def initialValue() = new Reuse()
   }
+  
+  private def index(file: File): Unit = parse(new InputStreamReader(new GZIPInputStream(new FileInputStream(file))), (p: Parser) => {
+    val path = file.getParentFile.getName
+    var token = p.nextToken
+    while (token != End) {
+      token match {
+        case FieldStart(field) if (field.startsWith("cluster_")) =>
+          val cluster = new Cluster
+          cluster.id = field.substring(8).toInt
+          while (token != CloseObj) {
+            token match {
+              case FieldStart("Avglength") => cluster.avgLength = p.nextToken.asInstanceOf[IntVal].value.toInt
+              case FieldStart("Count") => 
+                cluster.count = p.nextToken.asInstanceOf[IntVal].value.toInt
+              case FieldStart("Hits") => 
+                var cm: Match = null
+                while (token != CloseArr) {
+                  token match {
+                    case OpenObj => cm = new Match()
+                    case FieldStart("end_index") => cm.endIndex = p.nextToken.asInstanceOf[IntVal].value.toInt
+                    case FieldStart("start_index") => cm.startIndex = p.nextToken.asInstanceOf[IntVal].value.toInt
+                    case FieldStart("title") => cm.title = p.nextToken.asInstanceOf[StringVal].value
+                    case FieldStart("author") => cm.author = p.nextToken.asInstanceOf[StringVal].value
+                    case FieldStart("book_id") => cm.documentID = p.nextToken.asInstanceOf[StringVal].value
+                    case FieldStart("year") => cm.year = Try(p.nextToken.asInstanceOf[StringVal].value.toInt).getOrElse(-1)
+                    case FieldStart("text") => cm.text = p.nextToken.asInstanceOf[StringVal].value
+                    case CloseObj => cluster.matches += cm
+                    case _ => 
+                  }
+                  token = p.nextToken
+                }
+              case _ =>
+            }
+            token = p.nextToken
+          }
+          index(cluster)
+        case _ =>
+      }
+      token = p.nextToken
+    }
+    logger.info("File "+file+" processed.")
+  })
   
   private def index(cluster: Cluster): Unit = {
     val d = tld.get
@@ -150,57 +195,15 @@ object ECCOClusterIndexer extends OctavoIndexer {
   }
   
   def main(args: Array[String]): Unit = {
-    val opts = new OctavoOpts(args)
+    val opts = new AOctavoOpts(args) {
+      val postings = opt[String](default = Some("blocktree"))
+      verify()
+    }
     diw = iw(opts.index()+"/dindex", new Sort(new SortField("clusterID",SortField.Type.INT)), opts.indexMemoryMb())
     feedAndProcessFedTasksInParallel(() =>
-      opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".gz")).forEach(file => {
-        Try(parse(new InputStreamReader(new GZIPInputStream(new FileInputStream(file))), (p: Parser) => {
-          val path = file.getParentFile.getName
-          var token = p.nextToken
-          while (token != End) {
-            token match {
-              case FieldStart(field) if (field.startsWith("cluster_")) =>
-                val cluster = new Cluster
-                cluster.id = field.substring(8).toInt
-                while (token != CloseObj) {
-                  token match {
-                    case FieldStart("Avglength") => cluster.avgLength = p.nextToken.asInstanceOf[IntVal].value.toInt
-                    case FieldStart("Count") => 
-                      cluster.count = p.nextToken.asInstanceOf[IntVal].value.toInt
-                    case FieldStart("Hits") => 
-                      var cm: Match = null
-                      while (token != CloseArr) {
-                        token match {
-                          case OpenObj => cm = new Match()
-                          case FieldStart("end_index") => cm.endIndex = p.nextToken.asInstanceOf[IntVal].value.toInt
-                          case FieldStart("start_index") => cm.startIndex = p.nextToken.asInstanceOf[IntVal].value.toInt
-                          case FieldStart("title") => cm.title = p.nextToken.asInstanceOf[StringVal].value
-                          case FieldStart("author") => cm.author = p.nextToken.asInstanceOf[StringVal].value
-                          case FieldStart("book_id") => cm.documentID = p.nextToken.asInstanceOf[StringVal].value
-                          case FieldStart("year") => cm.year = Try(p.nextToken.asInstanceOf[StringVal].value.toInt).getOrElse(-1)
-                          case FieldStart("text") => cm.text = p.nextToken.asInstanceOf[StringVal].value
-                          case CloseObj => cluster.matches += cm
-                          case _ => 
-                        }
-                        token = p.nextToken
-                      }
-                    case _ =>
-                  }
-                  token = p.nextToken
-                }
-                addTask(file.getName+": "+cluster.id,() => index(cluster))
-              case _ =>
-            }
-            token = p.nextToken
-          }
-        })) match {
-          case Success(_) => logger.info("File "+file+" processed.")
-          case Failure(f) => logger.error("An error has occurred in reading file "+file+".",f)
-        }
-      }))
-    close(Seq(diw))
-    mergeIndices(Seq(
-     (opts.index()+"/dindex", new Sort(new SortField("clusterID",SortField.Type.INT)), opts.indexMemoryMb()))
-    )
+      opts.directories().toStream.flatMap(n => getFileTree(new File(n))).filter(_.getName.endsWith(".gz")).foreach(file => addTask(file.getPath, () => index(file)))
+     )
+    close(diw)
+    merge(opts.index()+"/dindex", new Sort(new SortField("clusterID",SortField.Type.INT)), opts.indexMemoryMb(), toCodec(opts.postings(), termVectorFields))
   }
 }

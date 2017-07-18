@@ -29,7 +29,7 @@ import org.json4s.native.JsonParser._
 import org.json4s.JsonDSL._
 import scala.compat.java8.FunctionConverters._
 import scala.compat.java8.StreamConverters._
-
+import language.reflectiveCalls
 import scala.collection.JavaConverters._
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
@@ -90,6 +90,11 @@ import scala.xml.parsing.XhtmlEntities
 import scala.xml.MetaData
 import scala.collection.Searching
 import scala.collection.immutable.Set
+import java.io.PushbackInputStream
+import fi.seco.lucene.OrdExposingFSTOrdPostingsFormat
+import org.apache.lucene.codecs.blocktreeords.BlockTreeOrdsPostingsFormat
+import org.apache.lucene.codecs.perfield.PerFieldPostingsFormat
+import fi.seco.lucene.PerFieldPostingsFormatOrdTermVectorsCodec
 
 object BritishNewspaperIndexer extends OctavoIndexer {
 
@@ -178,8 +183,6 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     }
   }
   
-  finalCodec.termVectorFields = Set("text","containsGraphicOfType")
-
   val tld = new ThreadLocal[Reuse] {
     override def initialValue() = new Reuse()
   }
@@ -281,11 +284,41 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     piw.addDocument(d.pd)
   }
   
+  private def getXMLEventReaderWithCorrectEncoding(file: File): XMLEventReader = {
+    val fis = new PushbackInputStream(new FileInputStream(file),2)
+    var second = 0
+    var first = fis.read()
+    if (first == 0xEF) { // BOM
+      fis.read()
+      fis.read()
+    } else fis.unread(first)
+    var encoding = "ISO-8859-1"
+    do {
+      first = fis.read()
+      second = fis.read()
+      if (first == '<' && second=='!') while (fis.read()!='\n') {}
+      if (first == '<' && (second=='?')) {
+        for (i <- 0 until 28) fis.read()
+        val es = new StringBuilder()
+        var b = fis.read
+        while (b!='"') {
+          es.append(b.toChar)
+          b = fis.read()
+        }
+        encoding = es.toString
+        while (fis.read()!='\n') {}
+      }
+    } while (first == '<' && (second=='?' || second=='!'))
+    fis.unread(second)
+    fis.unread(first)
+    new XMLEventReader(Source.fromInputStream(fis,encoding))
+  }
+  
   private def index(collectionID: String, file: File): Unit = {
     val d = tld.get
     d.clearOptionalIssueFields()
     d.collectionIDFields.setValue(collectionID)
-    implicit val xml = new XMLEventReader(Source.fromFile(file, "ISO-8859-1"))
+    implicit val xml = getXMLEventReaderWithCorrectEncoding(file)
     val state = new State()
     while (xml.hasNext) xml.next match {
       case EvElemStart(_,"issue",attrs,_) => d.issueIDFields.setValue(attrs("ID")(0).text)
@@ -371,23 +404,39 @@ object BritishNewspaperIndexer extends OctavoIndexer {
   var aiw: IndexWriter = null.asInstanceOf[IndexWriter]
   var iiw: IndexWriter = null.asInstanceOf[IndexWriter]
   
+  val postingsFormats = Seq("text","containsGraphicOfType")
+  
   def main(args: Array[String]): Unit = {
-    val opts = new OctavoOpts(args)
-    piw = iw(opts.index()+"/pindex",new Sort(new SortField("issueID", SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 3)
-    aiw = iw(opts.index()+"/aindex",new Sort(new SortField("issueID", SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 3)
-    iiw = iw(opts.index()+"/iindex",new Sort(new SortField("issueID",SortField.Type.STRING)),opts.indexMemoryMb() / 3)
-    feedAndProcessFedTasksInParallel(() =>
-      opts.directories().toStream.flatMap(p => {
-        val parts = p.split(':')
-        getFileTree(new File(parts(0))).map((parts(1),_))
-      }).filter(_._2.getName.endsWith(".xml")).foreach(pair => addTask(pair._2.getPath, () => index(pair._1,pair._2)))
+    val opts = new AOctavoOpts(args) {
+      val ppostings = opt[String](default = Some("blocktree"))
+      val ipostings = opt[String](default = Some("blocktree"))
+      val apostings = opt[String](default = Some("blocktree"))
+      verify()
+    }
+    if (!opts.onlyMerge()) {
+      piw = iw(opts.index()+"/pindex",new Sort(new SortField("issueID", SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 3)
+      aiw = iw(opts.index()+"/aindex",new Sort(new SortField("issueID", SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 3)
+      iiw = iw(opts.index()+"/iindex",new Sort(new SortField("issueID",SortField.Type.STRING)),opts.indexMemoryMb() / 3)
+      feedAndProcessFedTasksInParallel(() =>
+        opts.directories().toStream.flatMap(p => {
+          val parts = p.split(':')
+          getFileTree(new File(parts(0))).map((parts(1),_))
+        }).filter(_._2.getName.endsWith(".xml")).foreach(pair => addTask(pair._2.getPath, () => index(pair._1,pair._2)))
+      )
+    }
+    waitForTasks(
+      runSequenceInOtherThread(
+        () => close(piw), 
+        () => merge(opts.index()+"/pindex", new Sort(new SortField("issueID",SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 3, toCodec(opts.ppostings(), postingsFormats))
+      ),
+      runSequenceInOtherThread(
+        () => close(aiw), 
+        () => merge(opts.index()+"/aindex", new Sort(new SortField("issueID",SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 3, toCodec(opts.apostings(), postingsFormats))
+      ),
+      runSequenceInOtherThread(
+        () => close(iiw), 
+        () => merge(opts.index()+"/iindex", new Sort(new SortField("issueID",SortField.Type.STRING)),opts.indexMemoryMb() / 3, toCodec(opts.ipostings(), postingsFormats))
+      )
     )
-    close(Seq(piw,aiw,iiw))
-    mergeIndices(Seq(
-     (opts.index()+"/pindex", new Sort(new SortField("issueID",SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 3),
-     (opts.index()+"/aindex", new Sort(new SortField("issueID",SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 3),
-     (opts.index()+"/iindex", new Sort(new SortField("issueID",SortField.Type.STRING)),opts.indexMemoryMb() / 3)
-     
-    ))  
   }
 }

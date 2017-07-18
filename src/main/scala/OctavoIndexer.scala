@@ -47,6 +47,16 @@ import org.rogach.scallop.ScallopConf
 import scala.language.postfixOps
 import fi.seco.lucene.PerFieldFSTOrdTermVectorsCodec
 import org.apache.lucene.document.SortedSetDocValuesField
+import fi.seco.lucene.PerFieldPostingsFormatOrdTermVectorsCodec
+import org.apache.lucene.codecs.Codec
+import fi.seco.lucene.OrdExposingFSTOrdPostingsFormat
+import org.apache.lucene.codecs.blocktreeords.BlockTreeOrdsPostingsFormat
+import org.apache.lucene.codecs.PostingsFormat
+import org.apache.lucene.document.DoublePoint
+import org.apache.lucene.document.DoubleDocValuesField
+import org.apache.lucene.document.FloatDocValuesField
+import org.apache.lucene.document.FloatPoint
+import scala.util.Try
 
 class OctavoIndexer extends ParallelProcessor {
    
@@ -99,7 +109,14 @@ class OctavoIndexer extends ParallelProcessor {
       storedField.setBytesValue(new BytesRef(v))
     }
   }
-  
+
+  class StringSSDVFieldPair(field: String, docs: Document*)  extends FieldPair(new Field(field, "", StringField.TYPE_NOT_STORED), new SortedSetDocValuesField(field, new BytesRef()), docs:_*) {
+    def setValue(v: String) = {
+      indexField.setStringValue(v)
+      storedField.setBytesValue(new BytesRef(v))
+    }
+  }
+
   class StringSDVFieldPair(field: String, docs: Document*) extends FieldPair(new Field(field, "", StringField.TYPE_NOT_STORED), new SortedDocValuesField(field, new BytesRef()), docs:_*) {
     def setValue(v: String) = {
       indexField.setStringValue(v)
@@ -118,6 +135,21 @@ class OctavoIndexer extends ParallelProcessor {
     def setValue(v: Long) = {
       indexField.setStringValue(""+v)
       storedField.setLongValue(v)
+    }
+  }
+
+  class FloatPointFDVFieldPair(field: String, docs: Document*) extends FieldPair(new FloatPoint(field, 0.0f), new FloatDocValuesField(field, 0.0f), docs:_*) {
+    def setValue(v: Float) = {
+      indexField.setFloatValue(v)
+      storedField.setFloatValue(v)
+    }
+  }
+
+  
+  class DoublePointDDVFieldPair(field: String, docs: Document*) extends FieldPair(new DoublePoint(field, 0.0), new DoubleDocValuesField(field, 0.0), docs:_*) {
+    def setValue(v: Double) = {
+      indexField.setDoubleValue(v)
+      storedField.setDoubleValue(v)
     }
   }
   
@@ -191,57 +223,60 @@ class OctavoIndexer extends ParallelProcessor {
   val notStoredStringFieldWithTermVectors = new FieldType(StringField.TYPE_NOT_STORED)
   notStoredStringFieldWithTermVectors.setStoreTermVectors(true)
   
-  val finalCodec = new PerFieldFSTOrdTermVectorsCodec()
-  
-  def merge(path: String, sort: Sort, bufferSizeInMB: Double): Unit = {
+  def merge(path: String, sort: Sort, bufferSizeInMB: Double, finalCodec: Codec): Unit = {
     logger.info("Merging index at "+path)
-    var size = getFileTreeSize(path) 
-    // First, go to max two segments with general codec
-/*    var miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), iwc(sort, bufferSizeInMB))
-    miw.forceMerge(2)
-    miw.commit()
-    miw.close()
-    miw.getDirectory.close */
-    // Go to max one segment with general codec
+    var size = getFileTreeSize(path)
     var fiwc = iwc(sort, bufferSizeInMB)
     var miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), fiwc)
-    miw.forceMerge(1)
+    if (finalCodec != null) {
+      logger.info("Merging index at "+path+" to max two segments")
+      miw.forceMerge(2)
+    } else {
+      logger.info("Merging index at "+path+" to max one segment")
+      miw.forceMerge(1)
+    }
     miw.commit()
     miw.close()
     miw.getDirectory.close()
-    // Make sure the one segment we have is encoded with the custom codec (if we accidentally got to one segment before merging)
-    fiwc = iwc(sort, bufferSizeInMB)
-    fiwc.setCodec(finalCodec)
-    fiwc.setMergePolicy(new UpgradeIndexMergePolicy(fiwc.getMergePolicy) {
-      override protected def shouldUpgradeSegment(si: SegmentCommitInfo): Boolean = si.info.getCodec.getName != finalCodec.getName
-    })
-    miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), fiwc)
-    miw.forceMerge(1)
-    miw.commit()
-    miw.close()
-    miw.getDirectory.close()
+    if (finalCodec != null) {
+      logger.info("Merging index at "+path+" to max one segment using final codec")
+      fiwc = iwc(sort, bufferSizeInMB)
+      fiwc.setCodec(finalCodec)
+      fiwc.setMergePolicy(new UpgradeIndexMergePolicy(fiwc.getMergePolicy) {
+        override protected def shouldUpgradeSegment(si: SegmentCommitInfo): Boolean = si.info.getCodec.getName != finalCodec.getName
+      })
+      miw = new IndexWriter(new MMapDirectory(FileSystems.getDefault().getPath(path)), fiwc)
+      miw.forceMerge(1)
+      miw.commit()
+      miw.close()
+      miw.getDirectory.close()
+    }
     logger.info(f"Merged index ${path}%s. Went from ${size}%,d bytes to ${getFileTreeSize(path)}%,d bytes.")
   }
   
-  def mergeIndices(iws: Traversable[(String, Sort, Double)], single: Boolean = false): Unit = {
-    iws.map(p => { 
-      val f = Future { merge(p._1, p._2, p._3) }(ExecutionContext.Implicits.global)
-      if (single) Await.result(f, Duration.Inf)
-      f
-     }).foreach(Await.result(_, Duration.Inf))
-  }
+  def toCodec(postingsFormatS: String, perFieldPostings: Seq[String]): Codec = {
+    val finalCodec = new PerFieldPostingsFormatOrdTermVectorsCodec()
+    val postingsFormat = postingsFormatS match {
+      case "fst" => new OrdExposingFSTOrdPostingsFormat()
+      case "blocktree" => new BlockTreeOrdsPostingsFormat()
+      case any => throw new IllegalArgumentException("Unknown postings format "+any) 
+    }
+    finalCodec.perFieldPostingsFormat = perFieldPostings.map((_, postingsFormat)).toMap
+    finalCodec
+  }  
   
-  def close(iws: Traversable[IndexWriter]) {
-    iws.map(iw => Future {
-      iw.close()
-      iw.getDirectory.close()
-    }(ExecutionContext.Implicits.global)).foreach(Await.result(_, Duration.Inf))
+  def close(iw: IndexWriter) = if (iw != null) {
+    logger.info("Closing index "+iw.getDirectory)
+    iw.close()
+    iw.getDirectory.close()
+    logger.info("Closed index "+iw.getDirectory)
   }
   
   abstract class AOctavoOpts(arguments: Seq[String]) extends ScallopConf(arguments) {
     val index = opt[String](required = true)
-    val indexMemoryMb = opt[Long](default = Some(Runtime.getRuntime.maxMemory()/1024/1024/2), validate = (0<))
-    val directories = trailArg[List[String]]()
+    val indexMemoryMb = opt[Long](default = Some(Runtime.getRuntime.maxMemory()/1024/1024/2), validate = _>0)
+    val directories = trailArg[List[String]](required = false)
+    val onlyMerge = opt[Boolean](default = Some(false))
   }
   
   class OctavoOpts(arguments: Seq[String]) extends AOctavoOpts(arguments) {

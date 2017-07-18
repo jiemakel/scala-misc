@@ -15,13 +15,14 @@ import scala.concurrent.duration.Duration
 import java.util.concurrent.ForkJoinPool
 import java.util.concurrent.ForkJoinPool.ForkJoinWorkerThreadFactory
 import java.util.concurrent.ForkJoinWorkerThread
+import scala.util.Try
 
 
 class ParallelProcessor extends LazyLogging {
   
   private val numWorkers = sys.runtime.availableProcessors
   val availableMemory = Runtime.getRuntime().maxMemory() - (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory())
-  private val queueCapacity = 10000
+  private val queueCapacity = 1000
   private val fjp = new ForkJoinPool(numWorkers, new ForkJoinWorkerThreadFactory() {
      override def newThread(pool: ForkJoinPool): ForkJoinWorkerThread = {
        val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
@@ -79,7 +80,7 @@ class ParallelProcessor extends LazyLogging {
     }
     sf.onComplete { 
       case Failure(t) => 
-        logger.error("Feeding of at least one source resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t))
+        logger.error("Feeding ended in an error:" + t.getMessage+": " + getStackTraceAsString(t))
         processingQueue.put(poison)
       case Success(_) =>
     }
@@ -99,5 +100,14 @@ class ParallelProcessor extends LazyLogging {
     }
     indexingTaskExecutionContext.shutdown()
   }
+  
+  def runSequenceInOtherThread(tasks: () => Unit*): Future[Unit] = Future {
+    for (task <- tasks) task()
+  }(ExecutionContext.Implicits.global)
+  
+  def waitForTasks(tasks: Future[Unit]*) {
+    for (task <- tasks) Try(Await.result(task, Duration.Inf)).toEither.left.foreach(logger.error("Task encountered exception",_))
+  }
+
 
 }

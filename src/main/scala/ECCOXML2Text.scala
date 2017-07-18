@@ -104,8 +104,8 @@ object ECCOXML2Text extends LazyLogging {
           val (lastSumWidth, lastSumChars) = lastLine.foldLeft((0,0))((t,v) => (t._1 + (v.endX - v.startX), t._2 + v.word.length))
           val (currentSumWidth, currentSumChars) = currentLine.foldLeft((0,0))((t,v) => (t._1 + (v.endX - v.startX), t._2 + v.word.length))
           
-          val lastAvgCharWidth = lastSumWidth / lastSumChars
-          val currentAvgCharWidth = currentSumWidth / currentSumChars
+          val lastAvgCharWidth = lastSumWidth / Math.max(lastSumChars, 1)
+          val currentAvgCharWidth = currentSumWidth / Math.max(currentSumChars, 1)
 
           val lastStartX = lastLine(0).startX
           val currentStartX = currentLine(0).startX
@@ -246,7 +246,7 @@ object ECCOXML2Text extends LazyLogging {
             case None => 
           }
           case EvElemEnd(_,"p") =>
-            state.testParagraphBreakAtEndOfLine(true) match {
+            state.testParagraphBreakAtEndOfLine(guessParagraphs) match {
               case Some(paragraph) => 
                 content.append(paragraph)
                 content.append("\n\n")

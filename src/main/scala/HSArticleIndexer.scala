@@ -52,9 +52,6 @@ import com.bizo.mighty.csv.CSVReader
 
 object HSArticleIndexer extends OctavoIndexer {
   
-/*  contentFieldType.setStoreTermVectorPositions(true)
-  contentFieldType.setStoreTermVectorPayloads(true) */
-  
   indexingCodec.termVectorFilter = new BiPredicate[FieldInfo,BytesRef]() {
     override def test(f: FieldInfo, b: BytesRef) = b.bytes(b.offset + 1) == 'L'
   }
@@ -62,7 +59,6 @@ object HSArticleIndexer extends OctavoIndexer {
   /*finalCodec.termVectorFilter = new Predicate[BytesRef]() {
     override def test(b: BytesRef) = b.bytes(b.offset + 1) == 'L'
   }*/
-  contentFieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS)
   // articleId, nodeId, nodeTitle, startDate, modifiedDate, title, byLine, ingress, body
   case class Article(id: Long, publisher: String, timePublished: String, headline: String, writer: String, lead: String, analyzedText: List[JValue])
   
@@ -108,6 +104,22 @@ object HSArticleIndexer extends OctavoIndexer {
   }
   
   implicit val formats = DefaultFormats
+  
+  private def index(file: File): Unit = {
+    val wr = CSVReader(file.getPath)
+    logger.info("Processing "+file)
+    // articleId, nodeId, nodeTitle, startDate, modifiedDate, title, byLine, ingress, body
+    for (r <- wr) {
+      val id = Try(r(0).toLong).getOrElse(-1l)
+      val analysisFile1 = new File(analyses+"/"+Math.abs(r(0).hashCode()%10)+"/"+Math.abs(r(0).hashCode()%100/10)+"/"+r(0)+".analysis.json")
+      val analysisFile2 = new File(analyses+"/"+r(0)+".analysis.json")
+      val analysisFile = if (analysisFile1.exists) analysisFile1 else analysisFile2
+      if (id != -1l && analysisFile.exists) {
+        val analyzedText = parse(new InputStreamReader(new FileInputStream(analysisFile))).asInstanceOf[JArray].children
+        index(new Article(id, r(2), r(3).replaceAllLiterally(" ","T"), r(5), r(6), r(7), analyzedText))
+      }    
+    }
+  }
  
   private def index(article: Article): Unit = {
     val d = tld.get
@@ -177,40 +189,39 @@ object HSArticleIndexer extends OctavoIndexer {
   
   class HSOpts(arguments: Seq[String]) extends AOctavoOpts(arguments) {
     val analyses = opt[String](required = true)
+    val apostings = opt[String](default = Some("fst"))
+    val ppostings = opt[String](default = Some("fst"))
+    val spostings = opt[String](default = Some("fst"))
     verify()
   }
   
+  var analyses: String = null
+  
   def main(args: Array[String]): Unit = {
     val opts = new HSOpts(args)
-    aiw = iw(opts.index()+"/aindex",new Sort(new SortField("articleID",SortField.Type.LONG)),opts.indexMemoryMb() / 3)
-    piw = iw(opts.index()+"/pindex",new Sort(new SortField("articleID",SortField.Type.LONG), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 3)
-    siw = iw(opts.index()+"/sindex",new Sort(new SortField("articleID",SortField.Type.LONG), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG)),opts.indexMemoryMb() / 3)
-    val analyses = opts.analyses()
-    feedAndProcessFedTasksInParallel(() =>
-      opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.forEach(file => {
-        val wr = CSVReader(file.getPath)
-        logger.info("Processing "+file)
-        // articleId, nodeId, nodeTitle, startDate, modifiedDate, title, byLine, ingress, body
-        for (r <- wr) {
-          val id = Try(r(0).toLong).getOrElse(-1l)
-          val analysisFile1 = new File(analyses+"/"+Math.abs(r(0).hashCode()%10)+"/"+Math.abs(r(0).hashCode()%100/10)+"/"+r(0)+".analysis.json")
-          val analysisFile2 = new File(analyses+"/"+r(0)+".analysis.json")
-          val analysisFile = if (analysisFile1.exists) analysisFile1 else analysisFile2
-          if (id != -1l && analysisFile.exists) Try {
-            val analyzedText = parse(new InputStreamReader(new FileInputStream(analysisFile))).asInstanceOf[JArray].children
-            addTask(file+":"+r(0), () => index(new Article(id, r(2), r(3).replaceAllLiterally(" ","T"), r(5), r(6), r(7), analyzedText)))
-          } match {
-            case Success(_) => 
-              logger.info("File "+analysisFile+" processed.")
-            case Failure(e) => logger.error("Error processing file "+analysisFile, e)
-          }
-        }
-      })
+    if (!opts.onlyMerge()) {
+      analyses = opts.analyses()
+      aiw = iw(opts.index()+"/aindex",new Sort(new SortField("articleID",SortField.Type.LONG)),opts.indexMemoryMb() / 3)
+      piw = iw(opts.index()+"/pindex",new Sort(new SortField("articleID",SortField.Type.LONG), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 3)
+      siw = iw(opts.index()+"/sindex",new Sort(new SortField("articleID",SortField.Type.LONG), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG)),opts.indexMemoryMb() / 3)
+      feedAndProcessFedTasksInParallel(() =>
+        opts.directories().toStream.flatMap(n => getFileTree(new File(n))).foreach(file => addTask(file.getName, () => index(file)))
+      )
+    }
+    val termVectorFields = Seq("text")
+    waitForTasks(
+      runSequenceInOtherThread(
+        () => close(aiw), 
+        () => merge(opts.index()+"/aindex", new Sort(new SortField("articleID",SortField.Type.LONG)),opts.indexMemoryMb() / 3, toCodec(opts.apostings(), termVectorFields))
+      ),
+      runSequenceInOtherThread(
+        () => close(piw), 
+        () => merge(opts.index()+"/pindex", new Sort(new SortField("articleID",SortField.Type.LONG), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 3, toCodec(opts.ppostings(), termVectorFields))
+      ),
+      runSequenceInOtherThread(
+        () => close(siw), 
+        () => merge(opts.index()+"/sindex", new Sort(new SortField("articleID",SortField.Type.LONG), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG)),opts.indexMemoryMb() / 3, toCodec(opts.spostings(), termVectorFields))
+      )
     )
-    close(Seq(aiw,piw,siw))
-    mergeIndices(Seq(
-     (opts.index()+"/aindex", new Sort(new SortField("articleID",SortField.Type.LONG)),opts.indexMemoryMb() / 3),
-     (opts.index()+"/pindex", new Sort(new SortField("articleID",SortField.Type.LONG), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 3),
-     (opts.index()+"/sindex", new Sort(new SortField("articleID",SortField.Type.LONG), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG)),opts.indexMemoryMb() / 3)))
   }
 }

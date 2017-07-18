@@ -80,6 +80,9 @@ import org.apache.lucene.document.SortedNumericDocValuesField
 import scala.xml.parsing.XhtmlEntities
 import scala.xml.MetaData
 import scala.collection.Searching
+import fi.seco.lucene.OrdExposingFSTOrdPostingsFormat
+
+import scala.language.reflectiveCalls
 
 object ECCOIndexer extends OctavoIndexer {
   
@@ -162,7 +165,7 @@ object ECCOIndexer extends OctavoIndexer {
     val headingLevelFields = new IntPointNDVFieldPair("headingLevel", sd)
   }
   
-  finalCodec.termVectorFields = Set("content","containsGraphicOfType")
+  val termVectorFields = Seq("content", "containsGraphicOfType")
   
   class SectionInfo(val sectionID: Long, val headingLevel: Int, val heading: String) {
     val paragraphSectionIDFields = new StringSNDVFieldPair("sectionID")
@@ -365,46 +368,64 @@ object ECCOIndexer extends OctavoIndexer {
   var diw, dpiw, siw, piw = null.asInstanceOf[IndexWriter]
   
   def main(args: Array[String]): Unit = {
-    val opts = new OctavoOpts(args)
-    // document level
-    diw = iw(opts.index()+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING)), opts.indexMemoryMb()/4)
-    // document part level
-    dpiw = iw(opts.index()+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG)), opts.indexMemoryMb()/4)
-    // section level
-    siw = iw(opts.index()+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG)), opts.indexMemoryMb()/4)
-    // paragraph level
-    piw = iw(opts.index()+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)), opts.indexMemoryMb()/4)
-    val writers = Seq(diw, dpiw, siw, piw)
-    /*
-     *
-   6919 article
-  51226 backmatter
-  34276 book
-1377880 chapter
- 147743 frontmatter
-  13386 index
-  25772 other
-  38055 part
- 290959 section
-   3957 titlePage
-  32836 TOC
-   1481 volume
-     */
-    feedAndProcessFedTasksInParallel(() => {
-      opts.directories().toStream.flatMap(p => {
-        val parts = p.split(':')
-        getFileTree(new File(parts(0))).map((parts(1),_))
-      }).filter(_._2.getName.endsWith("_metadata.xml")).foreach(pair => {
-        val path = pair._2.getPath.replace("_metadata.xml","*")
-        addTask(path, () => index(pair._1, pair._2))
+    val opts = new AOctavoOpts(args) {
+      val dpostings = opt[String](default = Some("blocktree"))
+      val dppostings = opt[String](default = Some("blocktree"))
+      val spostings = opt[String](default = Some("blocktree"))
+      val ppostings = opt[String](default = Some("fst"))
+      verify()
+    }
+    if (!opts.onlyMerge()) {
+      // document level
+      diw = iw(opts.index()+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING)), opts.indexMemoryMb()/4)
+      // document part level
+      dpiw = iw(opts.index()+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG)), opts.indexMemoryMb()/4)
+      // section level
+      siw = iw(opts.index()+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG)), opts.indexMemoryMb()/4)
+      // paragraph level
+      piw = iw(opts.index()+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)), opts.indexMemoryMb()/4)
+      /*
+       *
+     6919 article
+    51226 backmatter
+    34276 book
+  1377880 chapter
+   147743 frontmatter
+    13386 index
+    25772 other
+    38055 part
+   290959 section
+     3957 titlePage
+    32836 TOC
+     1481 volume
+       */
+      feedAndProcessFedTasksInParallel(() => {
+        opts.directories().toStream.flatMap(p => {
+          val parts = p.split(':')
+          getFileTree(new File(parts(0))).map((parts(1),_))
+        }).filter(_._2.getName.endsWith("_metadata.xml")).foreach(pair => {
+          val path = pair._2.getPath.replace("_metadata.xml","*")
+          addTask(path, () => index(pair._1, pair._2))
+        })
       })
-    })
-    close(writers)
-    mergeIndices(Seq(
-     (opts.index()+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING)), opts.indexMemoryMb()/4),
-     (opts.index()+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG)), opts.indexMemoryMb()/4),
-     (opts.index()+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG)), opts.indexMemoryMb()/4),
-     (opts.index()+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)), opts.indexMemoryMb()/4)
-    ))
+    }
+    waitForTasks(
+      runSequenceInOtherThread(
+        () => close(diw), 
+        () => merge(opts.index()+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING)), opts.indexMemoryMb()/4, toCodec(opts.dpostings(), termVectorFields))
+      ),
+      runSequenceInOtherThread(
+        () => close(dpiw), 
+        () => merge(opts.index()+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG)), opts.indexMemoryMb()/4, toCodec(opts.dppostings(), termVectorFields))
+      ),
+      runSequenceInOtherThread(
+        () => close(siw), 
+        () => merge(opts.index()+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG)), opts.indexMemoryMb()/4, toCodec(opts.spostings(), termVectorFields))
+      ),
+      runSequenceInOtherThread(
+        () => close(piw), 
+        () => merge(opts.index()+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)), opts.indexMemoryMb()/4, toCodec(opts.ppostings(), termVectorFields))
+      )
+    )
   }
 }

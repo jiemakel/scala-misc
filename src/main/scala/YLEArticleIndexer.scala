@@ -17,6 +17,7 @@ import org.apache.lucene.search.SortField
 
 import org.rogach.scallop._
 import scala.language.postfixOps
+import scala.language.reflectiveCalls
 import org.apache.lucene.document.StringField
 import org.apache.lucene.document.Field
 import org.apache.lucene.document.Document
@@ -106,6 +107,26 @@ object YLEArticleIndexer extends OctavoIndexer {
   }
   
   implicit val formats = DefaultFormats
+  
+  private def index(file: File): Unit = {
+    parse(new InputStreamReader(new FileInputStream(file)), (p: Parser) => {
+      val obj = ObjParser.parseObject(p)
+      val analyzedText = (obj \\ "analyzedText")
+      val paragraphs = if (analyzedText.isInstanceOf[JObject]) analyzedText.asInstanceOf[JObject].children else if (analyzedText.isInstanceOf[JArray]) List(analyzedText.asInstanceOf[JArray]) else List.empty
+      val article = new Article(
+          (obj \ "id").asInstanceOf[JString].values,
+          (obj \ "url" \ "full").asInstanceOf[JString].values,
+          (obj \ "publisher" \ "name").asInstanceOf[JString].values,
+          (obj \ "datePublished").asInstanceOf[JString].values,
+          if ((obj \ "coverage").isInstanceOf[JString]) (obj \ "coverage").asInstanceOf[JString].values else "",
+          if ((obj \ "headline" \ "full").isInstanceOf[JString]) (obj \ "headline" \ "full").asInstanceOf[JString].values else "",
+          if ((obj \ "lead").isInstanceOf[JString]) (obj \ "lead").asInstanceOf[JString].values else "",
+          paragraphs
+        )
+      index(article)
+      logger.info("File "+file+" processed.")
+    })
+  }
  
   private def index(article: Article): Unit = {
     val d = tld.get
@@ -174,36 +195,34 @@ object YLEArticleIndexer extends OctavoIndexer {
   var piw: IndexWriter = null.asInstanceOf[IndexWriter]
   
   def main(args: Array[String]): Unit = {
-    val opts = new OctavoOpts(args)
-    aiw = iw(opts.index()+"/aindex",new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 3)
-    piw = iw(opts.index()+"/pindex",new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 3)
-    siw = iw(opts.index()+"/sindex",new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG)),opts.indexMemoryMb() / 3)
-    feedAndProcessFedTasksInParallel(() =>
-      opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".json")).forEach(file => {
-        Try(parse(new InputStreamReader(new FileInputStream(file)), (p: Parser) => {
-          val obj = ObjParser.parseObject(p)
-          val analyzedText = (obj \\ "analyzedText")
-          val paragraphs = if (analyzedText.isInstanceOf[JObject]) analyzedText.asInstanceOf[JObject].children else if (analyzedText.isInstanceOf[JArray]) List(analyzedText.asInstanceOf[JArray]) else List.empty
-          val article = new Article(
-              (obj \ "id").asInstanceOf[JString].values,
-              (obj \ "url" \ "full").asInstanceOf[JString].values,
-              (obj \ "publisher" \ "name").asInstanceOf[JString].values,
-              (obj \ "datePublished").asInstanceOf[JString].values,
-              if ((obj \ "coverage").isInstanceOf[JString]) (obj \ "coverage").asInstanceOf[JString].values else "",
-              if ((obj \ "headline" \ "full").isInstanceOf[JString]) (obj \ "headline" \ "full").asInstanceOf[JString].values else "",
-              if ((obj \ "lead").isInstanceOf[JString]) (obj \ "lead").asInstanceOf[JString].values else "",
-              paragraphs
-            )
-            addTask(file.getName,() => index(article))
-      })) match {
-            case Success(_) => 
-              logger.info("File "+file+" processed.")
-            case Failure(e) => logger.error("Error processing file "+file, e)
-          }}))
-    close(Seq(aiw,piw,siw))
-    mergeIndices(Seq(
-     (opts.index()+"/aindex", new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 3),
-     (opts.index()+"/pindex", new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 3),
-     (opts.index()+"/sindex", new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG)),opts.indexMemoryMb() / 3)))
+    val opts = new AOctavoOpts(args) {
+      val apostings = opt[String](default = Some("fst"))
+      val ppostings = opt[String](default = Some("fst"))
+      val spostings = opt[String](default = Some("fst"))
+      verify()
+    }
+    if (!opts.onlyMerge()) {
+      aiw = iw(opts.index()+"/aindex",new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 3)
+      piw = iw(opts.index()+"/pindex",new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 3)
+      siw = iw(opts.index()+"/sindex",new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG)),opts.indexMemoryMb() / 3)
+      feedAndProcessFedTasksInParallel(() =>
+        opts.directories().toStream.flatMap(n => getFileTree(new File(n))).filter(_.getName.endsWith(".json")).foreach(file => addTask(file.getName, () => index(file)))
+      )
+    }
+    val termVectorFields = Seq("text")
+    waitForTasks(
+      runSequenceInOtherThread(
+        () => close(aiw), 
+        () => merge(opts.index()+"/aindex", new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 3, toCodec(opts.apostings(), termVectorFields))
+      ),
+      runSequenceInOtherThread(
+        () => close(piw), 
+        () => merge(opts.index()+"/pindex", new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 3, toCodec(opts.ppostings(), termVectorFields))
+      ),
+      runSequenceInOtherThread(
+        () => close(siw), 
+        () => merge(opts.index()+"/sindex", new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG)),opts.indexMemoryMb() / 3, toCodec(opts.spostings(), termVectorFields))
+      )
+    )
   }
 }
