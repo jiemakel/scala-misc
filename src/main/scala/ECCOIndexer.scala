@@ -266,7 +266,7 @@ object ECCOIndexer extends OctavoIndexer {
     }
     r.documentLengthFields.setValue(totalLength)
     r.totalParagraphsFields.setValue(totalParagraphs)
-    for (file <- filesToProcess.sortBy(x => x.getName.substring(x.getName.indexOf('_') + 1, x.getName.indexOf('_', x.getName.indexOf('_') + 1).toInt))) {
+    for (file <- filesToProcess.sortBy(x => x.getName.substring(x.getName.indexOf('_') + 1, x.getName.indexOf('_', x.getName.indexOf('_') + 1)).toInt)) {
       val dpcontents = new StringBuilder
       r.clearOptionalDocumentPartFields()
       r.documentPartIdFields.setValue(documentparts.incrementAndGet)
