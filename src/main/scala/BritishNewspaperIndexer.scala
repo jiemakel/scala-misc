@@ -414,9 +414,9 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       verify()
     }
     if (!opts.onlyMerge()) {
-      piw = iw(opts.index()+"/pindex",new Sort(new SortField("issueID", SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 3)
-      aiw = iw(opts.index()+"/aindex",new Sort(new SortField("issueID", SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 3)
-      iiw = iw(opts.index()+"/iindex",new Sort(new SortField("issueID",SortField.Type.STRING)),opts.indexMemoryMb() / 3)
+      piw = iw(opts.index()+"/pindex",opts.indexMemoryMb() / 3)
+      aiw = iw(opts.index()+"/aindex",opts.indexMemoryMb() / 3)
+      iiw = iw(opts.index()+"/iindex",opts.indexMemoryMb() / 3)
       feedAndProcessFedTasksInParallel(() =>
         opts.directories().toStream.flatMap(p => {
           val parts = p.split(':')

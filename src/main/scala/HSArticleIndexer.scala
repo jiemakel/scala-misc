@@ -116,7 +116,7 @@ object HSArticleIndexer extends OctavoIndexer {
       val analysisFile = if (analysisFile1.exists) analysisFile1 else analysisFile2
       if (id != -1l && analysisFile.exists) {
         val analyzedText = parse(new InputStreamReader(new FileInputStream(analysisFile))).asInstanceOf[JArray].children
-        index(new Article(id, r(2), r(3).replaceAllLiterally(" ","T"), r(5), r(6), r(7), analyzedText))
+        addTask(""+id, () => index(new Article(id, r(2), r(3).replaceAllLiterally(" ","T"), r(5), r(6), r(7), analyzedText)))
       }    
     }
   }
@@ -201,11 +201,11 @@ object HSArticleIndexer extends OctavoIndexer {
     val opts = new HSOpts(args)
     if (!opts.onlyMerge()) {
       analyses = opts.analyses()
-      aiw = iw(opts.index()+"/aindex",new Sort(new SortField("articleID",SortField.Type.LONG)),opts.indexMemoryMb() / 3)
-      piw = iw(opts.index()+"/pindex",new Sort(new SortField("articleID",SortField.Type.LONG), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 3)
-      siw = iw(opts.index()+"/sindex",new Sort(new SortField("articleID",SortField.Type.LONG), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG)),opts.indexMemoryMb() / 3)
+      aiw = iw(opts.index()+"/aindex", opts.indexMemoryMb() / 3)
+      piw = iw(opts.index()+"/pindex", opts.indexMemoryMb() / 3)
+      siw = iw(opts.index()+"/sindex", opts.indexMemoryMb() / 3)
       feedAndProcessFedTasksInParallel(() =>
-        opts.directories().toStream.flatMap(n => getFileTree(new File(n))).foreach(file => addTask(file.getName, () => index(file)))
+        opts.directories().toStream.flatMap(n => getFileTree(new File(n))).foreach(file => index(file))
       )
     }
     val termVectorFields = Seq("text")

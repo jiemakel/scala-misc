@@ -121,10 +121,10 @@ object ECCOMetadataIndexer extends OctavoIndexer {
       case any => any
     }))).toMap
     logger.info("Metadata loaded for "+metadata.size+" ids")
-    mdiw = iw(opts.index()+"/mdindex",null, opts.indexMemoryMb()/4)
-    mdpiw = iw(opts.index()+"/mdpindex",null, opts.indexMemoryMb()/4)
-    msiw = iw(opts.index()+"/msindex",null, opts.indexMemoryMb()/4)
-    mpiw = iw(opts.index()+"/mpindex",null, opts.indexMemoryMb()/4)
+    mdiw = iw(opts.index()+"/mdindex", opts.indexMemoryMb()/4)
+    mdpiw = iw(opts.index()+"/mdpindex", opts.indexMemoryMb()/4)
+    msiw = iw(opts.index()+"/msindex", opts.indexMemoryMb()/4)
+    mpiw = iw(opts.index()+"/mpindex", opts.indexMemoryMb()/4)
     val futures = new ArrayBuffer[Future[Unit]]
     for (path <- opts.directories()) {
       futures += process(path+"/dindex", metadata, mdiw)

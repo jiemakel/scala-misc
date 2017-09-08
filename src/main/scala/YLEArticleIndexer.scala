@@ -202,9 +202,9 @@ object YLEArticleIndexer extends OctavoIndexer {
       verify()
     }
     if (!opts.onlyMerge()) {
-      aiw = iw(opts.index()+"/aindex",new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 3)
-      piw = iw(opts.index()+"/pindex",new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 3)
-      siw = iw(opts.index()+"/sindex",new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG)),opts.indexMemoryMb() / 3)
+      aiw = iw(opts.index()+"/aindex",opts.indexMemoryMb() / 3)
+      piw = iw(opts.index()+"/pindex",opts.indexMemoryMb() / 3)
+      siw = iw(opts.index()+"/sindex",opts.indexMemoryMb() / 3)
       feedAndProcessFedTasksInParallel(() =>
         opts.directories().toStream.flatMap(n => getFileTree(new File(n))).filter(_.getName.endsWith(".json")).foreach(file => addTask(file.getName, () => index(file)))
       )

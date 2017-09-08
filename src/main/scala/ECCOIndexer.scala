@@ -377,13 +377,13 @@ object ECCOIndexer extends OctavoIndexer {
     }
     if (!opts.onlyMerge()) {
       // document level
-      diw = iw(opts.index()+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING)), opts.indexMemoryMb()/4)
+      diw = iw(opts.index()+"/dindex", opts.indexMemoryMb()/4)
       // document part level
-      dpiw = iw(opts.index()+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG)), opts.indexMemoryMb()/4)
+      dpiw = iw(opts.index()+"/dpindex", opts.indexMemoryMb()/4)
       // section level
-      siw = iw(opts.index()+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG)), opts.indexMemoryMb()/4)
+      siw = iw(opts.index()+"/sindex", opts.indexMemoryMb()/4)
       // paragraph level
-      piw = iw(opts.index()+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)), opts.indexMemoryMb()/4)
+      piw = iw(opts.index()+"/pindex", opts.indexMemoryMb()/4)
       /*
        *
      6919 article

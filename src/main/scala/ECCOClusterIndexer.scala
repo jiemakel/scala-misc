@@ -199,7 +199,7 @@ object ECCOClusterIndexer extends OctavoIndexer {
       val postings = opt[String](default = Some("blocktree"))
       verify()
     }
-    diw = iw(opts.index()+"/dindex", new Sort(new SortField("clusterID",SortField.Type.INT)), opts.indexMemoryMb())
+    diw = iw(opts.index()+"/dindex", opts.indexMemoryMb())
     feedAndProcessFedTasksInParallel(() =>
       opts.directories().toStream.flatMap(n => getFileTree(new File(n))).filter(_.getName.endsWith(".gz")).foreach(file => addTask(file.getPath, () => index(file)))
      )

@@ -204,11 +204,11 @@ class OctavoIndexer extends ParallelProcessor {
     return iwc
   }
   
-  def iw(path: String, sort: Sort, bufferSizeInMB: Double): IndexWriter = {
+  def iw(path: String, bufferSizeInMB: Double): IndexWriter = {
     logger.info("Creating IndexWriter "+path+" with a memory buffer of "+bufferSizeInMB+"MB")
     val d = new MMapDirectory(FileSystems.getDefault().getPath(path))
     d.listAll().map(d.deleteFile(_))
-    new IndexWriter(d, iwc(sort, bufferSizeInMB))
+    new IndexWriter(d, iwc(null, bufferSizeInMB))
   }
   
 
