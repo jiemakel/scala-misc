@@ -7,7 +7,6 @@ import java.io.File
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
 import org.apache.lucene.analysis.standard.StandardAnalyzer
 import org.apache.lucene.analysis.CharArraySet
-import fi.seco.lucene.FSTOrdTermVectorsCodec
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.index.IndexWriterConfig
 import org.apache.lucene.store.MMapDirectory
@@ -45,7 +44,6 @@ import org.apache.lucene.document.LongPoint
 import org.apache.lucene.document.SortedNumericDocValuesField
 import org.rogach.scallop.ScallopConf
 import scala.language.postfixOps
-import fi.seco.lucene.PerFieldFSTOrdTermVectorsCodec
 import org.apache.lucene.document.SortedSetDocValuesField
 import fi.seco.lucene.PerFieldPostingsFormatOrdTermVectorsCodec
 import org.apache.lucene.codecs.Codec

@@ -43,7 +43,6 @@ import org.apache.lucene.codecs.lucene62.Lucene62Codec
 import org.apache.lucene.codecs.memory.FSTOrdPostingsFormat
 import org.apache.lucene.store.MMapDirectory
 import org.apache.lucene.codecs.Codec
-import fi.seco.lucene.FSTOrdTermVectorsCodec
 import org.apache.lucene.analysis.CharArraySet
 import org.apache.lucene.index.UpgradeIndexMergePolicy
 import com.bizo.mighty.csv.CSVReader
