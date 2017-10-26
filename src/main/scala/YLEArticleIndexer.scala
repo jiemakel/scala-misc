@@ -194,6 +194,10 @@ object YLEArticleIndexer extends OctavoIndexer {
   var aiw: IndexWriter = null.asInstanceOf[IndexWriter]
   var piw: IndexWriter = null.asInstanceOf[IndexWriter]
   
+  val as = new Sort(new SortField("articleID",SortField.Type.STRING))
+  val ps = new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG))
+  val ss = new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG))
+  
   def main(args: Array[String]): Unit = {
     val opts = new AOctavoOpts(args) {
       val apostings = opt[String](default = Some("fst"))
@@ -202,9 +206,9 @@ object YLEArticleIndexer extends OctavoIndexer {
       verify()
     }
     if (!opts.onlyMerge()) {
-      aiw = iw(opts.index()+"/aindex",opts.indexMemoryMb() / 3)
-      piw = iw(opts.index()+"/pindex",opts.indexMemoryMb() / 3)
-      siw = iw(opts.index()+"/sindex",opts.indexMemoryMb() / 3)
+      aiw = iw(opts.index()+"/aindex",as,opts.indexMemoryMb() / 3)
+      piw = iw(opts.index()+"/pindex",ps,opts.indexMemoryMb() / 3)
+      siw = iw(opts.index()+"/sindex",ss,opts.indexMemoryMb() / 3)
       feedAndProcessFedTasksInParallel(() =>
         opts.directories().toStream.flatMap(n => getFileTree(new File(n))).filter(_.getName.endsWith(".json")).foreach(file => addTask(file.getName, () => index(file)))
       )
@@ -213,15 +217,15 @@ object YLEArticleIndexer extends OctavoIndexer {
     waitForTasks(
       runSequenceInOtherThread(
         () => close(aiw), 
-        () => merge(opts.index()+"/aindex", new Sort(new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 3, toCodec(opts.apostings(), termVectorFields))
+        () => merge(opts.index()+"/aindex", as,opts.indexMemoryMb() / 3, toCodec(opts.apostings(), termVectorFields))
       ),
       runSequenceInOtherThread(
         () => close(piw), 
-        () => merge(opts.index()+"/pindex", new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 3, toCodec(opts.ppostings(), termVectorFields))
+        () => merge(opts.index()+"/pindex", ps,opts.indexMemoryMb() / 3, toCodec(opts.ppostings(), termVectorFields))
       ),
       runSequenceInOtherThread(
         () => close(siw), 
-        () => merge(opts.index()+"/sindex", new Sort(new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG)),opts.indexMemoryMb() / 3, toCodec(opts.spostings(), termVectorFields))
+        () => merge(opts.index()+"/sindex", ss,opts.indexMemoryMb() / 3, toCodec(opts.spostings(), termVectorFields))
       )
     )
   }

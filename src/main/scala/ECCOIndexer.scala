@@ -1,87 +1,19 @@
-import org.apache.lucene.store.FSDirectory
-import java.nio.file.FileSystems
-import org.apache.lucene.index.IndexWriterConfig
-import org.apache.lucene.index.IndexWriter
-import org.apache.lucene.document.Document
-import org.apache.lucene.document.Field
-import org.apache.lucene.document.TextField
-import org.apache.lucene.document.StoredField
-import org.apache.lucene.analysis.standard.StandardAnalyzer
-import org.apache.lucene.index.DirectoryReader
-import org.apache.lucene.search.IndexSearcher
-import org.apache.lucene.queryparser.classic.QueryParser
-import org.apache.lucene.search.Collector
-import org.apache.lucene.index.LeafReaderContext
-import org.apache.lucene.search.LeafCollector
-import org.apache.lucene.search.Scorer
 import java.io.File
-import scala.io.Source
-import scala.xml.pull.XMLEventReader
-import scala.xml.pull.EvElemStart
-import scala.xml.pull.EvText
-import scala.xml.pull.EvEntityRef
-import scala.xml.pull.EvComment
-import scala.xml.pull.EvElemEnd
-import org.apache.lucene.document.StringField
-import org.apache.lucene.document.Field.Store
-
-import scala.collection.JavaConverters._
-import org.apache.lucene.analysis.tokenattributes.CharTermAttribute
-import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
-import org.apache.lucene.document.FieldType
-import scala.collection.mutable.HashMap
-import com.sleepycat.je.EnvironmentConfig
-import com.sleepycat.je.Environment
-import com.sleepycat.je.DatabaseConfig
-import scala.collection.mutable.Buffer
-import org.apache.lucene.document.IntPoint
-import org.apache.lucene.index.IndexOptions
-import org.apache.lucene.analysis.shingle.ShingleAnalyzerWrapper
-import scala.collection.mutable.ArrayBuffer
-import org.apache.lucene.codecs.FilterCodec
-import org.apache.lucene.codecs.lucene62.Lucene62Codec
-import org.apache.lucene.codecs.memory.FSTOrdPostingsFormat
-import org.apache.lucene.store.MMapDirectory
-import org.apache.lucene.codecs.Codec
-import org.apache.lucene.analysis.CharArraySet
-import org.apache.lucene.index.UpgradeIndexMergePolicy
-import com.bizo.mighty.csv.CSVReader
-import org.apache.lucene.index.SegmentCommitInfo
-import com.typesafe.scalalogging.LazyLogging
-import org.apache.lucene.search.Sort
-import org.apache.lucene.search.SortField
-import java.util.concurrent.atomic.AtomicInteger
+import java.text.BreakIterator
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
-import org.apache.lucene.document.NumericDocValuesField
-import org.apache.lucene.document.LongPoint
-import org.apache.lucene.index.BinaryDocValues
-import org.apache.lucene.document.BinaryDocValuesField
-import org.apache.lucene.util.BytesRef
-import org.apache.lucene.document.SortedDocValuesField
-import scala.concurrent.Future
-import scala.concurrent.Await
-import scala.concurrent.duration._
-import java.io.StringWriter
-import java.io.PrintWriter
-import scala.concurrent.ExecutionContext
-import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.ArrayBlockingQueue
-import scala.concurrent.Promise
-import org.apache.lucene.document.SortedSetDocValuesField
-import org.apache.lucene.index.LogDocMergePolicy
-import scala.util.Failure
-import scala.util.Success
 
+import com.bizo.mighty.csv.CSVReader
+import org.apache.lucene.document.{Document, Field, NumericDocValuesField}
+import org.apache.lucene.index.IndexWriter
+import org.apache.lucene.search.{Sort, SortField}
 import org.rogach.scallop._
-import scala.language.postfixOps
-import org.apache.lucene.document.SortedNumericDocValuesField
-import scala.xml.parsing.XhtmlEntities
-import scala.xml.MetaData
-import scala.collection.Searching
-import fi.seco.lucene.OrdExposingFSTOrdPostingsFormat
 
-import scala.language.reflectiveCalls
+import scala.collection.mutable.ArrayBuffer
+import scala.io.Source
+import scala.language.{postfixOps, reflectiveCalls}
+import scala.xml.parsing.XhtmlEntities
+import scala.xml.pull._
 
 object ECCOIndexer extends OctavoIndexer {
   
@@ -105,6 +37,7 @@ object ECCOIndexer extends OctavoIndexer {
   
   val headingRegex = "^# ".r
 
+  private val sentences = new AtomicLong
   private val paragraphs = new AtomicLong
   private val sections = new AtomicLong
   private val documentparts = new AtomicLong
@@ -114,22 +47,24 @@ object ECCOIndexer extends OctavoIndexer {
   }
   
   class Reuse {
+    val sbi = BreakIterator.getSentenceInstance(new Locale("en_GB"))
     val dd = new Document()
     val dpd = new Document()
     val sd = new Document()
     val pd = new Document()
-    val collectionIDFields = new StringSDVFieldPair("collectionID", dd, dpd, sd, pd)
-    val documentIDFields = new StringSDVFieldPair("documentID", dd, dpd, sd, pd)
-    val estcIDFields = new StringSDVFieldPair("ESTCID", dd, dpd, sd, pd)
-    val dateStartFields = new IntPointNDVFieldPair("dateStart", dd, dpd, sd, pd)
-    val dateEndFields = new IntPointNDVFieldPair("dateEnd", dd, dpd, sd, pd)
-    val totalPagesFields = new IntPointNDVFieldPair("totalPages", dd, dpd, sd, pd)
-    val languageFields = new StringSDVFieldPair("language", dd, dpd, sd, pd)
-    val moduleFields = new StringSDVFieldPair("module", dd, dpd, sd, pd)
-    val fullTitleFields = new TextSDVFieldPair("fullTitle",dd,dpd,sd,pd)
-    val contentLengthFields = new IntPointNDVFieldPair("contentLength", dd, dpd, sd, pd)
-    val documentLengthFields = new IntPointNDVFieldPair("documentLength", dd, dpd, sd, pd)
-    val totalParagraphsFields = new IntPointNDVFieldPair("totalParagraphs", dd, dpd, sd, pd)
+    val send = new Document()
+    val collectionIDFields = new StringSDVFieldPair("collectionID", dd, dpd, sd, pd, send)
+    val documentIDFields = new StringSDVFieldPair("documentID", dd, dpd, sd, pd, send)
+    val estcIDFields = new StringSDVFieldPair("ESTCID", dd, dpd, sd, pd, send)
+    val dateStartFields = new IntPointNDVFieldPair("dateStart", dd, dpd, sd, pd, send)
+    val dateEndFields = new IntPointNDVFieldPair("dateEnd", dd, dpd, sd, pd, send)
+    val totalPagesFields = new IntPointNDVFieldPair("totalPages", dd, dpd, sd, pd, send)
+    val languageFields = new StringSDVFieldPair("language", dd, dpd, sd, pd, send)
+    val moduleFields = new StringSDVFieldPair("module", dd, dpd, sd, pd, send)
+    val fullTitleFields = new TextSDVFieldPair("fullTitle",dd,dpd,sd,pd, send)
+    val contentLengthFields = new IntPointNDVFieldPair("contentLength", dd, dpd, sd, pd, send)
+    val documentLengthFields = new IntPointNDVFieldPair("documentLength", dd, dpd, sd, pd, send)
+    val totalParagraphsFields = new IntPointNDVFieldPair("totalParagraphs", dd, dpd, sd, pd, send)
     def clearOptionalDocumentFields() {
       dateStartFields.setValue(0)
       dateEndFields.setValue(Int.MaxValue)
@@ -149,16 +84,23 @@ object ECCOIndexer extends OctavoIndexer {
       pd.removeFields("headingLevel")
       pd.removeFields("heading")
     }
+    def clearOptionalSentenceFields() {
+      send.removeFields("sectionID")
+      send.removeFields("headingLevel")
+      send.removeFields("heading")
+    }
     val documentPartIdFields = new StringNDVFieldPair("partID", dpd, sd, pd)
-    val paragraphIDField = new NumericDocValuesField("paragraphID", 0)
-    pd.add(paragraphIDField)
+    val paragraphIDFields = new StringNDVFieldPair("paragraphID", pd, send)
+    val sentenceIDField = new NumericDocValuesField("sentenceID", 0)
+    send.add(sentenceIDField)
     val contentField = new Field("content","",contentFieldType)
     dd.add(contentField)
     dpd.add(contentField)
     sd.add(contentField)
     pd.add(contentField)
-    val contentTokensFields = new IntPointNDVFieldPair("contentTokens", dd, dpd, sd, pd)
-    val documentPartTypeFields = new StringSDVFieldPair("documentPartType", dpd, sd, pd)
+    send.add(contentField)
+    val contentTokensFields = new IntPointNDVFieldPair("contentTokens", dd, dpd, sd, pd, send)
+    val documentPartTypeFields = new StringSDVFieldPair("documentPartType", dpd, sd, pd, send)
     val sectionIDFields = new StringNDVFieldPair("sectionID", sd)
     val headingFields = new TextSDVFieldPair("heading",sd)
     val headingLevelFields = new IntPointNDVFieldPair("headingLevel", sd)
@@ -173,7 +115,7 @@ object ECCOIndexer extends OctavoIndexer {
     paragraphHeadingLevelFields.setValue(headingLevel)
     val paragraphHeadingFields = new TextSSDVFieldPair("heading")
 	  val content = new StringBuilder()
-    def addToParagraphDocument(pd: Document) {
+    def addToDocument(pd: Document) {
       paragraphSectionIDFields.add(pd)
       paragraphHeadingLevelFields.add(pd)
       paragraphHeadingFields.add(pd)
@@ -288,18 +230,34 @@ object ECCOIndexer extends OctavoIndexer {
       for (line <- fl.getLines) {
         if (line.isEmpty) {
           if (!pcontents.isEmpty) {
-        	  r.clearOptionalParagraphFields()
-            r.paragraphIDField.setLongValue(paragraphs.incrementAndGet)
-            r.contentField.setStringValue(pcontents.toString)
-            val tokens = getNumberOfTokens(pcontents.toString)
-            r.contentLengthFields.setValue(pcontents.length)
-            r.contentTokensFields.setValue(getNumberOfTokens(pcontents.toString))
+            val c = pcontents.toString
+            r.clearOptionalParagraphFields()
+            r.clearOptionalSentenceFields()
+            r.paragraphIDFields.setValue(paragraphs.incrementAndGet)
+            r.contentField.setStringValue(c)
+            r.contentLengthFields.setValue(c.length)
+            r.contentTokensFields.setValue(getNumberOfTokens(c))
             var hasHeadingInfos = false
             headingInfos.foreach(_.foreach(hi => {
-              hi.addToParagraphDocument(r.pd)
+              hi.addToDocument(r.pd)
+              hi.addToDocument(r.send)
               hasHeadingInfos = true
             }))
             piw.addDocument(r.pd)
+            r.sbi.setText(c)
+            var start = r.sbi.first()
+            var end = r.sbi.next()
+            while (end != BreakIterator.DONE) {
+              val sentence = c.substring(start,end)
+              r.sentenceIDField.setLongValue(sentences.incrementAndGet)
+              r.contentField.setStringValue(sentence)
+              val tokens = getNumberOfTokens(sentence)
+              r.contentLengthFields.setValue(sentence.length)
+              r.contentTokensFields.setValue(getNumberOfTokens(sentence))
+              seniw.addDocument(r.send)
+              start = end
+              end = r.sbi.next()
+            }
             pcontents.clear()
           }
         } else
@@ -333,6 +291,36 @@ object ECCOIndexer extends OctavoIndexer {
         dpcontents.append(line+"\n")
       }
       fl.close()
+      if (!pcontents.isEmpty) {
+        val c = pcontents.toString
+        r.clearOptionalParagraphFields()
+        r.clearOptionalSentenceFields()
+        r.paragraphIDFields.setValue(paragraphs.incrementAndGet)
+        r.contentField.setStringValue(c)
+        r.contentLengthFields.setValue(c.length)
+        r.contentTokensFields.setValue(getNumberOfTokens(c))
+        var hasHeadingInfos = false
+        headingInfos.foreach(_.foreach(hi => {
+          hi.addToDocument(r.pd)
+          hi.addToDocument(r.send)
+          hasHeadingInfos = true
+        }))
+        piw.addDocument(r.pd)
+        r.sbi.setText(c)
+        var start = r.sbi.first()
+        var end = r.sbi.next()
+        while (end != BreakIterator.DONE) {
+          val sentence = c.substring(start,end)
+          r.sentenceIDField.setLongValue(sentences.incrementAndGet)
+          r.contentField.setStringValue(sentence)
+          val tokens = getNumberOfTokens(sentence)
+          r.contentLengthFields.setValue(sentence.length)
+          r.contentTokensFields.setValue(getNumberOfTokens(sentence))
+          seniw.addDocument(r.send)
+          start = end
+          end = r.sbi.next()
+        }
+      }
       for (
           headingInfoOpt <- headingInfos;
           headingInfo <- headingInfoOpt
@@ -364,7 +352,13 @@ object ECCOIndexer extends OctavoIndexer {
     logger.info("Processed: "+file.getPath.replace("_metadata.xml","*"))
   }
   
-  var diw, dpiw, siw, piw = null.asInstanceOf[IndexWriter]
+  var diw, dpiw, siw, piw, seniw = null.asInstanceOf[IndexWriter]
+  
+  val ds = new Sort(new SortField("documentID",SortField.Type.STRING))
+  val dps = new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG))
+  val ss = new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG))
+  val ps = new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG))
+  val sens = new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG))
   
   def main(args: Array[String]): Unit = {
     val opts = new AOctavoOpts(args) {
@@ -372,17 +366,20 @@ object ECCOIndexer extends OctavoIndexer {
       val dppostings = opt[String](default = Some("blocktree"))
       val spostings = opt[String](default = Some("blocktree"))
       val ppostings = opt[String](default = Some("fst"))
+      val senpostings = opt[String](default = Some("fst"))
       verify()
     }
     if (!opts.onlyMerge()) {
       // document level
-      diw = iw(opts.index()+"/dindex", opts.indexMemoryMb()/4)
+      diw = iw(opts.index()+"/dindex", ds, opts.indexMemoryMb()/5)
       // document part level
-      dpiw = iw(opts.index()+"/dpindex", opts.indexMemoryMb()/4)
+      dpiw = iw(opts.index()+"/dpindex", dps, opts.indexMemoryMb()/5)
       // section level
-      siw = iw(opts.index()+"/sindex", opts.indexMemoryMb()/4)
+      siw = iw(opts.index()+"/sindex", ss, opts.indexMemoryMb()/5)
       // paragraph level
-      piw = iw(opts.index()+"/pindex", opts.indexMemoryMb()/4)
+      piw = iw(opts.index()+"/pindex", ps, opts.indexMemoryMb()/5)
+      // sentence level
+      seniw = iw(opts.index()+"/senindex", sens, opts.indexMemoryMb()/5)
       /*
        *
      6919 article
@@ -411,20 +408,24 @@ object ECCOIndexer extends OctavoIndexer {
     waitForTasks(
       runSequenceInOtherThread(
         () => close(diw), 
-        () => merge(opts.index()+"/dindex", new Sort(new SortField("documentID",SortField.Type.STRING)), opts.indexMemoryMb()/4, toCodec(opts.dpostings(), termVectorFields))
+        () => merge(opts.index()+"/dindex", ds, opts.indexMemoryMb()/5, toCodec(opts.dpostings(), termVectorFields))
       ),
       runSequenceInOtherThread(
         () => close(dpiw), 
-        () => merge(opts.index()+"/dpindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("partID", SortField.Type.LONG)), opts.indexMemoryMb()/4, toCodec(opts.dppostings(), termVectorFields))
+        () => merge(opts.index()+"/dpindex", dps, opts.indexMemoryMb()/5, toCodec(opts.dppostings(), termVectorFields))
       ),
       runSequenceInOtherThread(
         () => close(siw), 
-        () => merge(opts.index()+"/sindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG)), opts.indexMemoryMb()/4, toCodec(opts.spostings(), termVectorFields))
+        () => merge(opts.index()+"/sindex", ss, opts.indexMemoryMb()/5, toCodec(opts.spostings(), termVectorFields))
       ),
       runSequenceInOtherThread(
         () => close(piw), 
-        () => merge(opts.index()+"/pindex", new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)), opts.indexMemoryMb()/4, toCodec(opts.ppostings(), termVectorFields))
-      )
+        () => merge(opts.index()+"/pindex", ps, opts.indexMemoryMb()/5, toCodec(opts.ppostings(), termVectorFields))
+      ),
+      runSequenceInOtherThread(
+        () => close(seniw), 
+        () => merge(opts.index()+"/senindex", sens, opts.indexMemoryMb()/5, toCodec(opts.senpostings(), termVectorFields))
+      )      
     )
   }
 }

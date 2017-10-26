@@ -1,24 +1,15 @@
-import org.apache.lucene.index.IndexWriter
-import org.apache.lucene.search.Sort
-import org.apache.lucene.search.SortField
-import org.apache.lucene.store.MMapDirectory
-import java.io.File
 import java.nio.file.FileSystems
-import org.apache.lucene.index.IndexReader
-import org.apache.lucene.index.DirectoryReader
-import org.apache.lucene.index.SortedDocValues
-import org.apache.lucene.document.SortedDocValuesField
-import org.apache.lucene.index.DocValues
-import scala.concurrent.Future
-import scala.concurrent.Await
-import scala.concurrent.duration.Duration
+
+import com.bizo.mighty.csv.CSVReader
+import org.apache.lucene.document.Document
+import org.apache.lucene.index.{DirectoryReader, DocValues, IndexWriter}
+import org.apache.lucene.store.MMapDirectory
+
 import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.ExecutionContext.Implicits.global
-import com.bizo.mighty.csv.CSVReader
+import scala.concurrent.{Await, Future}
+import scala.concurrent.duration.Duration
 import scala.language.reflectiveCalls
-import org.apache.lucene.document.Document
-import org.apache.lucene.document.Field
-import scala.collection.mutable.HashMap
 
 object ECCOMetadataIndexer extends OctavoIndexer {
   
@@ -30,9 +21,9 @@ object ECCOMetadataIndexer extends OctavoIndexer {
       (field , field match {
         case "title" => new TextSDVFieldPair("title", d)
         case "publication_geography" | "publication_topic" | "subject" => null
-        case field if (field.startsWith("language")) => null
-        case field if (intPointFields.contains(field)) => new IntPointNDVFieldPair(field, d)
-        case field if (floatPointFields.contains(field)) => new FloatPointFDVFieldPair(field, d)
+        case field if field.startsWith("language") => null
+        case field if intPointFields.contains(field) => new IntPointNDVFieldPair(field, d)
+        case field if floatPointFields.contains(field) => new FloatPointFDVFieldPair(field, d)
         case field => new StringSDVFieldPair(field, d)
       }))
     def clean() {
@@ -50,12 +41,13 @@ object ECCOMetadataIndexer extends OctavoIndexer {
   
   def process(path: String, metadata: Map[String, Array[String]], iw: IndexWriter): Future[Unit] = Future {
     val r = new Reuse()
-    val ir = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath(path))).leaves().get(0).reader
+    val ir = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault.getPath(path))).leaves().get(0).reader
     logger.info("Going to process "+ir.maxDoc+" douments in "+path+".")
     val dv = DocValues.getSorted(ir, "ESTCID")
     var lastESTCID: String = null
     for (d <- 0 until ir.maxDoc) {
-      val estcID = "^([A-Z])0*".r.replaceAllIn(dv.get(d).utf8ToString(),m => m.group(1))
+      dv.advance(d)
+      val estcID = "^([A-Z])0*".r.replaceAllIn(dv.binaryValue.utf8ToString,m => m.group(1))
       if (estcID!=lastESTCID) {
         lastESTCID = estcID
         r.clean()
@@ -66,10 +58,10 @@ object ECCOMetadataIndexer extends OctavoIndexer {
               case "title" => field.asInstanceOf[TextSDVFieldPair].setValue("")
               case "publication_geography" | "publication_topic" | "subject" => 
               case "language" => 
-              case fieldName if (fieldName.startsWith("language")) => 
-              case fieldName if (r.intPointFields.contains(fieldName)) => field.asInstanceOf[IntPointNDVFieldPair].setValue(0)
-              case fieldName if (r.floatPointFields.contains(fieldName)) => field.asInstanceOf[FloatPointFDVFieldPair].setValue(0.0f)
-              case fieldName => field.asInstanceOf[StringSDVFieldPair].setValue("")
+              case _ if fieldName.startsWith("language") =>
+              case _ if r.intPointFields.contains(fieldName) => field.asInstanceOf[IntPointNDVFieldPair].setValue(0)
+              case _ if r.floatPointFields.contains(fieldName) => field.asInstanceOf[FloatPointFDVFieldPair].setValue(0.0f)
+              case _ => field.asInstanceOf[StringSDVFieldPair].setValue("")
             }
         } else {
           val mrow = r.fields.zip(metadata(estcID))
@@ -79,9 +71,9 @@ object ECCOMetadataIndexer extends OctavoIndexer {
                   case "title" => field.asInstanceOf[TextSDVFieldPair].setValue("")
                   case "publication_geography" | "publication_topic" | "subject" => 
                   case "language" => 
-                  case fieldName if (fieldName.startsWith("language")) => 
-                  case fieldName if (r.intPointFields.contains(fieldName)) => field.asInstanceOf[IntPointNDVFieldPair].setValue(0)
-                  case fieldName if (r.floatPointFields.contains(fieldName)) => field.asInstanceOf[FloatPointFDVFieldPair].setValue(0.0f)
+                  case fieldName if fieldName.startsWith("language") =>
+                  case fieldName if r.intPointFields.contains(fieldName) => field.asInstanceOf[IntPointNDVFieldPair].setValue(0)
+                  case fieldName if r.floatPointFields.contains(fieldName) => field.asInstanceOf[FloatPointFDVFieldPair].setValue(0.0f)
                   case fieldName => field.asInstanceOf[StringSDVFieldPair].setValue("")
               }
               case fieldValue => 
@@ -90,11 +82,11 @@ object ECCOMetadataIndexer extends OctavoIndexer {
                   case "publication_geography" | "publication_topic" | "subject" => for (value <- fieldValue.split(";"))
                     new StringSSDVFieldPair(fieldName, r.d).setValue(value.trim)
                   case "language" => new StringSSDVFieldPair("languages", r.d).setValue(fieldValue)
-                  case fieldName if (fieldName.startsWith("language")) => if (fieldValue == "TRUE") new StringSSDVFieldPair("languages", r.d).setValue(fieldName.substring(9))
-                  case fieldName if (r.intPointFields.contains(fieldName)) => try { field.asInstanceOf[IntPointNDVFieldPair].setValue(fieldValue.toInt) } catch {
+                  case fieldName if fieldName.startsWith("language") => if (fieldValue == "TRUE") new StringSSDVFieldPair("languages", r.d).setValue(fieldName.substring(9))
+                  case fieldName if r.intPointFields.contains(fieldName) => try { field.asInstanceOf[IntPointNDVFieldPair].setValue(fieldValue.toInt) } catch {
                     case e: NumberFormatException => logger.error(fieldName, fieldValue); throw e              
                   }
-                  case fieldName if (r.floatPointFields.contains(fieldName)) => field.asInstanceOf[FloatPointFDVFieldPair].setValue(fieldValue.toFloat)
+                  case fieldName if r.floatPointFields.contains(fieldName) => field.asInstanceOf[FloatPointFDVFieldPair].setValue(fieldValue.toFloat)
                   case fieldName => field.asInstanceOf[StringSDVFieldPair].setValue(fieldValue)
                 }
             }
@@ -121,10 +113,10 @@ object ECCOMetadataIndexer extends OctavoIndexer {
       case any => any
     }))).toMap
     logger.info("Metadata loaded for "+metadata.size+" ids")
-    mdiw = iw(opts.index()+"/mdindex", opts.indexMemoryMb()/4)
-    mdpiw = iw(opts.index()+"/mdpindex", opts.indexMemoryMb()/4)
-    msiw = iw(opts.index()+"/msindex", opts.indexMemoryMb()/4)
-    mpiw = iw(opts.index()+"/mpindex", opts.indexMemoryMb()/4)
+    mdiw = iw(opts.index()+"/mdindex", null, opts.indexMemoryMb()/4)
+    mdpiw = iw(opts.index()+"/mdpindex", null, opts.indexMemoryMb()/4)
+    msiw = iw(opts.index()+"/msindex", null, opts.indexMemoryMb()/4)
+    mpiw = iw(opts.index()+"/mpindex", null, opts.indexMemoryMb()/4)
     val futures = new ArrayBuffer[Future[Unit]]
     for (path <- opts.directories()) {
       futures += process(path+"/dindex", metadata, mdiw)

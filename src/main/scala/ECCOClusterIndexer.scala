@@ -1,92 +1,15 @@
-import org.apache.lucene.store.FSDirectory
-import java.nio.file.FileSystems
-import org.apache.lucene.index.IndexWriterConfig
-import org.apache.lucene.index.IndexWriter
-import org.apache.lucene.document.Document
-import org.apache.lucene.document.Field
-import org.apache.lucene.document.TextField
-import org.apache.lucene.document.StoredField
-import org.apache.lucene.analysis.standard.StandardAnalyzer
-import org.apache.lucene.index.DirectoryReader
-import org.apache.lucene.search.IndexSearcher
-import org.apache.lucene.queryparser.classic.QueryParser
-import org.apache.lucene.search.Collector
-import org.apache.lucene.index.LeafReaderContext
-import org.apache.lucene.search.LeafCollector
-import org.apache.lucene.search.Scorer
-import java.io.File
-import scala.io.Source
-import scala.xml.pull.XMLEventReader
-import scala.xml.pull.EvElemStart
-import scala.xml.pull.EvText
-import scala.xml.pull.EvEntityRef
-import scala.xml.pull.EvComment
-import scala.xml.pull.EvElemEnd
-import org.apache.lucene.document.StringField
-import org.apache.lucene.document.Field.Store
-import org.json4s._
-import org.json4s.native.JsonParser._
-import org.json4s.JsonDSL._
-import scala.compat.java8.FunctionConverters._
-import scala.compat.java8.StreamConverters._
-
-import scala.collection.JavaConverters._
-import org.apache.lucene.analysis.tokenattributes.CharTermAttribute
-import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
-import org.apache.lucene.document.FieldType
-import scala.collection.mutable.HashMap
-import com.sleepycat.je.EnvironmentConfig
-import com.sleepycat.je.Environment
-import com.sleepycat.je.DatabaseConfig
-import scala.collection.mutable.Buffer
-import org.apache.lucene.document.IntPoint
-import org.apache.lucene.index.IndexOptions
-import org.apache.lucene.analysis.shingle.ShingleAnalyzerWrapper
-import scala.collection.mutable.ArrayBuffer
-import org.apache.lucene.codecs.FilterCodec
-import org.apache.lucene.codecs.lucene62.Lucene62Codec
-import org.apache.lucene.codecs.memory.FSTOrdPostingsFormat
-import org.apache.lucene.store.MMapDirectory
-import org.apache.lucene.codecs.Codec
-import org.apache.lucene.analysis.CharArraySet
-import org.apache.lucene.index.UpgradeIndexMergePolicy
-import com.bizo.mighty.csv.CSVReader
-import org.apache.lucene.index.SegmentCommitInfo
-import com.typesafe.scalalogging.LazyLogging
-import org.apache.lucene.search.Sort
-import org.apache.lucene.search.SortField
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
-import org.apache.lucene.document.NumericDocValuesField
-import org.apache.lucene.document.LongPoint
-import org.apache.lucene.index.BinaryDocValues
-import org.apache.lucene.document.BinaryDocValuesField
-import org.apache.lucene.util.BytesRef
-import org.apache.lucene.document.SortedDocValuesField
-import scala.concurrent.Future
-import scala.concurrent.Await
-import scala.concurrent.duration._
-import java.io.StringWriter
-import java.io.PrintWriter
-import scala.concurrent.ExecutionContext
-import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.ArrayBlockingQueue
-import scala.concurrent.Promise
-import org.apache.lucene.document.SortedSetDocValuesField
-import org.json4s.JsonAST.JValue
-import java.io.InputStreamReader
+import java.io.{File, FileInputStream, InputStreamReader}
 import java.util.zip.GZIPInputStream
-import java.io.FileInputStream
-import scala.util.Try
-import scala.util.Success
-import scala.util.Failure
 
+import org.apache.lucene.document.{Document, Field}
+import org.apache.lucene.index.IndexWriter
+import org.apache.lucene.search.{Sort, SortField}
+import org.json4s.native.JsonParser._
 import org.rogach.scallop._
-import scala.language.postfixOps
-import java.lang.ThreadLocal
-import fi.seco.lucene.OrdExposingFSTOrdPostingsFormat
-import language.reflectiveCalls
+
+import scala.collection.mutable.ArrayBuffer
+import scala.language.{postfixOps, reflectiveCalls}
+import scala.util.Try
 
 object ECCOClusterIndexer extends OctavoIndexer {
   
@@ -193,16 +116,18 @@ object ECCOClusterIndexer extends OctavoIndexer {
     var matches: ArrayBuffer[Match] = new ArrayBuffer()
   }
   
+  val cs = new Sort(new SortField("clusterID",SortField.Type.INT))
+  
   def main(args: Array[String]): Unit = {
     val opts = new AOctavoOpts(args) {
       val postings = opt[String](default = Some("blocktree"))
       verify()
     }
-    diw = iw(opts.index()+"/dindex", opts.indexMemoryMb())
+    diw = iw(opts.index()+"/dindex", cs, opts.indexMemoryMb())
     feedAndProcessFedTasksInParallel(() =>
       opts.directories().toStream.flatMap(n => getFileTree(new File(n))).filter(_.getName.endsWith(".gz")).foreach(file => addTask(file.getPath, () => index(file)))
      )
     close(diw)
-    merge(opts.index()+"/dindex", new Sort(new SortField("clusterID",SortField.Type.INT)), opts.indexMemoryMb(), toCodec(opts.postings(), termVectorFields))
+    merge(opts.index()+"/dindex", cs, opts.indexMemoryMb(), toCodec(opts.postings(), termVectorFields))
   }
 }

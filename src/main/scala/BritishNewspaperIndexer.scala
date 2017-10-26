@@ -44,7 +44,7 @@ import org.apache.lucene.index.IndexOptions
 import org.apache.lucene.analysis.shingle.ShingleAnalyzerWrapper
 import scala.collection.mutable.ArrayBuffer
 import org.apache.lucene.codecs.FilterCodec
-import org.apache.lucene.codecs.lucene62.Lucene62Codec
+import org.apache.lucene.codecs.lucene70.Lucene70Codec
 import org.apache.lucene.codecs.memory.FSTOrdPostingsFormat
 import org.apache.lucene.store.MMapDirectory
 import org.apache.lucene.codecs.Codec
@@ -403,6 +403,10 @@ object BritishNewspaperIndexer extends OctavoIndexer {
   var aiw: IndexWriter = null.asInstanceOf[IndexWriter]
   var iiw: IndexWriter = null.asInstanceOf[IndexWriter]
   
+  val ps = new Sort(new SortField("issueID",SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG))
+  val as = new Sort(new SortField("issueID",SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING))
+  val is = new Sort(new SortField("issueID",SortField.Type.STRING))
+  
   val postingsFormats = Seq("text","containsGraphicOfType")
   
   def main(args: Array[String]): Unit = {
@@ -413,9 +417,9 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       verify()
     }
     if (!opts.onlyMerge()) {
-      piw = iw(opts.index()+"/pindex",opts.indexMemoryMb() / 3)
-      aiw = iw(opts.index()+"/aindex",opts.indexMemoryMb() / 3)
-      iiw = iw(opts.index()+"/iindex",opts.indexMemoryMb() / 3)
+      piw = iw(opts.index()+"/pindex",ps,opts.indexMemoryMb() / 3)
+      aiw = iw(opts.index()+"/aindex",as,opts.indexMemoryMb() / 3)
+      iiw = iw(opts.index()+"/iindex",is,opts.indexMemoryMb() / 3)
       feedAndProcessFedTasksInParallel(() =>
         opts.directories().toStream.flatMap(p => {
           val parts = p.split(':')
@@ -426,15 +430,15 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     waitForTasks(
       runSequenceInOtherThread(
         () => close(piw), 
-        () => merge(opts.index()+"/pindex", new Sort(new SortField("issueID",SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG)),opts.indexMemoryMb() / 3, toCodec(opts.ppostings(), postingsFormats))
+        () => merge(opts.index()+"/pindex", ps,opts.indexMemoryMb() / 3, toCodec(opts.ppostings(), postingsFormats))
       ),
       runSequenceInOtherThread(
         () => close(aiw), 
-        () => merge(opts.index()+"/aindex", new Sort(new SortField("issueID",SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING)),opts.indexMemoryMb() / 3, toCodec(opts.apostings(), postingsFormats))
+        () => merge(opts.index()+"/aindex", as,opts.indexMemoryMb() / 3, toCodec(opts.apostings(), postingsFormats))
       ),
       runSequenceInOtherThread(
         () => close(iiw), 
-        () => merge(opts.index()+"/iindex", new Sort(new SortField("issueID",SortField.Type.STRING)),opts.indexMemoryMb() / 3, toCodec(opts.ipostings(), postingsFormats))
+        () => merge(opts.index()+"/iindex", is,opts.indexMemoryMb() / 3, toCodec(opts.ipostings(), postingsFormats))
       )
     )
   }

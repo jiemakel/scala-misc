@@ -1,34 +1,7 @@
-import fi.seco.lexical.combined.CombinedLexicalAnalysisService
-import org.rogach.scallop.ScallopConf
 import java.io.File
-import scala.compat.java8.FunctionConverters._
-import scala.compat.java8.StreamConverters._
-import scala.collection.JavaConverters._
-import scala.xml.pull.XMLEventReader
-import scala.io.Source
-import scala.xml.pull.EvElemStart
-import scala.xml.pull.EvElemEnd
-import scala.xml.MetaData
-import scala.xml.pull.EvText
-import scala.xml.pull.EvEntityRef
-import scala.xml.pull.EvComment
-import scala.xml.parsing.XhtmlEntities
-import java.util.Locale
-import fi.seco.lexical.LanguageRecognizer
-import scala.util.Try
-import com.typesafe.scalalogging.LazyLogging
-import com.optimaize.langdetect.profiles.LanguageProfileReader
-import com.optimaize.langdetect.ngram.NgramExtractors
-import com.optimaize.langdetect.LanguageDetectorBuilder
-import com.optimaize.langdetect.text.CommonTextObjectFactories
-import java.util.Collections
-import org.json4s._
-import org.json4s.JsonDSL._
 
-import fi.seco.lexical.hfst.HFSTLexicalAnalysisService
-import java.io.PrintWriter
-import scala.util.Success
-import scala.util.Failure
+import scala.io.Source
+import scala.xml.pull.{EvElemEnd, EvElemStart, XMLEventReader}
 
 
 object EEBOIndexer extends OctavoIndexer {
