@@ -6,7 +6,7 @@ scalaVersion := "2.12.3"
 
 libraryDependencies ++= Seq(
 "com.typesafe.play" %% "play-json" % "2.6.0-M6",
-"fi.seco" %% "lucene-morphologicalanalyzer" % "1.1.3",
+"fi.seco" %% "lucene-morphologicalanalyzer" % "1.1.3" exclude("commons-logging", "commons-logging"),
 "org.scala-lang.modules" %% "scala-java8-compat" % "0.8.0",
 "org.json4s" %% "json4s-native" % "3.5.1" ,
 "com.fasterxml" % "aalto-xml" % "1.0.0",
@@ -18,7 +18,7 @@ libraryDependencies ++= Seq(
 "com.typesafe.scala-logging" %% "scala-logging" % "3.5.0",
 "ch.qos.logback" % "logback-classic" % "1.1.3",
 "org.slf4j" % "log4j-over-slf4j" % "1.7.12",
-"cc.mallet" % "mallet" % "2.0.8",
+"cc.mallet" % "mallet" % "2.0.8" exclude("commons-logging", "commons-logging"),
 "info.freelibrary" % "freelib-marc4j" % "2.6.6",
 "it.geosolutions.imageio-ext" % "imageio-ext-kakadu" % "1.1.19",
 "it.geosolutions.imageio-ext" % "imageio-ext-kakadujni" % "6.3.1",
@@ -31,7 +31,7 @@ libraryDependencies ++= Seq(
 "com.sleepycat" % "je" % "7.0.6",
 "org.apache.commons" % "commons-math3" % "3.6.1",
 "com.google.guava" % "guava" % "21.0",
-"com.breinify" % "brein-time-utilities" % "1.6.2",
+"com.breinify" % "brein-time-utilities" % "1.6.2" exclude("org.slf4j","slf4j-log4j12") exclude("log4j","log4j") exclude("commons-logging", "commons-logging"),
 "org.rogach" %% "scallop" % "2.1.1",
 "org.jsoup" % "jsoup" % "1.10.2",
 "com.optimaize.languagedetector" % "language-detector" % "0.6"
