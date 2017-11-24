@@ -30,7 +30,7 @@ object ECCOIndexer extends OctavoIndexer {
       case EvComment(_) => 
       case EvElemEnd(_,_) => break = true 
     }
-    return content.toString.trim
+    content.toString.trim
   }
   
   val fileRegex = ".*_(.*)\\.txt".r
@@ -140,7 +140,7 @@ object ECCOIndexer extends OctavoIndexer {
       case EvElemStart(_,"ESTCID",_,_) =>
         estcID = readContents
         r.estcIDFields.setValue(estcID)
-      case EvElemStart(_,"bibliographicID",attr,_) if (attr("type")(0).text == "ESTC") => // ECCO2
+      case EvElemStart(_,"bibliographicID",attr,_) if attr("type").head.text == "ESTC" => // ECCO2
         estcID = readContents
         r.estcIDFields.setValue(estcID)
       case EvElemStart(_,"pubDate",_,_) => readContents match {
@@ -224,12 +224,12 @@ object ECCOIndexer extends OctavoIndexer {
             r.dd.add(f)
           }
         }
-      val headingInfos = Seq(1,2,3).map(w => None.asInstanceOf[Option[SectionInfo]]).toArray
+      val headingInfos = Seq(1,2,3).map(_ => None.asInstanceOf[Option[SectionInfo]]).toArray
       val pcontents = new StringBuilder
       val fl = Source.fromFile(file)
       for (line <- fl.getLines) {
         if (line.isEmpty) {
-          if (!pcontents.isEmpty) {
+          if (pcontents.nonEmpty) {
             val c = pcontents.toString
             r.clearOptionalParagraphFields()
             r.clearOptionalSentenceFields()
@@ -251,7 +251,6 @@ object ECCOIndexer extends OctavoIndexer {
               val sentence = c.substring(start,end)
               r.sentenceIDField.setLongValue(sentences.incrementAndGet)
               r.contentField.setStringValue(sentence)
-              val tokens = getNumberOfTokens(sentence)
               r.contentLengthFields.setValue(sentence.length)
               r.contentTokensFields.setValue(getNumberOfTokens(sentence))
               seniw.addDocument(r.send)
@@ -275,7 +274,7 @@ object ECCOIndexer extends OctavoIndexer {
               r.sectionIDFields.setValue(headingInfo.sectionID)
               r.headingLevelFields.setValue(headingInfo.headingLevel)
               r.headingFields.setValue(headingInfo.heading)
-              if (!headingInfo.content.isEmpty) {
+              if (headingInfo.content.nonEmpty) {
             	  val contentS = headingInfo.content.toString
             	  r.contentField.setStringValue(contentS)
             	  r.contentLengthFields.setValue(contentS.length)
@@ -291,7 +290,7 @@ object ECCOIndexer extends OctavoIndexer {
         dpcontents.append(line+"\n")
       }
       fl.close()
-      if (!pcontents.isEmpty) {
+      if (pcontents.nonEmpty) {
         val c = pcontents.toString
         r.clearOptionalParagraphFields()
         r.clearOptionalSentenceFields()
@@ -313,7 +312,6 @@ object ECCOIndexer extends OctavoIndexer {
           val sentence = c.substring(start,end)
           r.sentenceIDField.setLongValue(sentences.incrementAndGet)
           r.contentField.setStringValue(sentence)
-          val tokens = getNumberOfTokens(sentence)
           r.contentLengthFields.setValue(sentence.length)
           r.contentTokensFields.setValue(getNumberOfTokens(sentence))
           seniw.addDocument(r.send)
@@ -328,7 +326,7 @@ object ECCOIndexer extends OctavoIndexer {
           r.sectionIDFields.setValue(headingInfo.sectionID)
           r.headingLevelFields.setValue(headingInfo.headingLevel)
           r.headingFields.setValue(headingInfo.heading)
-          if (!headingInfo.content.isEmpty) {
+          if (headingInfo.content.nonEmpty) {
         	  val contentS = headingInfo.content.toString.trim
         	  r.contentField.setStringValue(contentS)
         	  r.contentLengthFields.setValue(contentS.length)
