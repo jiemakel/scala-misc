@@ -1,9 +1,4 @@
 import java.io.{File, PrintWriter}
-import java.text.BreakIterator
-import java.util.Locale
-import java.util.concurrent.atomic.AtomicLong
-
-import org.apache.lucene.document.{Document, Field, NumericDocValuesField}
 
 import scala.collection.immutable.HashSet
 import scala.collection.mutable
@@ -12,94 +7,10 @@ import scala.io.Source
 import scala.xml.parsing.XhtmlEntities
 import scala.xml.pull._
 
-object EEBOIndexer extends OctavoIndexer {
 
-  private val sentences = new AtomicLong
-  private val paragraphs = new AtomicLong
-  private val sections = new AtomicLong
-  private val documentparts = new AtomicLong
+object EEBOConverter extends ParallelProcessor {
 
-  val tld = new ThreadLocal[Reuse] {
-    override def initialValue() = new Reuse()
-  }
-
-  class Reuse {
-    val sbi = BreakIterator.getSentenceInstance(new Locale("en_GB"))
-    val dd = new Document()
-    val dpd = new Document()
-    val sd = new Document()
-    val pd = new Document()
-    val send = new Document()
-    val collectionIDFields = new StringSDVFieldPair("collectionID", dd, dpd, sd, pd, send)
-    val documentIDFields = new StringSDVFieldPair("documentID", dd, dpd, sd, pd, send)
-    val estcIDFields = new StringSDVFieldPair("ESTCID", dd, dpd, sd, pd, send)
-    val dateStartFields = new IntPointNDVFieldPair("dateStart", dd, dpd, sd, pd, send)
-    val dateEndFields = new IntPointNDVFieldPair("dateEnd", dd, dpd, sd, pd, send)
-    val totalPagesFields = new IntPointNDVFieldPair("totalPages", dd, dpd, sd, pd, send)
-    val languageFields = new StringSDVFieldPair("language", dd, dpd, sd, pd, send)
-    val moduleFields = new StringSDVFieldPair("module", dd, dpd, sd, pd, send)
-    val fullTitleFields = new TextSDVFieldPair("fullTitle",dd,dpd,sd,pd, send)
-    val contentLengthFields = new IntPointNDVFieldPair("contentLength", dd, dpd, sd, pd, send)
-    val documentLengthFields = new IntPointNDVFieldPair("documentLength", dd, dpd, sd, pd, send)
-    val totalParagraphsFields = new IntPointNDVFieldPair("totalParagraphs", dd, dpd, sd, pd, send)
-    def clearOptionalDocumentFields() {
-      dateStartFields.setValue(0)
-      dateEndFields.setValue(Int.MaxValue)
-      totalPagesFields.setValue(0)
-      languageFields.setValue("")
-      moduleFields.setValue("")
-      fullTitleFields.setValue("")
-      dd.removeFields("containsGraphicOfType")
-      dd.removeFields("containsGraphicCaption")
-    }
-    def clearOptionalDocumentPartFields() {
-      dpd.removeFields("containsGraphicOfType")
-      dpd.removeFields("containsGraphicCaption")
-    }
-    def clearOptionalParagraphFields() {
-      pd.removeFields("sectionID")
-      pd.removeFields("headingLevel")
-      pd.removeFields("heading")
-    }
-    def clearOptionalSentenceFields() {
-      send.removeFields("sectionID")
-      send.removeFields("headingLevel")
-      send.removeFields("heading")
-    }
-    val documentPartIdFields = new StringNDVFieldPair("partID", dpd, sd, pd)
-    val paragraphIDFields = new StringNDVFieldPair("paragraphID", pd, send)
-    val sentenceIDField = new NumericDocValuesField("sentenceID", 0)
-    send.add(sentenceIDField)
-    val contentField = new Field("content","",contentFieldType)
-    dd.add(contentField)
-    dpd.add(contentField)
-    sd.add(contentField)
-    pd.add(contentField)
-    send.add(contentField)
-    val contentTokensFields = new IntPointNDVFieldPair("contentTokens", dd, dpd, sd, pd, send)
-    val documentPartTypeFields = new StringSDVFieldPair("documentPartType", dpd, sd, pd, send)
-    val sectionIDFields = new StringNDVFieldPair("sectionID", sd)
-    val headingFields = new TextSDVFieldPair("heading",sd)
-    val headingLevelFields = new IntPointNDVFieldPair("headingLevel", sd)
-  }
-
-  val termVectorFields = Seq("content", "containsGraphicOfType")
-
-  class SectionInfo(val sectionID: Long, val headingLevel: Int, val heading: String) {
-    val paragraphSectionIDFields = new StringSNDVFieldPair("sectionID")
-    paragraphSectionIDFields.setValue(sectionID)
-    val paragraphHeadingLevelFields = new IntPointSNDVFieldPair("headingLevel")
-    paragraphHeadingLevelFields.setValue(headingLevel)
-    val paragraphHeadingFields = new TextSSDVFieldPair("heading")
-    val content = new StringBuilder()
-    def addToDocument(pd: Document) {
-      paragraphSectionIDFields.add(pd)
-      paragraphHeadingLevelFields.add(pd)
-      paragraphHeadingFields.add(pd)
-    }
-  }
-
-   private val eeboMap = new mutable.HashMap[String,String]()
+  private val eeboMap = new mutable.HashMap[String,String]()
 
   private def decodeEntity(entity: String): String = {
     XhtmlEntities.entMap.get(entity) match {
@@ -217,7 +128,7 @@ object EEBOIndexer extends OctavoIndexer {
     cw.close()
     logger.info("Successfully processed "+file)
   }
-
+  
   def main(args: Array[String]): Unit = {
     val lr = "<!ENTITY (.*?) \"(.*?)\"".r
     val lr2 = "&#h(.*?);".r
