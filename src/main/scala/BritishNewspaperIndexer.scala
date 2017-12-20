@@ -151,7 +151,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     val subtitles = new StringBuilder()
     val subtitlesFields = new TextSDVFieldPair("subtitles", pd, ad) //   <ta>Sketch of the week</ta> <ta>Slurs and hyperbole vied with tosh to make the headlines, says Tom Whipple</ta>
     
-    val articleTypeFields = new StringSDVFieldPair("articleType", pd, ad, id) // <ct>Arts and entertainment</ct>
+    val articleTypeFields = new StringSDVFieldPair("articleType", pd, ad) // <ct>Arts and entertainment</ct>
     def clearOptionalIssueFields() {
       paragraphsInIssue = 0
       articlesInIssue = 0
