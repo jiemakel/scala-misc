@@ -1,138 +1,68 @@
-import org.apache.lucene.store.FSDirectory
-import java.nio.file.FileSystems
-import org.apache.lucene.index.IndexWriterConfig
-import org.apache.lucene.index.IndexWriter
-import org.apache.lucene.document.Document
-import org.apache.lucene.document.Field
-import org.apache.lucene.document.TextField
-import org.apache.lucene.document.StoredField
-import org.apache.lucene.analysis.standard.StandardAnalyzer
-import org.apache.lucene.index.DirectoryReader
-import org.apache.lucene.search.IndexSearcher
-import org.apache.lucene.queryparser.classic.QueryParser
-import org.apache.lucene.search.Collector
-import org.apache.lucene.index.LeafReaderContext
-import org.apache.lucene.search.LeafCollector
-import org.apache.lucene.search.Scorer
-import java.io.File
-import scala.io.Source
-import scala.xml.pull.XMLEventReader
-import scala.xml.pull.EvElemStart
-import scala.xml.pull.EvText
-import scala.xml.pull.EvEntityRef
-import scala.xml.pull.EvComment
-import scala.xml.pull.EvElemEnd
-import org.apache.lucene.document.StringField
-import org.apache.lucene.document.Field.Store
-import org.json4s._
-import org.json4s.native.JsonParser._
-import org.json4s.JsonDSL._
-import scala.compat.java8.FunctionConverters._
-import scala.compat.java8.StreamConverters._
-import language.reflectiveCalls
-import scala.collection.JavaConverters._
-import org.apache.lucene.analysis.tokenattributes.CharTermAttribute
-import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
-import org.apache.lucene.document.FieldType
-import scala.collection.mutable.HashMap
-import com.sleepycat.je.EnvironmentConfig
-import com.sleepycat.je.Environment
-import com.sleepycat.je.DatabaseConfig
-import scala.collection.mutable.Buffer
-import org.apache.lucene.document.IntPoint
-import org.apache.lucene.index.IndexOptions
-import org.apache.lucene.analysis.shingle.ShingleAnalyzerWrapper
-import scala.collection.mutable.ArrayBuffer
-import org.apache.lucene.codecs.FilterCodec
-import org.apache.lucene.codecs.lucene70.Lucene70Codec
-import org.apache.lucene.codecs.memory.FSTOrdPostingsFormat
-import org.apache.lucene.store.MMapDirectory
-import org.apache.lucene.codecs.Codec
-import org.apache.lucene.analysis.CharArraySet
-import org.apache.lucene.index.UpgradeIndexMergePolicy
-import com.bizo.mighty.csv.CSVReader
-import org.apache.lucene.index.SegmentCommitInfo
-import com.typesafe.scalalogging.LazyLogging
-import org.apache.lucene.search.Sort
-import org.apache.lucene.search.SortField
-import java.util.concurrent.atomic.AtomicInteger
+import java.io.{File, FileInputStream, PushbackInputStream}
+import java.text.BreakIterator
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
-import org.apache.lucene.document.NumericDocValuesField
-import org.apache.lucene.document.LongPoint
-import org.apache.lucene.index.BinaryDocValues
-import org.apache.lucene.document.BinaryDocValuesField
-import org.apache.lucene.util.BytesRef
-import org.apache.lucene.document.SortedDocValuesField
-import scala.concurrent.Future
-import scala.concurrent.Await
-import scala.concurrent.duration._
-import java.io.StringWriter
-import java.io.PrintWriter
-import scala.concurrent.ExecutionContext
-import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.ArrayBlockingQueue
-import scala.concurrent.Promise
-import org.apache.lucene.document.SortedSetDocValuesField
-import org.json4s.JsonAST.JValue
-import java.io.InputStreamReader
-import java.util.zip.GZIPInputStream
-import java.io.FileInputStream
-import scala.util.Try
-import scala.util.Success
-import scala.util.Failure
 
+import org.apache.lucene.document.{Document, Field, NumericDocValuesField}
+import org.apache.lucene.index.IndexWriter
+import org.apache.lucene.search.{Sort, SortField}
 import org.rogach.scallop._
-import scala.language.postfixOps
-import java.lang.ThreadLocal
-import scala.xml.parsing.XhtmlEntities
-import scala.xml.MetaData
+
 import scala.collection.Searching
-import scala.collection.immutable.Set
-import java.io.PushbackInputStream
-import fi.seco.lucene.OrdExposingFSTOrdPostingsFormat
-import org.apache.lucene.codecs.blocktreeords.BlockTreeOrdsPostingsFormat
-import org.apache.lucene.codecs.perfield.PerFieldPostingsFormat
-import fi.seco.lucene.PerFieldPostingsFormatOrdTermVectorsCodec
+import scala.collection.mutable.ArrayBuffer
+import scala.io.Source
+import scala.language.{postfixOps, reflectiveCalls}
+import scala.xml.MetaData
+import scala.xml.parsing.XhtmlEntities
+import scala.xml.pull._
 
 object BritishNewspaperIndexer extends OctavoIndexer {
 
   private val paragraphs = new AtomicLong
+  private val sentences = new AtomicLong
   
   class Reuse {
-    val pd = new Document() // paragraph
-    val ad = new Document() // article
-    val id = new Document() // issue
+    val sd = new Document // sentence
+    val pd = new Document // paragraph
+    val ad = new Document // article
+    val id = new Document // issue
+
+    val sbi = BreakIterator.getSentenceInstance(new Locale("en_GB"))
     
     val issueContents = new StringBuilder()
     val articleContents = new StringBuilder()
     
-    val collectionIDFields = new StringSDVFieldPair("collectionID", pd, ad, id) // given as parameter
+    val collectionIDFields = new StringSDVFieldPair("collectionID", sd, pd, ad, id) // given as parameter
     
-    val issueIDFields = new StringSDVFieldPair("issueID", pd, ad, id) // <issue ID="N0176185" FAID="BBCN0001" COLID="C00000" contentType="Newspaper">
-    val newspaperIDFields = new StringSDVFieldPair("newspaperID", pd, ad, id) // <newspaperID>
-    val articleIDFields = new StringSDVFieldPair("articleID", pd, ad) // <id>WO2_B0897WEJOSAPO_1724_11_28-0001-001</id>
-    val paragraphIDFields = new StringNDVFieldPair("paragraphID", pd)
+    val issueIDFields = new StringSDVFieldPair("issueID", sd, pd, ad, id) // <issue ID="N0176185" FAID="BBCN0001" COLID="C00000" contentType="Newspaper">
+    val newspaperIDFields = new StringSDVFieldPair("newspaperID", sd, pd, ad, id) // <newspaperID>
+    val articleIDFields = new StringSDVFieldPair("articleID", sd, pd, ad) // <id>WO2_B0897WEJOSAPO_1724_11_28-0001-001</id>
+    val paragraphIDFields = new StringNDVFieldPair("paragraphID", sd, pd)
+    val sentenceIDField = new NumericDocValuesField("sentenceID", 0)
+    sd.add(sentenceIDField)
     
-    val languageFields = new StringSDVFieldPair("language", pd, ad, id) // <language ocr="English" primary="Y">English</language>
-    val dayOfWeekFields = new StringSDVFieldPair("dayOfWeek", pd, ad, id) // <dw>Saturday</dw>
-    val issueNumberFields = new StringSDVFieldPair("issueNumber", pd, ad, id) //<is>317</is> 
-    val dateStartFields = new IntPointNDVFieldPair("dateStart", pd, ad, id) // <searchableDateStart>17851129</searchableDateStart>
-    val dateEndFields = new IntPointNDVFieldPair("dateEnd", pd, ad, id) // <searchableDateEnd>17851129</searchableDateEnd>
-    val authorFields = new TextSDVFieldPair("author", pd, ad) // <au_composed>Tom Whipple</au_composed>
-    val sectionFields = new StringSDVFieldPair("section", pd, ad) // <sc>A</sc>
+    val languageFields = new StringSDVFieldPair("language", sd, pd, ad, id) // <language ocr="English" primary="Y">English</language>
+    val dayOfWeekFields = new StringSDVFieldPair("dayOfWeek", sd, pd, ad, id) // <dw>Saturday</dw>
+    val issueNumberFields = new StringSDVFieldPair("issueNumber", sd, pd, ad, id) //<is>317</is>
+    val dateStartFields = new IntPointNDVFieldPair("dateStart", sd, pd, ad, id) // <searchableDateStart>17851129</searchableDateStart>
+    val dateEndFields = new IntPointNDVFieldPair("dateEnd", sd, pd, ad, id) // <searchableDateEnd>17851129</searchableDateEnd>
+    val authorFields = new TextSDVFieldPair("author", sd, pd, ad) // <au_composed>Tom Whipple</au_composed>
+    val sectionFields = new StringSDVFieldPair("section", sd, pd, ad) // <sc>A</sc>
     
-    val lengthFields = new IntPointNDVFieldPair("length", pd, ad, id)
-    val tokensFields = new IntPointNDVFieldPair("tokens", pd, ad, id)
+    val lengthFields = new IntPointNDVFieldPair("length", sd, pd, ad, id)
+    val tokensFields = new IntPointNDVFieldPair("tokens", sd, pd, ad, id)
 
     var pagesInArticle = 0
     var paragraphsInArticle = 0
+    var sentencesInArticle = 0
     var illustrationsInArticle = 0
     var illustrationsInIssue = 0
     var paragraphsInIssue = 0
+    var sentencesInIssue = 0
     var articlesInIssue = 0
     
     val paragraphsFields = new IntPointNDVFieldPair("paragraphs", ad, id)
+    val sentencesFields = new IntPointNDVFieldPair("sentences", pd, ad, id)
     val articlesFields = new IntPointNDVFieldPair("articles", id)
     val illustrationsFields = new IntPointNDVFieldPair("illustrations", ad, id)
     
@@ -140,19 +70,21 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     val issuePagesFields = new IntPointNDVFieldPair("pages", id)
     
     val textField = new Field("text", "", contentFieldType)
+    sd.add(textField)
     pd.add(textField)
     ad.add(textField)
     id.add(textField)
     
-    val supplementTitleFields = new TextSDVFieldPair("supplementTitle", pd, ad)
+    val supplementTitleFields = new TextSDVFieldPair("supplementTitle", sd, pd, ad)
     
-    val titleFields = new TextSDVFieldPair("title", pd, ad) // <ti>The Ducal Shopkeepers and Petty Hucksters</ti>
+    val titleFields = new TextSDVFieldPair("title", sd, pd, ad) // <ti>The Ducal Shopkeepers and Petty Hucksters</ti>
     
     val subtitles = new StringBuilder()
-    val subtitlesFields = new TextSDVFieldPair("subtitles", pd, ad) //   <ta>Sketch of the week</ta> <ta>Slurs and hyperbole vied with tosh to make the headlines, says Tom Whipple</ta>
+    val subtitlesFields = new TextSDVFieldPair("subtitles", sd, pd, ad) //   <ta>Sketch of the week</ta> <ta>Slurs and hyperbole vied with tosh to make the headlines, says Tom Whipple</ta>
     
-    val articleTypeFields = new StringSDVFieldPair("articleType", pd, ad) // <ct>Arts and entertainment</ct>
+    val articleTypeFields = new StringSDVFieldPair("articleType", sd, pd, ad) // <ct>Arts and entertainment</ct>
     def clearOptionalIssueFields() {
+      sentencesInIssue = 0
       paragraphsInIssue = 0
       articlesInIssue = 0
       illustrationsInIssue = 0
@@ -166,6 +98,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       id.removeFields("containsGraphicCaption")
     }
     def clearOptionalArticleFields() {
+      sentencesInArticle = 0
       pagesInArticle = 0
       paragraphsInArticle = 0
       illustrationsInArticle = 0
@@ -270,10 +203,28 @@ object BritishNewspaperIndexer extends OctavoIndexer {
   }
   
   private def processParagraph(paragraph: String, d: Reuse): Unit = {
+    d.sbi.setText(paragraph)
+    var start = d.sbi.first()
+    var end = d.sbi.next()
+    var csentences = 0
+    while (end != BreakIterator.DONE) {
+      val sentence = paragraph.substring(start,end)
+      d.sentenceIDField.setLongValue(sentences.incrementAndGet)
+      d.textField.setStringValue(sentence)
+      d.lengthFields.setValue(sentence.length)
+      d.tokensFields.setValue(getNumberOfTokens(sentence))
+      siw.addDocument(d.sd)
+      start = end
+      end = d.sbi.next()
+      csentences += 1
+    }
+    d.sentencesFields.setValue(csentences)
+    d.sentencesInIssue += csentences
+    d.sentencesInArticle += csentences
     d.articleContents.append(paragraph)
     d.articleContents.append("\n\n")
     d.issueContents.append(paragraph)
-    d.articleContents.append("\n\n")
+    d.issueContents.append("\n\n")
     d.paragraphIDFields.setValue(paragraphs.getAndIncrement)
     d.textField.setStringValue(paragraph)
     d.lengthFields.setValue(paragraph.length)
@@ -368,6 +319,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
         d.articlePagesFields.setValue(d.pagesInArticle)
         d.subtitlesFields.setValue(d.subtitles.toString)
         d.illustrationsFields.setValue(d.illustrationsInArticle)
+        d.sentencesFields.setValue(d.sentencesInArticle)
         aiw.addDocument(d.ad)
         d.articlesInIssue += 1
       case EvElemStart(_,"ct",_,_) => d.articleTypeFields.setValue(readContents)
@@ -395,14 +347,139 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     d.tokensFields.setValue(getNumberOfTokens(issue))
     d.paragraphsFields.setValue(d.paragraphsInIssue)
     d.illustrationsFields.setValue(d.illustrationsInIssue)
+    d.sentencesFields.setValue(d.sentencesInIssue)
+    d.articlesFields.setValue(d.articlesInIssue)
     iiw.addDocument(d.id)
     logger.info("File "+file+" processed.")
   }
 
+  class ArticleMetadata {
+    var id: String = null
+    var language: String = null
+    var sc: String = null
+    var pc: Int = 0
+    var ct: String = null
+    var ti: String = null
+    var ta: StringBuilder = new StringBuilder()
+    var supptitle: String = null
+    var au_composed: String = null
+    var illustrationsInArticle = 0
+    var ilCaptions= new scala.collection.mutable.HashMap[String,Int].withDefaultValue(0)
+    var ilTypes = new scala.collection.mutable.HashMap[String,Int].withDefaultValue(0)
+  }
+
+  private def index2(collectionID: String, textFile: File): Unit = {
+    val metadataFile = new File(textFile.getPath.replace("_Text.xml","_Issue.xml"))
+    val d = tld.get
+    d.clearOptionalIssueFields()
+    d.collectionIDFields.setValue(collectionID)
+    implicit val metadataXML = getXMLEventReaderWithCorrectEncoding(metadataFile)
+    val amm = new scala.collection.mutable.HashMap[String,ArticleMetadata]
+    var am: ArticleMetadata = null
+    var articlesInIssue = 0
+    while (metadataXML.hasNext) metadataXML.next match {
+      case EvElemStart(_,"PSMID",_,_) =>
+        val psmID = readContents
+        d.issueIDFields.setValue(psmID.substring(psmID.lastIndexOf('-')))
+      case EvElemStart(_,"newspaperID",_,_) => d.newspaperIDFields.setValue("NICNF0"+readContents)
+      case EvElemStart(_,"language",_,_) => d.languageFields.setValue(readContents)
+      case EvElemStart(_,"dw",_,_) => d.dayOfWeekFields.setValue(readContents) // maybe isn't there?
+      case EvElemStart(_,"is",_,_) => d.issueNumberFields.setValue(readContents)
+      case EvElemStart(_,"ip",_,_) => d.issuePagesFields.setValue(readContents.toInt) // not pc
+      case EvElemStart(_,"searchableDateStart",_,_) =>
+        val date = readContents.toInt
+        d.dateStartFields.setValue(date)
+        d.dateEndFields.setValue(date)
+      case EvElemStart(_,"searchableDateEnd",_,_) => d.dateEndFields.setValue(readContents.toInt)
+      case EvElemStart(_,"article",_,_) => am = new ArticleMetadata
+      case EvElemStart(_,"id",_,_) => am.id = readContents
+      case EvElemStart(_,"au_composed",_,_) => am.au_composed = readContents
+      case EvElemStart(_,"sc",_,_) => am.sc = readContents
+      case EvElemStart(_,"supptitle",_,_) => am.supptitle = readContents
+      case EvElemStart(_,"ti",_,_) => am.ti = readContents
+      case EvElemStart(_,"ta",_,_) =>
+        am.ta.append(readContents)
+        am.ta.append("\n\n")
+      case EvElemStart(_,"il",attrs,_) =>
+        am.illustrationsInArticle += 1
+        d.illustrationsInIssue += 1
+        attrs("type").headOption.foreach(n =>
+          am.ilTypes.put(n.text, am.ilTypes(n.text) + 1)
+        )
+        val c = readContents
+        if (!c.isEmpty)
+          am.ilCaptions.put(c, am.ilCaptions(c) + 1)
+      case EvElemStart(_,"pc",_,_) => am.pc = readContents.toInt
+      case EvElemEnd(_,"article") =>
+        amm.put(am.id, am)
+        articlesInIssue += 1
+      case EvElemStart(_,"ct",_,_) => am.ct = readContents
+      case _ =>
+    }
+    implicit val xml = getXMLEventReaderWithCorrectEncoding(textFile)
+    while (xml.hasNext) xml.next match {
+      case EvElemStart(_,"artInfo",attrs,_) =>
+        d.clearOptionalArticleFields()
+        am = amm(attrs("id")(0).text)
+        if (am.language != null) d.languageFields.setValue(am.language)
+        if (am.sc != null) d.sectionFields.setValue(am.sc)
+        d.articlePagesFields.setValue(am.pc)
+        if (am.ct != null) d.articleTypeFields.setValue(am.ct)
+        if (am.ti != null) d.titleFields.setValue(am.ti)
+        if (!am.ta.isEmpty) d.subtitlesFields.setValue(am.ta.toString)
+        if (am.supptitle != null) d.supplementTitleFields.setValue(am.supptitle)
+        if (am.au_composed != null) d.authorFields.setValue(am.au_composed)
+        d.illustrationsFields.setValue(am.illustrationsInArticle)
+        for (
+          (itype,times) <- am.ilTypes;
+          _ <- 0.until(times)
+        ) {
+          val f = new Field("containsGraphicOfType", itype, notStoredStringFieldWithTermVectors)
+          d.id.add(f)
+          d.ad.add(f)
+        }
+        for (
+          (c,times) <- am.ilCaptions;
+          _ <- 0.until(times)
+        ) {
+          val f = new Field("containsGraphicCaption", c, normsOmittingStoredTextField)
+          d.id.add(f)
+          d.ad.add(f)
+        }
+      case EvElemStart(_,"ocrText",_,_) =>
+        for (paragraph <- readContents(xml).split("\n")) processParagraph(paragraph.trim, d)
+      case EvElemEnd(_,"article") =>
+        val article = d.articleContents.toString
+        d.textField.setStringValue(article)
+        d.lengthFields.setValue(article.length)
+        d.tokensFields.setValue(getNumberOfTokens(article))
+        d.paragraphsFields.setValue(d.paragraphsInArticle)
+        d.articlePagesFields.setValue(d.pagesInArticle)
+        d.subtitlesFields.setValue(d.subtitles.toString)
+        d.illustrationsFields.setValue(d.illustrationsInArticle)
+        d.sentencesFields.setValue(d.sentencesInArticle)
+        aiw.addDocument(d.ad)
+        d.articlesInIssue += 1
+      case _ =>
+    }
+    val issue = d.issueContents.toString
+    d.textField.setStringValue(issue)
+    d.lengthFields.setValue(issue.length)
+    d.tokensFields.setValue(getNumberOfTokens(issue))
+    d.paragraphsFields.setValue(d.paragraphsInIssue)
+    d.illustrationsFields.setValue(d.illustrationsInIssue)
+    d.sentencesFields.setValue(d.sentencesInIssue)
+    d.articlesFields.setValue(d.articlesInIssue)
+    iiw.addDocument(d.id)
+    logger.info("File "+textFile+" processed.")
+  }
+
+  var siw: IndexWriter = null.asInstanceOf[IndexWriter]
   var piw: IndexWriter = null.asInstanceOf[IndexWriter]
   var aiw: IndexWriter = null.asInstanceOf[IndexWriter]
   var iiw: IndexWriter = null.asInstanceOf[IndexWriter]
-  
+
+  val ss = new Sort(new SortField("issueID",SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG))
   val ps = new Sort(new SortField("issueID",SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG))
   val as = new Sort(new SortField("issueID",SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING))
   val is = new Sort(new SortField("issueID",SortField.Type.STRING))
@@ -411,34 +488,43 @@ object BritishNewspaperIndexer extends OctavoIndexer {
   
   def main(args: Array[String]): Unit = {
     val opts = new AOctavoOpts(args) {
+      val spostings = opt[String](default = Some("blocktree"))
       val ppostings = opt[String](default = Some("blocktree"))
       val ipostings = opt[String](default = Some("blocktree"))
       val apostings = opt[String](default = Some("blocktree"))
       verify()
     }
     if (!opts.onlyMerge()) {
-      piw = iw(opts.index()+"/pindex",ps,opts.indexMemoryMb() / 3)
-      aiw = iw(opts.index()+"/aindex",as,opts.indexMemoryMb() / 3)
-      iiw = iw(opts.index()+"/iindex",is,opts.indexMemoryMb() / 3)
+      siw = iw(opts.index()+"/sindex",ss,opts.indexMemoryMb() / 4)
+      piw = iw(opts.index()+"/pindex",ps,opts.indexMemoryMb() / 4)
+      aiw = iw(opts.index()+"/aindex",as,opts.indexMemoryMb() / 4)
+      iiw = iw(opts.index()+"/iindex",is,opts.indexMemoryMb() / 4)
       feedAndProcessFedTasksInParallel(() =>
-        opts.directories().toStream.flatMap(p => {
+        opts.directories().foreach(p => {
           val parts = p.split(':')
-          getFileTree(new File(parts(0))).map((parts(1),_))
-        }).filter(_._2.getName.endsWith(".xml")).foreach(pair => addTask(pair._2.getPath, () => index(pair._1,pair._2)))
+          if (parts.length == 2)
+            getFileTree(new File(parts(0))).filter(_.getName.endsWith(".xml")).foreach(f => addTask(f.getPath, () => index(parts(1),f)))
+          else
+            getFileTree(new File(parts(0))).filter(_.getName.endsWith("_Text.xml")).foreach(f => addTask(f.getPath, () => index2(parts(1),f)))
+        })
       )
     }
     waitForTasks(
       runSequenceInOtherThread(
+        () => close(siw),
+        () => merge(opts.index()+"/sindex", ss,opts.indexMemoryMb() / 4, toCodec(opts.spostings(), postingsFormats))
+      ),
+      runSequenceInOtherThread(
         () => close(piw), 
-        () => merge(opts.index()+"/pindex", ps,opts.indexMemoryMb() / 3, toCodec(opts.ppostings(), postingsFormats))
+        () => merge(opts.index()+"/pindex", ps,opts.indexMemoryMb() / 4, toCodec(opts.ppostings(), postingsFormats))
       ),
       runSequenceInOtherThread(
         () => close(aiw), 
-        () => merge(opts.index()+"/aindex", as,opts.indexMemoryMb() / 3, toCodec(opts.apostings(), postingsFormats))
+        () => merge(opts.index()+"/aindex", as,opts.indexMemoryMb() / 4, toCodec(opts.apostings(), postingsFormats))
       ),
       runSequenceInOtherThread(
         () => close(iiw), 
-        () => merge(opts.index()+"/iindex", is,opts.indexMemoryMb() / 3, toCodec(opts.ipostings(), postingsFormats))
+        () => merge(opts.index()+"/iindex", is,opts.indexMemoryMb() / 4, toCodec(opts.ipostings(), postingsFormats))
       )
     )
   }

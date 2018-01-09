@@ -35,8 +35,8 @@ class ParallelProcessor extends LazyLogging {
   /** helper function to get a recursive stream of files for a directory */
   def getFileTree(f: File): Stream[File] =
     f #:: (if (f.isDirectory) f.listFiles().sorted.toStream.flatMap(getFileTree)
-      else Stream.empty)
-      
+    else Stream.empty)
+
   def getFileTreeSize(path: String): Long = getFileTree(new File(path)).foldLeft(0l)((s,f) => s+f.length)    
   
   def getStackTraceAsString(t: Throwable) = {

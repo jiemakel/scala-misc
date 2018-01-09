@@ -1,6 +1,8 @@
 import java.io.{File, FileInputStream, InputStreamReader}
+import java.nio.ByteBuffer
 import java.util.zip.GZIPInputStream
 
+import com.sleepycat.je._
 import org.apache.lucene.document.{Document, Field}
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.search.{Sort, SortField}
@@ -14,6 +16,16 @@ import scala.util.Try
 object ECCOClusterIndexer extends OctavoIndexer {
   
   class Reuse {
+    val keya = new Array[Byte](java.lang.Long.BYTES+java.lang.Integer.BYTES*2)
+    val dkey = new DatabaseEntry(keya)
+    val dval = new DatabaseEntry
+    val btckeya = new Array[Byte](java.lang.Long.BYTES)
+    val btckbb = ByteBuffer.wrap(btckeya)
+    val dbtckey = new DatabaseEntry(btckeya)
+    val btcvala = new Array[Byte](java.lang.Integer.BYTES*3)
+    val btcvbb = ByteBuffer.wrap(btcvala)
+    val dbtcval = new DatabaseEntry(btcvala)
+    val kbb = ByteBuffer.wrap(keya)
     val d = new Document()
     val clusterIDFields = new StringNDVFieldPair("clusterID", d)
     val avgLengthFields = new IntPointNDVFieldPair("avgLength", d)
@@ -70,6 +82,22 @@ object ECCOClusterIndexer extends OctavoIndexer {
             }
             token = p.nextToken
           }
+          val r = tld.get
+          cluster.matches.foreach(cm => {
+            r.kbb.putLong(0, cm.documentID.toLong)
+            r.kbb.putInt(java.lang.Long.BYTES, cluster.id)
+            r.kbb.putInt(java.lang.Long.BYTES+java.lang.Integer.BYTES, cm.startIndex)
+            if (db.get(null, r.dkey, r.dval, LockMode.DEFAULT) == OperationStatus.SUCCESS) {
+              val vbb = ByteBuffer.wrap(r.dval.getData)
+              cm.startIndex = vbb.getInt
+              cm.endIndex = vbb.getInt
+            } else logger.warn("Did not find cluster mapping info for cluster "+cm.documentID+"/"+cm.startIndex+"/"+cm.endIndex)
+            r.btckbb.putLong(0, cm.documentID.toLong)
+            r.btcvbb.putInt(0, cm.startIndex)
+            r.btcvbb.putInt(java.lang.Integer.BYTES, cm.endIndex)
+            r.btcvbb.putInt(2*java.lang.Integer.BYTES, cluster.id)
+            bookToClusterDb.put(null, r.dbtckey, r.dbtcval)
+          })
           index(cluster)
         case _ =>
       }
@@ -117,17 +145,37 @@ object ECCOClusterIndexer extends OctavoIndexer {
   }
   
   val cs = new Sort(new SortField("clusterID",SortField.Type.INT))
-  
+
+  var bookToClusterDb: Database = null
+  var db: Database = null
+
   def main(args: Array[String]): Unit = {
     val opts = new AOctavoOpts(args) {
       val postings = opt[String](default = Some("blocktree"))
+      val mappingsDb = opt[String](required = true)
+      val bookToClusterDb = opt[String](required = true)
       verify()
     }
-    diw = iw(opts.index()+"/dindex", cs, opts.indexMemoryMb())
+    val envDir = new File(opts.mappingsDb())
+    envDir.mkdirs()
+    val env = new Environment(envDir,new EnvironmentConfig().setAllowCreate(false).setTransactional(false).setSharedCache(true))
+    env.setMutableConfig(env.getMutableConfig.setCacheSize(opts.indexMemoryMb()*1024*1024/2))
+    db = env.openDatabase(null, "sampleDatabase", new DatabaseConfig().setAllowCreate(false).setTransactional(false))
+    val btcenvDir = new File(opts.bookToClusterDb())
+    btcenvDir.mkdirs()
+    val btcenv = new Environment(btcenvDir,new EnvironmentConfig().setAllowCreate(true).setTransactional(false).setSharedCache(true).setConfigParam(EnvironmentConfig.LOG_FILE_MAX,"1073741824"))
+    btcenv.setMutableConfig(btcenv.getMutableConfig.setCacheSize(opts.indexMemoryMb()*1024*1024/2))
+    bookToClusterDb = btcenv.openDatabase(null, "bookToCluster", new DatabaseConfig().setAllowCreate(true).setDeferredWrite(true).setTransactional(false).setSortedDuplicates(true))
+    diw = iw(opts.index()+"/dindex", cs, opts.indexMemoryMb()/2)
     feedAndProcessFedTasksInParallel(() =>
       opts.directories().toStream.flatMap(n => getFileTree(new File(n))).filter(_.getName.endsWith(".gz")).foreach(file => addTask(file.getPath, () => index(file)))
      )
+    bookToClusterDb.close()
+    btcenv.close()
+    db.close()
+    env.close()
     close(diw)
     merge(opts.index()+"/dindex", cs, opts.indexMemoryMb(), toCodec(opts.postings(), termVectorFields))
+
   }
 }

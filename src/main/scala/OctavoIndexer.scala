@@ -1,6 +1,6 @@
 import java.nio.file.FileSystems
 
-import fi.seco.lucene.{OrdExposingFSTOrdPostingsFormat, PerFieldPostingsFormatOrdTermVectorsCodec}
+import fi.seco.lucene.{OrdExposingFSTOrdPostingsFormat, Lucene70PerFieldPostingsFormatOrdTermVectorsCodec}
 import org.apache.lucene.analysis.CharArraySet
 import org.apache.lucene.analysis.standard.StandardAnalyzer
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
@@ -212,7 +212,7 @@ class OctavoIndexer extends ParallelProcessor {
   }
   
   def toCodec(postingsFormatS: String, perFieldPostings: Seq[String]): Codec = {
-    val finalCodec = new PerFieldPostingsFormatOrdTermVectorsCodec()
+    val finalCodec = new Lucene70PerFieldPostingsFormatOrdTermVectorsCodec()
     val postingsFormat = postingsFormatS match {
       case "fst" => new OrdExposingFSTOrdPostingsFormat()
       case "blocktree" => new BlockTreeOrdsPostingsFormat()
