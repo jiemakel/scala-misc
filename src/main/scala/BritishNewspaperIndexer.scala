@@ -339,7 +339,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
               processParagraph(paragraph, d)
             case None =>
           }
-          state.content.append(state.lastLine.map(_.word).mkString(" "))
+          if (state.lastLine != null) state.content.append(state.lastLine.map(_.word).mkString(" "))
           if (state.content.nonEmpty)
             processParagraph(state.content.toString, d)
           state.content.clear()
