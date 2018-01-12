@@ -14,7 +14,7 @@ object EEBOConverter extends ParallelProcessor {
 
   private def decodeEntity(entity: String): String = {
     XhtmlEntities.entMap.get(entity) match {
-      case Some(chr) => chr.toString()
+      case Some(chr) => chr.toString
       case None => eeboMap.getOrElse(entity, entity)
     }
   }
@@ -24,10 +24,10 @@ object EEBOConverter extends ParallelProcessor {
   private val paragraphElems = HashSet("P","AB","CLOSER","SP","STAGE","TABLE","LG","TRAILER","OPENER","FIGURE","LETTER","ARGUMENT","DATELINE","SIGNED","EPIGRAPH","GROUP","TEXT","BYLINE","POSTSCRIPT")
   private val lineElems = HashSet("L","ROW","SPEAKER","LB")
 
-  private def process(filePrefix: String, startDivLevel: Int, currentElem: String)(implicit xml: XMLEventReader): String = {
+    private def process(filePrefix: String, currentElem: String)(implicit xml: XMLEventReader): String = {
     val content = new StringBuilder()
     val divLevels = new ArrayBuffer[Int]()
-    var currentDivLevel = startDivLevel
+    var currentDivLevel = 0
     divLevels += currentDivLevel
     var break = false
     var listDepth = 0
@@ -37,18 +37,18 @@ object EEBOConverter extends ParallelProcessor {
       var addedNewLine = false
       xml.next match {
         case EvElemEnd(_, `currentElem`) => break = true
-        case EvElemStart(_, elem, _, _) if (ignoredElems.contains(elem)) =>
-        case EvElemEnd(_, elem) if (ignoredElems.contains(elem)) =>
-        case EvElemStart(_, elem, attrs,_) if (elem.startsWith("DIV")) => divLevels += currentDivLevel; currentDivLevel = elem.last.toString.toInt // TYPE, LANG, N
-        case EvElemEnd(_, elem) if (elem.startsWith("DIV")) =>
+        case EvElemStart(_, elem, _, _) if ignoredElems.contains(elem) =>
+        case EvElemEnd(_, elem) if ignoredElems.contains(elem) =>
+        case EvElemStart(_, elem, _,_) if elem.startsWith("DIV") => divLevels += currentDivLevel; currentDivLevel = elem.last.toString.toInt // TYPE, LANG, N
+        case EvElemEnd(_, elem) if elem.startsWith("DIV") =>
           divLevels.trimEnd(1)
           currentDivLevel = divLevels.last
           addedNewLine = true
-          if (content.length == 0 || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append('\n')
+          if (content.isEmpty || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append('\n')
         case EvElemStart(_, "HEAD",_,_) => content.append("#" * currentDivLevel +" ")
         case EvElemEnd(_, "HEAD") =>
           addedNewLine = true
-          if (content.length == 0 || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append('\n')
+          if (content.isEmpty || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append('\n')
         case EvElemStart(_, "ARGUMENT",_,_) => content.append("## ")
         case EvElemStart(_, "FRONT",_,_) =>
         case EvElemEnd(_, "FRONT") =>
@@ -58,12 +58,12 @@ object EEBOConverter extends ParallelProcessor {
         case EvElemEnd(_, "BACK") =>
         case EvElemStart(_, "HI", _, _) => content.append("*")
         case EvElemEnd(_, "HI") => content.append("*")
-        case EvElemStart(_, "PB", attrs, _) => //MS="y" REF="48" N="90"
+        case EvElemStart(_, "PB", _, _) => //MS="y" REF="48" N="90"
         case EvElemEnd(_, "PB") =>
           addedNewLine = true
-        case EvElemStart(_, elem, attrs, _) if (elem=="NOTE" || elem=="HEADNOTE" || elem=="TAILNOTE" || elem=="DEL" || elem=="CORR") =>
+        case EvElemStart(_, elem, _, _) if elem == "NOTE" || elem == "HEADNOTE" || elem == "TAILNOTE" || elem == "DEL" || elem == "CORR" =>
           val index = content.length - 1
-          val note = process(filePrefix+"-"+elem+"-at-"+index,currentDivLevel, elem)
+          val note = process(filePrefix+"-"+elem+"-at-"+index, elem)
           val sw = new PrintWriter(new File(filePrefix+"-"+elem+"-at-"+index+".txt"))
           sw.append(note)
           sw.close()
@@ -73,23 +73,23 @@ object EEBOConverter extends ParallelProcessor {
         case EvElemEnd(_, "LIST") =>
           listDepth -= 1
           addedNewLine = true
-          if (content.length == 0 || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append('\n')
-        case EvElemStart(_, elem,_,_) if (paragraphElems.contains(elem)) =>
+          if (content.isEmpty || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append('\n')
+        case EvElemStart(_, elem,_,_) if paragraphElems.contains(elem) =>
           if (elem=="TABLE") inTable = true
           addedNewLine = true
-          if (content.length > 0) {
+          if (content.nonEmpty) {
             if (content.last != '\n') content.append("\n\n") else if (content.length < 2 || content.charAt(content.length - 2) != '\n') content.append('\n')
           }
-        case EvElemEnd(_, elem) if (paragraphElems.contains(elem)) =>
+        case EvElemEnd(_, elem) if paragraphElems.contains(elem) =>
           if (elem=="TABLE") inTable = false
           addedNewLine = true
-          if (content.length == 0 || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append('\n')
-        case EvElemStart(_, elem,_,_) if (lineElems.contains(elem)) =>
+          if (content.isEmpty || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append('\n')
+        case EvElemStart(_, elem,_,_) if lineElems.contains(elem) =>
           addedNewLine = true
-          if (content.length > 0 && content.last != '\n') content.append('\n')
-        case EvElemEnd(_, elem) if (lineElems.contains(elem)) =>
+          if (content.nonEmpty && content.last != '\n') content.append('\n')
+        case EvElemEnd(_, elem) if lineElems.contains(elem) =>
           addedNewLine = true
-          if (content.length == 0 || content.last != '\n') content.append('\n')
+          if (content.isEmpty || content.last != '\n') content.append('\n')
         case EvElemStart(_, "CELL",_,_) => content.append(" | ")
         case EvElemEnd(_, "CELL") => content.append(" | ")
         case EvElemStart(_, "ITEM",_,_) =>
@@ -99,12 +99,11 @@ object EEBOConverter extends ParallelProcessor {
         case EvElemEnd(_, "LABEL") =>
           addedNewLine = true
           if (listDepth == 0) {
-            if (content.length == 0 || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append("\n")
-          } else if (content.length == 0 || content.last != '\n') content.append("\n")
-        case EvText(text) => {
+            if (content.isEmpty || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append("\n")
+          } else if (content.isEmpty || content.last != '\n') content.append("\n")
+        case EvText(text) =>
           val text2 = if (inTable) text.replaceAllLiterally("\n","") else if (lastAddedNewLine && text.head=='\n') text.tail else text
           content.append(text2.replaceAllLiterally("|","").replaceAllLiterally("∣",""))
-        }
         case er: EvEntityRef => content.append(decodeEntity(er.entity))
         case EvComment(_) =>
         case ent => logger.warn("Unknown event in "+filePrefix+" : "+ent)
@@ -122,7 +121,7 @@ object EEBOConverter extends ParallelProcessor {
       case EvElemStart(_, "TEXT",_,_) => break = true
       case _ =>
     }
-    val content = process(file.getAbsolutePath, 0, "TEXT")
+    val content = process(file.getAbsolutePath, "TEXT")
     val cw = new PrintWriter(new File(file.getAbsolutePath+".txt"))
     cw.append(content)
     cw.close()

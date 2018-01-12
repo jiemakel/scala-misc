@@ -1,35 +1,23 @@
+import java.io.{File, PrintWriter, StringWriter}
+import java.util.concurrent.{ArrayBlockingQueue, ForkJoinPool}
+
 import com.typesafe.scalalogging.LazyLogging
-import scala.concurrent.ExecutionContext
-import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.ArrayBlockingQueue
-import java.io.File
-import java.io.StringWriter
-import java.io.PrintWriter
-import scala.concurrent.Future
-import scala.concurrent.Promise
-import scala.util.Failure
-import scala.util.Success
-import scala.concurrent.Await
+
+import scala.concurrent.{Await, ExecutionContext, Future, Promise}
 import scala.concurrent.duration.Duration
-import java.util.concurrent.ForkJoinPool
-import java.util.concurrent.ForkJoinPool.ForkJoinWorkerThreadFactory
-import java.util.concurrent.ForkJoinWorkerThread
-import scala.util.Try
+import scala.util.{Failure, Success, Try}
 
 
 class ParallelProcessor extends LazyLogging {
   
   private val numWorkers = sys.runtime.availableProcessors
-  val availableMemory = Runtime.getRuntime().maxMemory() - (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory())
-  private val queueCapacity = 1000
-  private val fjp = new ForkJoinPool(numWorkers, new ForkJoinWorkerThreadFactory() {
-     override def newThread(pool: ForkJoinPool): ForkJoinWorkerThread = {
-       val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
-       worker.setName("indexing-worker-" + worker.getPoolIndex())
-       worker
-     }
-   }, null, true)
+  val availableMemory = Runtime.getRuntime.maxMemory - (Runtime.getRuntime.totalMemory - Runtime.getRuntime.freeMemory)
+  private val queueCapacity = 512
+  private val fjp = new ForkJoinPool(numWorkers, (pool: ForkJoinPool) => {
+    val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
+    worker.setName("indexing-worker-" + worker.getPoolIndex)
+    worker
+  }, null, true)
   private val indexingTaskExecutionContext = ExecutionContext.fromExecutorService(fjp)
   
   /** helper function to get a recursive stream of files for a directory */
@@ -101,7 +89,7 @@ class ParallelProcessor extends LazyLogging {
     indexingTaskExecutionContext.shutdown()
   }
   
-  def runSequenceInOtherThread(tasks: () => Unit*): Future[Unit] = Future {
+  def runSequenceInOtherThread(tasks: (() => Unit)*): Future[Unit] = Future {
     for (task <- tasks) task()
   }(ExecutionContext.Implicits.global)
   

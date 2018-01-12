@@ -132,7 +132,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       case EvComment(_) => 
       case EvElemEnd(_,_) => break = true 
     }
-    return content.toString.trim
+    content.toString.trim
   }
   
   case class Word(midX: Int, startX: Int, endX: Int, startY: Int, endY: Int, word: String) extends Ordered[Word] {
@@ -142,17 +142,17 @@ object BritishNewspaperIndexer extends OctavoIndexer {
   class State {
     val content = new StringBuilder()
     var currentLine: ArrayBuffer[Word] = new ArrayBuffer //midx,startx,endx,starty,endy,content  
-    var lastLine: ArrayBuffer[Word] = null
+    var lastLine: ArrayBuffer[Word] = _
     def testParagraphBreakAtEndOfLine(guessParagraphs: Boolean): Option[String] = {
       var ret: Option[String] = None
       if (lastLine != null) { // we have two lines, check for a paragraph change between them.
         content.append(lastLine.map(_.word).mkString(" "))
         if (guessParagraphs) {
-          val (lastSumEndY, lastSumHeight) = lastLine.foldLeft((0,0))((t,v) => (t._1 + v.endY, t._2 + (v.endY - v.startY)))
-          val lastAvgHeight = lastSumHeight / lastLine.length
+          val (lastSumEndY, _) = lastLine.foldLeft((0,0))((t,v) => (t._1 + v.endY, t._2 + (v.endY - v.startY)))
+          //val lastAvgHeight = lastSumHeight / lastLine.length
           val lastAvgEndY = lastSumEndY / lastLine.length
-          val (currentSumStartY, currentSumHeight) = currentLine.foldLeft((0,0))((t,v) => (t._1 + v.startY, t._2 + (v.endY - v.startY)))
-          val currentAvgHeight = currentSumHeight / currentLine.length
+          val (currentSumStartY, _) = currentLine.foldLeft((0,0))((t,v) => (t._1 + v.startY, t._2 + (v.endY - v.startY)))
+          //val currentAvgHeight = currentSumHeight / currentLine.length
           val currentAvgStartY = currentSumStartY / currentLine.length
           
           val lastMaxHeight = lastLine.map(p => p.endY - p.startY).max
@@ -184,21 +184,21 @@ object BritishNewspaperIndexer extends OctavoIndexer {
   
   private def readNextWordPossiblyEmittingAParagraph(attrs: MetaData, state: State, guessParagraphs: Boolean)(implicit xml: XMLEventReader): Option[String] = {
     val word = readContents
-    val pos = attrs("pos")(0).text.split(",")
-    val curStartX = pos(0).toInt
-    val curEndX = pos(2).toInt
+    val posa = attrs("pos").head.text.split(",")
+    val curStartX = posa(0).toInt
+    val curEndX = posa(2).toInt
     val curMidX = (curStartX + curEndX) / 2
-    val curStartY = pos(1).toInt
-    val curEndY = pos(3).toInt
-    val curHeight = curEndY - curStartY
+    val curStartY = posa(1).toInt
+    val curEndY = posa(3).toInt
+    //val curHeight = curEndY - curStartY
     var ret: Option[String] = None 
-    if (!state.currentLine.isEmpty) {
-      var pos = Searching.search(state.currentLine).search(Word(curMidX,-1,-1,-1,-1,"")).insertionPoint - 1
-      val Word(_,_,_,lastStartY, lastEndY, _) = state.currentLine(if (pos == -1) 0 else pos)
+    if (state.currentLine.nonEmpty) {
+      val pos = Searching.search(state.currentLine).search(Word(curMidX,-1,-1,-1,-1,"")).insertionPoint - 1
+      val Word(_,_,_,_, lastEndY, _) = state.currentLine(if (pos == -1) 0 else pos)
       if (curStartY > lastEndY || curMidX < state.currentLine.last.midX) // new line or new paragraph
         ret = state.testParagraphBreakAtEndOfLine(guessParagraphs)
-      state.currentLine += (Word(curMidX, curStartX, curEndX, curStartY, curEndY, word.toString))
-    } else state.currentLine += (Word(curMidX, curStartX, curEndX, curStartY, curEndY, word.toString))
+      state.currentLine += Word(curMidX, curStartX, curEndX, curStartY, curEndY, word.toString)
+    } else state.currentLine += Word(curMidX, curStartX, curEndX, curStartY, curEndY, word.toString)
     ret
   }
   
@@ -248,7 +248,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       second = fis.read()
       if (first == '<' && second=='!') while (fis.read()!='\n') {}
       if (first == '<' && (second=='?')) {
-        for (i <- 0 until 28) fis.read()
+        for (_ <- 0 until 28) fis.read()
         val es = new StringBuilder()
         var b = fis.read
         while (b!='"') {
@@ -271,7 +271,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     implicit val xml = getXMLEventReaderWithCorrectEncoding(file)
     val state = new State()
     while (xml.hasNext) xml.next match {
-      case EvElemStart(_,"issue",attrs,_) => d.issueIDFields.setValue(attrs("ID")(0).text)
+      case EvElemStart(_,"issue",attrs,_) => d.issueIDFields.setValue(attrs("ID").head.text)
       case EvElemStart(_,"newspaperID",_,_) => d.newspaperIDFields.setValue(readContents)
       case EvElemStart(_,"language",_,_) => d.languageFields.setValue(readContents)
       case EvElemStart(_,"dw",_,_) => d.dayOfWeekFields.setValue(readContents)
@@ -323,18 +323,18 @@ object BritishNewspaperIndexer extends OctavoIndexer {
         aiw.addDocument(d.ad)
         d.articlesInIssue += 1
       case EvElemStart(_,"ct",_,_) => d.articleTypeFields.setValue(readContents)
-      case EvElemStart(_,"wd",attrs,_) => readNextWordPossiblyEmittingAParagraph(attrs, state, true) match {
+      case EvElemStart(_,"wd",attrs,_) => readNextWordPossiblyEmittingAParagraph(attrs, state, guessParagraphs = true) match {
         case Some(paragraph) => processParagraph(paragraph, d)
         case None => 
       }
       case EvElemEnd(_,"p") => 
-        state.testParagraphBreakAtEndOfLine(true) match {
+        if (state.currentLine.nonEmpty) state.testParagraphBreakAtEndOfLine(true) match {
           case Some(paragraph) => 
             processParagraph(paragraph, d)
           case None => 
         }
         state.content.append(state.lastLine.map(_.word).mkString(" "))
-        if (state.content.length>0)
+        if (state.content.nonEmpty)
           processParagraph(state.content.toString, d)
         state.content.clear()
         state.lastLine = null
@@ -354,15 +354,15 @@ object BritishNewspaperIndexer extends OctavoIndexer {
   }
 
   class ArticleMetadata {
-    var id: String = null
-    var language: String = null
-    var sc: String = null
+    var id: String = _
+    var language: String = _
+    var sc: String = _
     var pc: Int = 0
-    var ct: String = null
-    var ti: String = null
+    var ct: String = _
+    var ti: String = _
     var ta: StringBuilder = new StringBuilder()
-    var supptitle: String = null
-    var au_composed: String = null
+    var supptitle: String = _
+    var au_composed: String = _
     var illustrationsInArticle = 0
     var ilCaptions= new scala.collection.mutable.HashMap[String,Int].withDefaultValue(0)
     var ilTypes = new scala.collection.mutable.HashMap[String,Int].withDefaultValue(0)
@@ -420,13 +420,13 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     while (xml.hasNext) xml.next match {
       case EvElemStart(_,"artInfo",attrs,_) =>
         d.clearOptionalArticleFields()
-        am = amm(attrs("id")(0).text)
+        am = amm(attrs("id").head.text)
         if (am.language != null) d.languageFields.setValue(am.language)
         if (am.sc != null) d.sectionFields.setValue(am.sc)
         d.articlePagesFields.setValue(am.pc)
         if (am.ct != null) d.articleTypeFields.setValue(am.ct)
         if (am.ti != null) d.titleFields.setValue(am.ti)
-        if (!am.ta.isEmpty) d.subtitlesFields.setValue(am.ta.toString)
+        if (am.ta.nonEmpty) d.subtitlesFields.setValue(am.ta.toString)
         if (am.supptitle != null) d.supplementTitleFields.setValue(am.supptitle)
         if (am.au_composed != null) d.authorFields.setValue(am.au_composed)
         d.illustrationsFields.setValue(am.illustrationsInArticle)
@@ -448,7 +448,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
         }
       case EvElemStart(_,"ocrText",_,_) =>
         for (paragraph <- readContents(xml).split("\n")) processParagraph(paragraph.trim, d)
-      case EvElemEnd(_,"article") =>
+      case EvElemEnd(_,"artInfo") =>
         val article = d.articleContents.toString
         d.textField.setStringValue(article)
         d.lengthFields.setValue(article.length)
