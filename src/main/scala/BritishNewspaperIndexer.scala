@@ -132,7 +132,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       case EvComment(_) => 
       case EvElemEnd(_,_) => break = true 
     }
-    content.toString.trim
+    content.toString
   }
   
   case class Word(midX: Int, startX: Int, endX: Int, startY: Int, endY: Int, word: String) extends Ordered[Word] {
@@ -161,19 +161,24 @@ object BritishNewspaperIndexer extends OctavoIndexer {
           val (lastSumWidth, lastSumChars) = lastLine.foldLeft((0,0))((t,v) => (t._1 + (v.endX - v.startX), t._2 + v.word.length))
           val (currentSumWidth, currentSumChars) = currentLine.foldLeft((0,0))((t,v) => (t._1 + (v.endX - v.startX), t._2 + v.word.length))
           
-          val lastAvgCharWidth = lastSumWidth / lastSumChars
-          val currentAvgCharWidth = currentSumWidth / currentSumChars
+          if (lastSumChars == 0 || currentSumChars == 0) {
+            logger.warn("Encountered a line without content when comparing ("+lastLine+","+currentLine+"), cannot determine if there should be a paragraph break")
+            content.append('\n')
+          } else {
+            val lastAvgCharWidth = lastSumWidth / lastSumChars
+            val currentAvgCharWidth = currentSumWidth / currentSumChars
 
-          val lastStartX = lastLine(0).startX
-          val currentStartX = currentLine(0).startX
-          if (
-            (currentAvgStartY - lastAvgEndY > 0.90*math.min(lastMaxHeight, currentMaxHeight)) || // spacing 
-            (currentStartX > lastStartX + 1.5*math.min(lastAvgCharWidth,currentAvgCharWidth)) || // indentation 
-            (lastStartX > currentStartX + 2*math.min(lastAvgCharWidth,currentAvgCharWidth)) // catch edge cases
-          ) {
-            ret = Some(content.toString)
-            content.clear()
-          } else content.append('\n')
+            val lastStartX = lastLine(0).startX
+            val currentStartX = currentLine(0).startX
+            if (
+              (currentAvgStartY - lastAvgEndY > 0.90 * math.min(lastMaxHeight, currentMaxHeight)) || // spacing
+                (currentStartX > lastStartX + 1.5 * math.min(lastAvgCharWidth, currentAvgCharWidth)) || // indentation
+                (lastStartX > currentStartX + 2 * math.min(lastAvgCharWidth, currentAvgCharWidth)) // catch edge cases
+            ) {
+              ret = Some(content.toString)
+              content.clear()
+            } else content.append('\n')
+          }
         } else content.append('\n')
       }
       lastLine = currentLine
@@ -251,7 +256,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
         for (_ <- 0 until 28) fis.read()
         val es = new StringBuilder()
         var b = fis.read
-        while (b!='"') {
+        while (b!='"' && b!='\'') {
           es.append(b.toChar)
           b = fis.read()
         }
@@ -269,209 +274,90 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     d.clearOptionalIssueFields()
     d.collectionIDFields.setValue(collectionID)
     implicit val xml = getXMLEventReaderWithCorrectEncoding(file)
-    val state = new State()
-    while (xml.hasNext) xml.next match {
-      case EvElemStart(_,"issue",attrs,_) => d.issueIDFields.setValue(attrs("ID").head.text)
-      case EvElemStart(_,"newspaperID",_,_) => d.newspaperIDFields.setValue(readContents)
-      case EvElemStart(_,"language",_,_) => d.languageFields.setValue(readContents)
-      case EvElemStart(_,"dw",_,_) => d.dayOfWeekFields.setValue(readContents)
-      case EvElemStart(_,"is",_,_) => d.issueNumberFields.setValue(readContents)
-      case EvElemStart(_,"pc",_,_) => d.issuePagesFields.setValue(readContents.toInt)
-      case EvElemStart(_,"searchableDateStart",_,_) => 
-        val date = readContents.toInt
-        d.dateStartFields.setValue(date)
-        d.dateEndFields.setValue(date)
-      case EvElemStart(_,"searchableDateEnd",_,_) => d.dateEndFields.setValue(readContents.toInt)
-      case EvElemStart(_,"article",_,_) => d.clearOptionalArticleFields()
-      case EvElemStart(_,"id",_,_) => d.articleIDFields.setValue(readContents)
-      case EvElemStart(_,"au_composed",_,_) => d.authorFields.setValue(readContents)
-      case EvElemStart(_,"sc",_,_) => d.sectionFields.setValue(readContents)
-      case EvElemStart(_,"supptitle",_,_) => d.supplementTitleFields.setValue(readContents)
-      case EvElemStart(_,"ti",_,_) =>
-        val title = readContents
-        d.titleFields.setValue(title)
-        d.issueContents.append(title + "\n\n")
-      case EvElemStart(_,"ta",_,_) =>
-        val subtitle = readContents + "\n\n"
-        d.issueContents.append(subtitle)
-        d.subtitles.append(subtitle)
-      case EvElemStart(_,"il",attrs,_) =>
-        d.illustrationsInArticle += 1
-        d.illustrationsInIssue += 1
-        attrs("type").headOption.foreach(n => {
-          val f = new Field("containsGraphicOfType",n.text, notStoredStringFieldWithTermVectors)
-          d.id.add(f)
-          d.ad.add(f)
-        })
-        val c = readContents
-        if (!c.isEmpty) {
-          val f = new Field("containsGraphicCaption", c, normsOmittingStoredTextField)
-          d.id.add(f)
-          d.ad.add(f)
+    try {
+      val state = new State()
+      while (xml.hasNext) xml.next match {
+        case EvElemStart(_, "issue", attrs, _) => d.issueIDFields.setValue(attrs("ID").head.text)
+        case EvElemStart(_, "newspaperID", _, _) => d.newspaperIDFields.setValue(readContents)
+        case EvElemStart(_, "language", _, _) => d.languageFields.setValue(readContents)
+        case EvElemStart(_, "dw", _, _) => d.dayOfWeekFields.setValue(readContents)
+        case EvElemStart(_, "is", _, _) => d.issueNumberFields.setValue(readContents)
+        case EvElemStart(_, "pc", _, _) => d.issuePagesFields.setValue(readContents.toInt)
+        case EvElemStart(_, "searchableDateStart", _, _) =>
+          val date = readContents.toInt
+          d.dateStartFields.setValue(date)
+          d.dateEndFields.setValue(date)
+        case EvElemStart(_, "searchableDateEnd", _, _) => d.dateEndFields.setValue(readContents.toInt)
+        case EvElemStart(_, "article", _, _) => d.clearOptionalArticleFields()
+        case EvElemStart(_, "id", _, _) => d.articleIDFields.setValue(readContents)
+        case EvElemStart(_, "au_composed", _, _) => d.authorFields.setValue(readContents)
+        case EvElemStart(_, "sc", _, _) => d.sectionFields.setValue(readContents)
+        case EvElemStart(_, "supptitle", _, _) => d.supplementTitleFields.setValue(readContents)
+        case EvElemStart(_, "ti", _, _) =>
+          val title = readContents
+          d.titleFields.setValue(title)
+          d.issueContents.append(title + "\n\n")
+        case EvElemStart(_, "ta", _, _) =>
+          val subtitle = readContents + "\n\n"
+          d.issueContents.append(subtitle)
+          d.subtitles.append(subtitle)
+        case EvElemStart(_, "il", attrs, _) =>
+          d.illustrationsInArticle += 1
+          d.illustrationsInIssue += 1
+          attrs("type").headOption.foreach(n => {
+            val f = new Field("containsGraphicOfType", n.text, notStoredStringFieldWithTermVectors)
+            d.id.add(f)
+            d.ad.add(f)
+          })
+          val c = readContents
+          if (!c.isEmpty) {
+            val f = new Field("containsGraphicCaption", c, normsOmittingStoredTextField)
+            d.id.add(f)
+            d.ad.add(f)
+          }
+        case EvElemStart(_, "pi", _, _) => d.pagesInArticle += 1
+        case EvElemEnd(_, "article") =>
+          val article = d.articleContents.toString
+          d.textField.setStringValue(article)
+          d.lengthFields.setValue(article.length)
+          d.tokensFields.setValue(getNumberOfTokens(article))
+          d.paragraphsFields.setValue(d.paragraphsInArticle)
+          d.articlePagesFields.setValue(d.pagesInArticle)
+          d.subtitlesFields.setValue(d.subtitles.toString)
+          d.illustrationsFields.setValue(d.illustrationsInArticle)
+          d.sentencesFields.setValue(d.sentencesInArticle)
+          aiw.addDocument(d.ad)
+          d.articlesInIssue += 1
+        case EvElemStart(_, "ct", _, _) => d.articleTypeFields.setValue(readContents)
+        case EvElemStart(_, "wd", attrs, _) => readNextWordPossiblyEmittingAParagraph(attrs, state, guessParagraphs = true) match {
+          case Some(paragraph) => processParagraph(paragraph, d)
+          case None =>
         }
-      case EvElemStart(_,"pi",_,_) => d.pagesInArticle += 1
-      case EvElemEnd(_,"article") =>
-        val article = d.articleContents.toString
-        d.textField.setStringValue(article)
-        d.lengthFields.setValue(article.length)
-        d.tokensFields.setValue(getNumberOfTokens(article))
-        d.paragraphsFields.setValue(d.paragraphsInArticle)
-        d.articlePagesFields.setValue(d.pagesInArticle)
-        d.subtitlesFields.setValue(d.subtitles.toString)
-        d.illustrationsFields.setValue(d.illustrationsInArticle)
-        d.sentencesFields.setValue(d.sentencesInArticle)
-        aiw.addDocument(d.ad)
-        d.articlesInIssue += 1
-      case EvElemStart(_,"ct",_,_) => d.articleTypeFields.setValue(readContents)
-      case EvElemStart(_,"wd",attrs,_) => readNextWordPossiblyEmittingAParagraph(attrs, state, guessParagraphs = true) match {
-        case Some(paragraph) => processParagraph(paragraph, d)
-        case None => 
+        case EvElemEnd(_, "p") =>
+          if (state.currentLine.nonEmpty) state.testParagraphBreakAtEndOfLine(true) match {
+            case Some(paragraph) =>
+              processParagraph(paragraph, d)
+            case None =>
+          }
+          state.content.append(state.lastLine.map(_.word).mkString(" "))
+          if (state.content.nonEmpty)
+            processParagraph(state.content.toString, d)
+          state.content.clear()
+          state.lastLine = null
+          state.currentLine.clear
+        case _ =>
       }
-      case EvElemEnd(_,"p") => 
-        if (state.currentLine.nonEmpty) state.testParagraphBreakAtEndOfLine(true) match {
-          case Some(paragraph) => 
-            processParagraph(paragraph, d)
-          case None => 
-        }
-        state.content.append(state.lastLine.map(_.word).mkString(" "))
-        if (state.content.nonEmpty)
-          processParagraph(state.content.toString, d)
-        state.content.clear()
-        state.lastLine = null
-        state.currentLine.clear
-      case _ => 
-    }
-    val issue = d.issueContents.toString
-    d.textField.setStringValue(issue)
-    d.lengthFields.setValue(issue.length)
-    d.tokensFields.setValue(getNumberOfTokens(issue))
-    d.paragraphsFields.setValue(d.paragraphsInIssue)
-    d.illustrationsFields.setValue(d.illustrationsInIssue)
-    d.sentencesFields.setValue(d.sentencesInIssue)
-    d.articlesFields.setValue(d.articlesInIssue)
-    iiw.addDocument(d.id)
-    logger.info("File "+file+" processed.")
-  }
-
-  class ArticleMetadata {
-    var id: String = _
-    var language: String = _
-    var sc: String = _
-    var pc: Int = 0
-    var ct: String = _
-    var ti: String = _
-    var ta: StringBuilder = new StringBuilder()
-    var supptitle: String = _
-    var au_composed: String = _
-    var illustrationsInArticle = 0
-    var ilCaptions= new scala.collection.mutable.HashMap[String,Int].withDefaultValue(0)
-    var ilTypes = new scala.collection.mutable.HashMap[String,Int].withDefaultValue(0)
-  }
-
-  private def index2(collectionID: String, textFile: File): Unit = {
-    val metadataFile = new File(textFile.getPath.replace("_Text.xml","_Issue.xml"))
-    val d = tld.get
-    d.clearOptionalIssueFields()
-    d.collectionIDFields.setValue(collectionID)
-    implicit val metadataXML = getXMLEventReaderWithCorrectEncoding(metadataFile)
-    val amm = new scala.collection.mutable.HashMap[String,ArticleMetadata]
-    var am: ArticleMetadata = null
-    var articlesInIssue = 0
-    while (metadataXML.hasNext) metadataXML.next match {
-      case EvElemStart(_,"PSMID",_,_) =>
-        val psmID = readContents
-        d.issueIDFields.setValue(psmID.substring(psmID.lastIndexOf('-')))
-      case EvElemStart(_,"newspaperID",_,_) => d.newspaperIDFields.setValue("NICNF0"+readContents)
-      case EvElemStart(_,"language",_,_) => d.languageFields.setValue(readContents)
-      case EvElemStart(_,"dw",_,_) => d.dayOfWeekFields.setValue(readContents) // maybe isn't there?
-      case EvElemStart(_,"is",_,_) => d.issueNumberFields.setValue(readContents)
-      case EvElemStart(_,"ip",_,_) => d.issuePagesFields.setValue(readContents.toInt) // not pc
-      case EvElemStart(_,"searchableDateStart",_,_) =>
-        val date = readContents.toInt
-        d.dateStartFields.setValue(date)
-        d.dateEndFields.setValue(date)
-      case EvElemStart(_,"searchableDateEnd",_,_) => d.dateEndFields.setValue(readContents.toInt)
-      case EvElemStart(_,"article",_,_) => am = new ArticleMetadata
-      case EvElemStart(_,"id",_,_) => am.id = readContents
-      case EvElemStart(_,"au_composed",_,_) => am.au_composed = readContents
-      case EvElemStart(_,"sc",_,_) => am.sc = readContents
-      case EvElemStart(_,"supptitle",_,_) => am.supptitle = readContents
-      case EvElemStart(_,"ti",_,_) => am.ti = readContents
-      case EvElemStart(_,"ta",_,_) =>
-        am.ta.append(readContents)
-        am.ta.append("\n\n")
-      case EvElemStart(_,"il",attrs,_) =>
-        am.illustrationsInArticle += 1
-        d.illustrationsInIssue += 1
-        attrs("type").headOption.foreach(n =>
-          am.ilTypes.put(n.text, am.ilTypes(n.text) + 1)
-        )
-        val c = readContents
-        if (!c.isEmpty)
-          am.ilCaptions.put(c, am.ilCaptions(c) + 1)
-      case EvElemStart(_,"pc",_,_) => am.pc = readContents.toInt
-      case EvElemEnd(_,"article") =>
-        amm.put(am.id, am)
-        articlesInIssue += 1
-      case EvElemStart(_,"ct",_,_) => am.ct = readContents
-      case _ =>
-    }
-    implicit val xml = getXMLEventReaderWithCorrectEncoding(textFile)
-    while (xml.hasNext) xml.next match {
-      case EvElemStart(_,"artInfo",attrs,_) =>
-        d.clearOptionalArticleFields()
-        am = amm(attrs("id").head.text)
-        if (am.language != null) d.languageFields.setValue(am.language)
-        if (am.sc != null) d.sectionFields.setValue(am.sc)
-        d.articlePagesFields.setValue(am.pc)
-        if (am.ct != null) d.articleTypeFields.setValue(am.ct)
-        if (am.ti != null) d.titleFields.setValue(am.ti)
-        if (am.ta.nonEmpty) d.subtitlesFields.setValue(am.ta.toString)
-        if (am.supptitle != null) d.supplementTitleFields.setValue(am.supptitle)
-        if (am.au_composed != null) d.authorFields.setValue(am.au_composed)
-        d.illustrationsFields.setValue(am.illustrationsInArticle)
-        for (
-          (itype,times) <- am.ilTypes;
-          _ <- 0.until(times)
-        ) {
-          val f = new Field("containsGraphicOfType", itype, notStoredStringFieldWithTermVectors)
-          d.id.add(f)
-          d.ad.add(f)
-        }
-        for (
-          (c,times) <- am.ilCaptions;
-          _ <- 0.until(times)
-        ) {
-          val f = new Field("containsGraphicCaption", c, normsOmittingStoredTextField)
-          d.id.add(f)
-          d.ad.add(f)
-        }
-      case EvElemStart(_,"ocrText",_,_) =>
-        for (paragraph <- readContents(xml).split("\n")) processParagraph(paragraph.trim, d)
-      case EvElemEnd(_,"artInfo") =>
-        val article = d.articleContents.toString
-        d.textField.setStringValue(article)
-        d.lengthFields.setValue(article.length)
-        d.tokensFields.setValue(getNumberOfTokens(article))
-        d.paragraphsFields.setValue(d.paragraphsInArticle)
-        d.articlePagesFields.setValue(d.pagesInArticle)
-        d.subtitlesFields.setValue(d.subtitles.toString)
-        d.illustrationsFields.setValue(d.illustrationsInArticle)
-        d.sentencesFields.setValue(d.sentencesInArticle)
-        aiw.addDocument(d.ad)
-        d.articlesInIssue += 1
-      case _ =>
-    }
-    val issue = d.issueContents.toString
-    d.textField.setStringValue(issue)
-    d.lengthFields.setValue(issue.length)
-    d.tokensFields.setValue(getNumberOfTokens(issue))
-    d.paragraphsFields.setValue(d.paragraphsInIssue)
-    d.illustrationsFields.setValue(d.illustrationsInIssue)
-    d.sentencesFields.setValue(d.sentencesInIssue)
-    d.articlesFields.setValue(d.articlesInIssue)
-    iiw.addDocument(d.id)
-    logger.info("File "+textFile+" processed.")
+      val issue = d.issueContents.toString
+      d.textField.setStringValue(issue)
+      d.lengthFields.setValue(issue.length)
+      d.tokensFields.setValue(getNumberOfTokens(issue))
+      d.paragraphsFields.setValue(d.paragraphsInIssue)
+      d.illustrationsFields.setValue(d.illustrationsInIssue)
+      d.sentencesFields.setValue(d.sentencesInIssue)
+      d.articlesFields.setValue(d.articlesInIssue)
+      iiw.addDocument(d.id)
+      logger.info("File " + file + " processed.")
+    } finally { xml.stop() }
   }
 
   var siw: IndexWriter = null.asInstanceOf[IndexWriter]
@@ -502,10 +388,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       feedAndProcessFedTasksInParallel(() =>
         opts.directories().foreach(p => {
           val parts = p.split(':')
-          if (parts.length == 2)
-            getFileTree(new File(parts(0))).filter(_.getName.endsWith(".xml")).foreach(f => addTask(f.getPath, () => index(parts(1),f)))
-          else
-            getFileTree(new File(parts(0))).filter(_.getName.endsWith("_Text.xml")).foreach(f => addTask(f.getPath, () => index2(parts(1),f)))
+          getFileTree(new File(parts(0))).filter(_.getName.endsWith(".xml")).foreach(f => addTask(f.getPath, () => index(parts(1),f)))
         })
       )
     }

@@ -1,52 +1,18 @@
-import com.bizo.mighty.csv.CSVReader
-import java.net.URLEncoder
-import org.apache.jena.riot.RDFFormat
-import org.apache.jena.riot.RDFDataMgr
-import java.io.FileOutputStream
-import com.bizo.mighty.csv.CSVDictReader
-import com.bizo.mighty.csv.CSVReaderSettings
-import scala.io.Source
-import scala.xml.pull.XMLEventReader
-import scala.xml.pull.EvElemStart
-import scala.xml.pull.EvText
-import scala.xml.pull.EvElemEnd
-import scala.xml.MetaData
-import scala.collection.mutable.HashMap
-import scala.collection.mutable.HashSet
-import java.io.PrintWriter
-import java.io.File
-import javax.imageio.ImageIO
-import scala.concurrent.Future
-import scala.concurrent.Await
-import scala.concurrent.duration._
-import scala.xml.pull.EvEntityRef
-import scala.xml.parsing.XhtmlEntities
-import scala.collection.mutable.Buffer
-import scala.collection.mutable.ArrayBuffer
+import java.io._
+import java.util.concurrent.{ArrayBlockingQueue, ThreadPoolExecutor, TimeUnit}
+
+import com.bizo.mighty.csv.CSVWriter
 import com.typesafe.scalalogging.LazyLogging
 
-import scala.xml.Elem
-import scala.xml.factory.XMLLoader
-import javax.xml.parsers.SAXParser
-import java.io.FileInputStream
-import java.io.InputStreamReader
-import java.io.BufferedReader
-import java.io.FileReader
-import scala.io.BufferedSource
-import scala.xml.pull.EvComment
-import java.io.PushbackInputStream
 import scala.collection.Searching
-import scala.collection.Searching.Found
-import scala.collection.Searching.InsertionPoint
-import java.io.StringWriter
-import com.bizo.mighty.csv.CSVWriter
-import scala.xml.Utility
-import scala.concurrent.ExecutionContext
-import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.ArrayBlockingQueue
-import scala.util.Failure
-import scala.util.Success
+import scala.collection.mutable.ArrayBuffer
+import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.duration._
+import scala.io.Source
+import scala.util.{Failure, Success}
+import scala.xml.{MetaData, Utility}
+import scala.xml.parsing.XhtmlEntities
+import scala.xml.pull._
 
 object ECCOXML2Text extends LazyLogging {
   
@@ -85,17 +51,17 @@ object ECCOXML2Text extends LazyLogging {
   class State {
     val content = new StringBuilder()
     var currentLine: ArrayBuffer[Word] = new ArrayBuffer //midx,startx,endx,starty,endy,content  
-    var lastLine: ArrayBuffer[Word] = null
+    var lastLine: ArrayBuffer[Word] = _
     def testParagraphBreakAtEndOfLine(guessParagraphs: Boolean): Option[String] = {
       var ret: Option[String] = None
       if (lastLine != null) { // we have two lines, check for a paragraph change between them.
         content.append(lastLine.map(_.word).mkString(" "))
         if (guessParagraphs) {
-          val (lastSumEndY, lastSumHeight) = lastLine.foldLeft((0,0))((t,v) => (t._1 + v.endY, t._2 + (v.endY - v.startY)))
-          val lastAvgHeight = lastSumHeight / lastLine.length
+          val (lastSumEndY, _) = lastLine.foldLeft((0,0))((t,v) => (t._1 + v.endY, t._2 + (v.endY - v.startY)))
+          //val lastAvgHeight = lastSumHeight / lastLine.length
           val lastAvgEndY = lastSumEndY / lastLine.length
-          val (currentSumStartY, currentSumHeight) = currentLine.foldLeft((0,0))((t,v) => (t._1 + v.startY, t._2 + (v.endY - v.startY)))
-          val currentAvgHeight = currentSumHeight / currentLine.length
+          val (currentSumStartY, _) = currentLine.foldLeft((0,0))((t,v) => (t._1 + v.startY, t._2 + (v.endY - v.startY)))
+          //val currentAvgHeight = currentSumHeight / currentLine.length
           val currentAvgStartY = currentSumStartY / currentLine.length
           
           val lastMaxHeight = lastLine.map(p => p.endY - p.startY).max
@@ -138,26 +104,26 @@ object ECCOXML2Text extends LazyLogging {
       case EvComment(_) => 
       case EvElemEnd(_,_) => break = true 
     }
-    return content.toString.trim
+    content.toString
   }
   
   private def readNextWordPossiblyEmittingAParagraph(attrs: MetaData, state: State, guessParagraphs: Boolean)(implicit xml: XMLEventReader): Option[String] = {
     val word = readContents
-    val pos = attrs("pos")(0).text.split(",")
+    val pos = attrs("pos").head.text.split(",")
     val curStartX = pos(0).toInt
     val curEndX = pos(2).toInt
     val curMidX = (curStartX + curEndX) / 2
     val curStartY = pos(1).toInt
     val curEndY = pos(3).toInt
-    val curHeight = curEndY - curStartY
+    //val curHeight = curEndY - curStartY
     var ret: Option[String] = None 
-    if (!state.currentLine.isEmpty) {
-      var pos = Searching.search(state.currentLine).search(Word(curMidX,-1,-1,-1,-1,"")).insertionPoint - 1
-      val Word(_,_,_,lastStartY, lastEndY, _) = state.currentLine(if (pos == -1) 0 else pos)
+    if (state.currentLine.nonEmpty) {
+      val pos = Searching.search(state.currentLine).search(Word(curMidX,-1,-1,-1,-1,"")).insertionPoint - 1
+      val Word(_,_,_,_, lastEndY, _) = state.currentLine(if (pos == -1) 0 else pos)
       if (curStartY > lastEndY || curMidX < state.currentLine.last.midX) // new line or new paragraph
         ret = state.testParagraphBreakAtEndOfLine(guessParagraphs)
-      state.currentLine += (Word(curMidX, curStartX, curEndX, curStartY, curEndY, word.toString))
-    } else state.currentLine += (Word(curMidX, curStartX, curEndX, curStartY, curEndY, word.toString))
+      state.currentLine += Word(curMidX, curStartX, curEndX, curStartY, curEndY, word.toString)
+    } else state.currentLine += Word(curMidX, curStartX, curEndX, curStartY, curEndY, word.toString)
     ret
   }
 
@@ -179,7 +145,7 @@ object ECCOXML2Text extends LazyLogging {
       second = fis.read()
       if (first == '<' && second=='!') while (fis.read()!='\n') {}
       if (first == '<' && (second=='?')) {
-        for (i <- 0 until 28) fis.read()
+        for (_ <- 0 until 28) fis.read()
         val es = new StringBuilder()
         var b = fis.read
         while (b!='"') {
@@ -200,10 +166,8 @@ object ECCOXML2Text extends LazyLogging {
     var gw: CSVWriter = null
     var hw: CSVWriter = null
     var indent = ""
-    var metadata = new StringBuilder()
+    val metadata = new StringBuilder()
     var break = false
-    var lastLine: ArrayBuffer[(Int,Int,Int,String)] = null
-    var currentLine = new ArrayBuffer[(Int,Int,Int,String)] //x,starty,endy,content
     var lastWasText = false
     var partNum = 0
     val state = new State()
@@ -211,35 +175,35 @@ object ECCOXML2Text extends LazyLogging {
       case EvElemStart(_,"text",_,_) =>
         while (xml.hasNext && !break) xml.next match {
           case EvElemStart(_,"page",attrs,_) =>
-            if (currentSection!=attrs("type")(0).text) {
+            if (currentSection!=attrs("type").head.text) {
               if (sw != null) sw.close()
               if (gw!=null) gw.close()
               if (hw!=null) hw.close()
-              currentSection = attrs("type")(0).text
+              currentSection = attrs("type").head.text
               partNum += 1
               sw = new PrintWriter(new File(prefix+partNum+"_"+currentSection.replaceAllLiterally("bodyPage","body")+".txt"))
               gw = null
               hw = null
-              currentLine.clear()
+              state.currentLine.clear()
             }
           case EvElemStart(_,"sectionHeader",attrs,_) =>
-            val htype = attrs.get("type").map(_(0).text).getOrElse("")
+            val htype = attrs.get("type").map(_.head.text).getOrElse("")
             content.append(htype match {
               case "other" => "### "
               case "section" => "## "
               case _ =>  "# "
             })
-            val heading = readContents.trim
+            val heading = readContents
             if (hw == null) hw = CSVWriter(prefix+partNum+"_"+currentSection.replaceAllLiterally("bodyPage","body")+"-headings.csv")
             hw.write(Seq(""+page,htype,heading))
             content.append(heading)
             content.append("\n\n")
           case EvElemStart(_,"graphicCaption",attrs,_) =>
-            val htype = attrs.get("type").map(_(0).text).getOrElse("").toLowerCase
-            val caption = readContents.trim
+            val htype = attrs.get("type").map((_.head).text).getOrElse("").toLowerCase
+            val caption = readContents
             if (gw == null) gw = CSVWriter(prefix+partNum+"_"+currentSection.replaceAllLiterally("bodyPage","body")+"-graphics.csv")
-            gw.write(Seq(""+page,htype,attrs.get("colorimage").map(_(0).text).getOrElse(""),caption))
-          case EvElemStart(_,"wd",attrs,_) => readNextWordPossiblyEmittingAParagraph(attrs, state, true) match {
+            gw.write(Seq(""+page,htype,attrs.get("colorimage").map(_.head.text).getOrElse(""),caption))
+          case EvElemStart(_,"wd",attrs,_) => readNextWordPossiblyEmittingAParagraph(attrs, state, guessParagraphs = true) match {
             case Some(paragraph) => 
               content.append(paragraph)
               content.append("\n\n")
@@ -253,7 +217,7 @@ object ECCOXML2Text extends LazyLogging {
               case None => 
             }
             state.content.append(state.lastLine.map(_.word).mkString(" "))
-            if (state.content.length>0) {
+            if (state.content.nonEmpty) {
               content.append(state.content.toString)
               content.append("\n\n")
             }
@@ -270,7 +234,7 @@ object ECCOXML2Text extends LazyLogging {
           case EvElemEnd(_,"text") => break = true
           case _ =>
         }
-      case EvElemStart(pre, label, attrs, scope) =>
+      case EvElemStart(_, label, attrs, _) =>
         metadata.append(indent + "<" + label + attrsToString(attrs) + ">\n")
         indent += "  "
       case EvText(text) => if (!text.trim.isEmpty) {
@@ -312,11 +276,11 @@ object ECCOXML2Text extends LazyLogging {
         dir = if (guessParagraphs) dirp.dropRight(1) else dirp;
         fd=new File(dir);
         _ = if (!fd.exists()) logger.warn(dir+" doesn't exist!");
-        prefixLength = (if (!fd.isDirectory()) fd.getParentFile.getAbsolutePath else fd.getAbsolutePath).length
+        prefixLength = (if (!fd.isDirectory) fd.getParentFile.getAbsolutePath else fd.getAbsolutePath).length
     ) yield (guessParagraphs,fd,prefixLength)
-    val f = Future.sequence(toProcess.flatMap{ case (guessParagraphs,fd,prefixLength) => {
+    val f = Future.sequence(toProcess.flatMap{ case (guessParagraphs,fd,prefixLength) =>
       getFileTree(fd)
-        .filter(file => file.getName.endsWith(".xml") && !file.getName.startsWith("ECCO_tiff_manifest_") && !file.getName().endsWith("_metadata.xml") && {
+        .filter(file => file.getName.endsWith(".xml") && !file.getName.startsWith("ECCO_tiff_manifest_") && !file.getName.endsWith("_metadata.xml") && {
           val dir = dest+file.getParentFile.getAbsolutePath.substring(prefixLength) + "/"
           val prefix = dir+file.getName.replace(".xml","")+"_"
           if (new File(prefix+"metadata.xml").exists) {
@@ -327,13 +291,13 @@ object ECCOXML2Text extends LazyLogging {
         .map(file => {
           val f = process(file, prefixLength, dest, guessParagraphs)
           val path = file.getPath
-          f.recover { 
+          f.recover {
             case cause =>
               logger.error("An error has occured processing "+path+": " + getStackTraceAsString(cause))
-              throw new Exception("An error has occured processing "+path, cause) 
+              throw new Exception("An error has occured processing "+path, cause)
           }
         })
-    }})
+    })
     f.onComplete {
       case Success(_) => logger.info("Successfully processed all sources.")
       case Failure(t) => logger.error("Processing of at least one source resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t))

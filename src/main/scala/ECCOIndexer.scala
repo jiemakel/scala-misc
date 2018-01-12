@@ -30,7 +30,7 @@ object ECCOIndexer extends OctavoIndexer {
       case EvComment(_) => 
       case EvElemEnd(_,_) => break = true 
     }
-    content.toString.trim
+    content.toString
   }
   
   val fileRegex = ".*_(.*)\\.txt".r
@@ -121,6 +121,15 @@ object ECCOIndexer extends OctavoIndexer {
       paragraphHeadingFields.add(pd)
     }
   }
+
+  private def trimSpace(value: String): String = {
+    var len = value.length
+    var st = 0
+    while (st < len && (value(st) == ' ' || value(st) == '\n')) st += 1
+    while (st < len && (value(len - 1) == ' ' || value(st) == '\n')) len -= 1
+    if ((st > 0) || (len < value.length)) substring(st, len)
+    else value
+  }
   
   private def index(id: String, file: File): Unit = {
     val filePrefix = file.getName.replace("_metadata.xml","")
@@ -135,27 +144,27 @@ object ECCOIndexer extends OctavoIndexer {
     var estcID: String = null
     while (xml.hasNext) xml.next match {
       case EvElemStart(_,"documentID",_,_) | EvElemStart(_,"PSMID",_,_) =>
-        documentID = readContents
+        documentID = trimSpace(readContents)
         r.documentIDFields.setValue(documentID)
       case EvElemStart(_,"ESTCID",_,_) =>
-        estcID = readContents
+        estcID = trimSpace(readContents)
         r.estcIDFields.setValue(estcID)
       case EvElemStart(_,"bibliographicID",attr,_) if attr("type").head.text == "ESTC" => // ECCO2
-        estcID = readContents
+        estcID = trimSpace(readContents)
         r.estcIDFields.setValue(estcID)
-      case EvElemStart(_,"pubDate",_,_) => readContents match {
+      case EvElemStart(_,"pubDate",_,_) => trimSpace(readContents) match {
         case null => // ECCO2
           var break = false
           var endDateFound = false
           var startDate: String = null
           while (xml.hasNext && !break) {
             xml.next match {
-              case EvElemStart(_,"pubDateStart",_,_) => readContents match {
+              case EvElemStart(_,"pubDateStart",_,_) => trimSpace(readContents) match {
                 case any =>
                   startDate = any
                   r.dateStartFields.setValue(any.toInt)
               }
-              case EvElemStart(_,"pubDateEnd",_,_) => readContents match {
+              case EvElemStart(_,"pubDateEnd",_,_) => trimSpace(readContents) match {
                 case any =>
                   endDateFound = true
                   r.dateEndFields.setValue(any.replaceAll("00","99").toInt)
@@ -176,17 +185,17 @@ object ECCOIndexer extends OctavoIndexer {
           r.dateEndFields.setValue(any.replaceAll("01","99").toInt)
       }
       case EvElemStart(_,"totalPages",_,_) =>
-        val tp = readContents
+        val tp = trimSpace(readContents)
         if (!tp.isEmpty) {
           totalPages = tp.toInt
           r.totalPagesFields.setValue(totalPages)
         }
       case EvElemStart(_,"language",_,_) =>
-        r.languageFields.setValue(readContents)
+        r.languageFields.setValue(trimSpace(readContents))
       case EvElemStart(_,"module",_,_) =>
-        r.moduleFields.setValue(readContents)
+        r.moduleFields.setValue(trimSpace(readContents))
       case EvElemStart(_,"fullTitle",_,_) => 
-        r.fullTitleFields.setValue(readContents)
+        r.fullTitleFields.setValue(trimSpace(readContents))
       case _ => 
     }
     xmls.close()

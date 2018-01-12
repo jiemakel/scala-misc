@@ -12,7 +12,7 @@ class ParallelProcessor extends LazyLogging {
   
   private val numWorkers = sys.runtime.availableProcessors
   val availableMemory = Runtime.getRuntime.maxMemory - (Runtime.getRuntime.totalMemory - Runtime.getRuntime.freeMemory)
-  private val queueCapacity = 512
+  private val queueCapacity = 1024
   private val fjp = new ForkJoinPool(numWorkers, (pool: ForkJoinPool) => {
     val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
     worker.setName("indexing-worker-" + worker.getPoolIndex)
