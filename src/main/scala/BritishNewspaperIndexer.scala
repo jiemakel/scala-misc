@@ -404,12 +404,12 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       val ppostings = opt[String](default = Some("blocktree"))
       val ipostings = opt[String](default = Some("blocktree"))
       val apostings = opt[String](default = Some("blocktree"))
-      val startYear = opt[String]
-      val endYear = opt[String]
+      val startYear = opt[String]()
+      val endYear = opt[String]()
       verify()
     }
-    startYear = opts.startYear().map((_+"0000").toInt)
-    endYear = opts.endYear().map((_+"9999")_.toInt)
+    startYear = opts.startYear.toOption.map(v => (v+"0000").toInt)
+    endYear = opts.endYear.toOption.map(v => (v+"9999").toInt)
     if (!opts.onlyMerge()) {
       siw = iw(opts.index()+"/sindex",ss,opts.indexMemoryMb() / 4)
       piw = iw(opts.index()+"/pindex",ps,opts.indexMemoryMb() / 4)
