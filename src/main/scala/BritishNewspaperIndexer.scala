@@ -288,6 +288,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     implicit val xml = getXMLEventReaderWithCorrectEncoding(file)
     try {
       val state = new State()
+      var edate = 0
       while (xml.hasNext) xml.next match {
         case EvElemStart(_, "issue", attrs, _) => d.issueIDFields.setValue(attrs("ID").head.text)
         case EvElemStart(_, "newspaperID", _, _) => d.newspaperIDFields.setValue(readContents)
@@ -296,10 +297,18 @@ object BritishNewspaperIndexer extends OctavoIndexer {
         case EvElemStart(_, "is", _, _) => d.issueNumberFields.setValue(readContents)
         case EvElemStart(_, "pc", _, _) => d.issuePagesFields.setValue(readContents.toInt)
         case EvElemStart(_, "searchableDateStart", _, _) =>
-          val date = readContents.toInt
-          d.dateStartFields.setValue(date)
-          d.dateEndFields.setValue(date)
-        case EvElemStart(_, "searchableDateEnd", _, _) => d.dateEndFields.setValue(readContents.toInt)
+          val dateS = readContents
+          val sdate = dateS.toInt
+          edate = dateS.replace("00","99").toInt
+          if (endYear.exists(sdate > _)) return
+          d.dateStartFields.setValue(sdate)
+          d.dateEndFields.setValue(edate)
+        case EvElemStart(_, "searchableDateEnd", _, _) =>
+          edate = readContents.toInt
+          if (startYear.exists(_ > edate)) return
+          d.dateEndFields.setValue(edate)
+        case EvElemEnd(_,"da") =>
+          if (startYear.exists(_ > edate)) return
         case EvElemStart(_, "article", _, _) => d.clearOptionalArticleFields()
         case EvElemStart(_, "id", _, _) => d.articleIDFields.setValue(readContents)
         case EvElemStart(_, "au_composed", _, _) => d.authorFields.setValue(readContents)
@@ -385,6 +394,9 @@ object BritishNewspaperIndexer extends OctavoIndexer {
   val is = new Sort(new SortField("issueID",SortField.Type.STRING))
   
   val postingsFormats = Seq("text","containsGraphicOfType")
+
+  var startYear: Option[Int] = None
+  var endYear: Option[Int] = None
   
   def main(args: Array[String]): Unit = {
     val opts = new AOctavoOpts(args) {
@@ -392,8 +404,12 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       val ppostings = opt[String](default = Some("blocktree"))
       val ipostings = opt[String](default = Some("blocktree"))
       val apostings = opt[String](default = Some("blocktree"))
+      val startYear = opt[String]
+      val endYear = opt[String]
       verify()
     }
+    startYear = opts.startYear().map((_+"0000").toInt)
+    endYear = opts.endYear().map((_+"9999")_.toInt)
     if (!opts.onlyMerge()) {
       siw = iw(opts.index()+"/sindex",ss,opts.indexMemoryMb() / 4)
       piw = iw(opts.index()+"/pindex",ps,opts.indexMemoryMb() / 4)
