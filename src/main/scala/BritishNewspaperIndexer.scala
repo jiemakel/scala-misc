@@ -127,10 +127,22 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       case EvText(text) => content.append(text)
       case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
         case Some(chr) => content.append(chr)
-        case _ => content.append(er.entity)
+        case _ =>
+          logger.warn("Encountered unknown entity "+er.entity)
+          content.append('[')
+          content.append(er.entity)
+          content.append(']')
       }
-      case EvComment(_) => 
-      case EvElemEnd(_,_) => break = true 
+      case EvComment(comment) if (comment == " unknown entity apos; ") => content.append('\'')
+      case EvComment(comment) if (comment.startsWith(" unknown entity")) =>
+        val entity = content.substring(16, content.length - 2)
+        logger.warn("Encountered unknown entity "+entity)
+        content.append('[')
+        content.append(entity)
+        content.append(']')
+      case EvComment(comment) =>
+        logger.debug("Encountered comment: "+comment)
+      case EvElemEnd(_,_) => break = true
     }
     content.toString
   }
@@ -162,7 +174,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
           val (currentSumWidth, currentSumChars) = currentLine.foldLeft((0,0))((t,v) => (t._1 + (v.endX - v.startX), t._2 + v.word.length))
           
           if (lastSumChars == 0 || currentSumChars == 0) {
-            logger.warn("Encountered a line without content when comparing ("+lastLine+","+currentLine+"), cannot determine if there should be a paragraph break")
+            logger.warn("Encountered a line without content when comparing lastLine:"+lastLine+", currentLinw:"+currentLine+". Cannot determine if there should be a paragraph break")
             content.append('\n')
           } else {
             val lastAvgCharWidth = lastSumWidth / lastSumChars
@@ -213,13 +225,13 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     var end = d.sbi.next()
     var csentences = 0
     while (end != BreakIterator.DONE) {
-      val sentence = paragraph.substring(start,end)
+      /*val sentence = paragraph.substring(start,end)
       d.sentenceIDField.setLongValue(sentences.incrementAndGet)
       d.textField.setStringValue(sentence)
       d.lengthFields.setValue(sentence.length)
       d.tokensFields.setValue(getNumberOfTokens(sentence))
       siw.addDocument(d.sd)
-      start = end
+      start = end */
       end = d.sbi.next()
       csentences += 1
     }
@@ -357,7 +369,9 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       d.articlesFields.setValue(d.articlesInIssue)
       iiw.addDocument(d.id)
       logger.info("File " + file + " processed.")
-    } finally { xml.stop() }
+    } finally {
+      while (xml.hasNext) xml.next() // stupid XMLEventReader.stop() deadlocks and leaves threads hanging
+    }
   }
 
   var siw: IndexWriter = null.asInstanceOf[IndexWriter]

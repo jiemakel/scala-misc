@@ -6,13 +6,13 @@ import com.typesafe.scalalogging.LazyLogging
 
 import scala.collection.Searching
 import scala.collection.mutable.ArrayBuffer
-import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.concurrent.duration._
+import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.io.Source
 import scala.util.{Failure, Success}
-import scala.xml.{MetaData, Utility}
 import scala.xml.parsing.XhtmlEntities
 import scala.xml.pull._
+import scala.xml.{MetaData, Utility}
 
 object ECCOXML2Text extends LazyLogging {
   
@@ -99,9 +99,21 @@ object ECCOXML2Text extends LazyLogging {
       case EvText(text) => content.append(text)
       case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
         case Some(chr) => content.append(chr)
-        case _ => content.append(er.entity)
+        case _ =>
+          logger.warn("Encountered unknown entity "+er.entity)
+          content.append('[')
+          content.append(er.entity)
+          content.append(']')
       }
-      case EvComment(_) => 
+      case EvComment(comment) if (comment == " unknown entity apos; ") => content.append('\'')
+      case EvComment(comment) if (comment.startsWith(" unknown entity")) =>
+        val entity = content.substring(16, content.length - 2)
+        logger.warn("Encountered unknown entity "+entity)
+        content.append('[')
+        content.append(entity)
+        content.append(']')
+      case EvComment(comment) =>
+        logger.debug("Encountered comment: "+comment)
       case EvElemEnd(_,_) => break = true 
     }
     content.toString
@@ -199,7 +211,7 @@ object ECCOXML2Text extends LazyLogging {
             content.append(heading)
             content.append("\n\n")
           case EvElemStart(_,"graphicCaption",attrs,_) =>
-            val htype = attrs.get("type").map((_.head).text).getOrElse("").toLowerCase
+            val htype = attrs.get("type").map(_.head.text).getOrElse("").toLowerCase
             val caption = readContents
             if (gw == null) gw = CSVWriter(prefix+partNum+"_"+currentSection.replaceAllLiterally("bodyPage","body")+"-graphics.csv")
             gw.write(Seq(""+page,htype,attrs.get("colorimage").map(_.head.text).getOrElse(""),caption))

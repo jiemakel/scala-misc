@@ -3,6 +3,7 @@ import java.text.BreakIterator
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
+import ECCOIndexer._
 import org.apache.lucene.document.{Document, Field, NumericDocValuesField}
 
 import scala.collection.immutable.HashSet
@@ -13,6 +14,24 @@ import scala.xml.parsing.XhtmlEntities
 import scala.xml.pull._
 
 object EEBOIndexer extends OctavoIndexer {
+
+  private def readContents(implicit xml: XMLEventReader): String = {
+    var break = false
+    val content = new StringBuilder()
+    while (xml.hasNext && !break) xml.next match {
+      case EvElemStart(_,_,_,_) => return null
+      case EvText(text) => content.append(text)
+      case er: EvEntityRef => content.append(decodeEntity(er.entity))
+      case EvComment(comment) if (comment == " unknown entity apos; ") => content.append('\'')
+      case EvComment(comment) if (comment.startsWith(" unknown entity")) =>
+        val entity = content.substring(16, content.length - 2)
+        content.append(decodeEntity(entity))
+      case EvComment(comment) =>
+        logger.debug("Encountered comment: "+comment)
+      case EvElemEnd(_,_) => break = true
+    }
+    content.toString.trim
+  }
 
   private val sentences = new AtomicLong
   private val paragraphs = new AtomicLong
@@ -30,24 +49,17 @@ object EEBOIndexer extends OctavoIndexer {
     val sd = new Document()
     val pd = new Document()
     val send = new Document()
-    val collectionIDFields = new StringSDVFieldPair("collectionID", dd, dpd, sd, pd, send)
     val documentIDFields = new StringSDVFieldPair("documentID", dd, dpd, sd, pd, send)
     val estcIDFields = new StringSDVFieldPair("ESTCID", dd, dpd, sd, pd, send)
-    val dateStartFields = new IntPointNDVFieldPair("dateStart", dd, dpd, sd, pd, send)
-    val dateEndFields = new IntPointNDVFieldPair("dateEnd", dd, dpd, sd, pd, send)
     val totalPagesFields = new IntPointNDVFieldPair("totalPages", dd, dpd, sd, pd, send)
     val languageFields = new StringSDVFieldPair("language", dd, dpd, sd, pd, send)
-    val moduleFields = new StringSDVFieldPair("module", dd, dpd, sd, pd, send)
     val fullTitleFields = new TextSDVFieldPair("fullTitle",dd,dpd,sd,pd, send)
     val contentLengthFields = new IntPointNDVFieldPair("contentLength", dd, dpd, sd, pd, send)
     val documentLengthFields = new IntPointNDVFieldPair("documentLength", dd, dpd, sd, pd, send)
     val totalParagraphsFields = new IntPointNDVFieldPair("totalParagraphs", dd, dpd, sd, pd, send)
     def clearOptionalDocumentFields() {
-      dateStartFields.setValue(0)
-      dateEndFields.setValue(Int.MaxValue)
       totalPagesFields.setValue(0)
       languageFields.setValue("")
-      moduleFields.setValue("")
       fullTitleFields.setValue("")
       dd.removeFields("containsGraphicOfType")
       dd.removeFields("containsGraphicCaption")
@@ -103,20 +115,26 @@ object EEBOIndexer extends OctavoIndexer {
 
   private def decodeEntity(entity: String): String = {
     XhtmlEntities.entMap.get(entity) match {
-      case Some(chr) => chr.toString()
-      case None => eeboMap.getOrElse(entity, entity)
+      case Some(chr) => chr.toString
+      case None =>
+        eeboMap.get(entity) match {
+          case Some(chr2) => chr2
+          case None =>
+            logger.warn("Encountered unknown entity "+entity)
+            '['+entity+']'
+        }
     }
   }
 
   // see http://www.textcreationpartnership.org/docs/dox/cheat.html
   private val ignoredElems = HashSet("SUBST","CHOICE","SIC","FW","SUP","SUB","ABBR","Q", "MILESTONE","SEG","UNCLEAR","ABOVE","BELOW","DATE","BIBL","SALUTE","FIGDESC","ADD","REF","PTR")
-  private val paragraphElems = HashSet("P","AB","CLOSER","SP","STAGE","TABLE","LG","TRAILER","OPENER","FIGURE","LETTER","ARGUMENT","DATELINE","SIGNED","EPIGRAPH","GROUP","TEXT","BYLINE","POSTSCRIPT")
+  private val paragraphElems = HashSet("P","AB","CLOSER","SP","STAGE","TABLE","LG","TRAILER","OPENER","LETTER","ARGUMENT","DATELINE","SIGNED","EPIGRAPH","GROUP","TEXT","BYLINE","POSTSCRIPT")
   private val lineElems = HashSet("L","ROW","SPEAKER","LB")
 
-  private def process(filePrefix: String, startDivLevel: Int, currentElem: String)(implicit xml: XMLEventReader): String = {
+  private def process(idPrefix: String, currentElem: String, r: Reuse)(implicit xml: XMLEventReader): String = {
     val content = new StringBuilder()
     val divLevels = new ArrayBuffer[Int]()
-    var currentDivLevel = startDivLevel
+    var currentDivLevel = 0
     divLevels += currentDivLevel
     var break = false
     var listDepth = 0
@@ -126,18 +144,18 @@ object EEBOIndexer extends OctavoIndexer {
       var addedNewLine = false
       xml.next match {
         case EvElemEnd(_, `currentElem`) => break = true
-        case EvElemStart(_, elem, _, _) if (ignoredElems.contains(elem)) =>
-        case EvElemEnd(_, elem) if (ignoredElems.contains(elem)) =>
-        case EvElemStart(_, elem, attrs,_) if (elem.startsWith("DIV")) => divLevels += currentDivLevel; currentDivLevel = elem.last.toString.toInt // TYPE, LANG, N
-        case EvElemEnd(_, elem) if (elem.startsWith("DIV")) =>
+        case EvElemStart(_, elem, _, _) if ignoredElems.contains(elem) =>
+        case EvElemEnd(_, elem) if ignoredElems.contains(elem) =>
+        case EvElemStart(_, elem, _,_) if elem.startsWith("DIV") => divLevels += currentDivLevel; currentDivLevel = elem.last.toString.toInt // TYPE, LANG, N
+        case EvElemEnd(_, elem) if elem.startsWith("DIV") =>
           divLevels.trimEnd(1)
           currentDivLevel = divLevels.last
           addedNewLine = true
-          if (content.length == 0 || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append('\n')
+          if (content.isEmpty || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append('\n')
         case EvElemStart(_, "HEAD",_,_) => content.append("#" * currentDivLevel +" ")
         case EvElemEnd(_, "HEAD") =>
           addedNewLine = true
-          if (content.length == 0 || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append('\n')
+          if (content.isEmpty || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append('\n')
         case EvElemStart(_, "ARGUMENT",_,_) => content.append("## ")
         case EvElemStart(_, "FRONT",_,_) =>
         case EvElemEnd(_, "FRONT") =>
@@ -147,13 +165,19 @@ object EEBOIndexer extends OctavoIndexer {
         case EvElemEnd(_, "BACK") =>
         case EvElemStart(_, "HI", _, _) => content.append("*")
         case EvElemEnd(_, "HI") => content.append("*")
-        case EvElemStart(_, "PB", attrs, _) => //MS="y" REF="48" N="90"
+        case EvElemStart(_, "PB", _, _) => //MS="y" REF="48" N="90"
         case EvElemEnd(_, "PB") =>
           addedNewLine = true
-        case EvElemStart(_, elem, attrs, _) if (elem=="NOTE" || elem=="HEADNOTE" || elem=="TAILNOTE" || elem=="DEL" || elem=="CORR") =>
+        case EvElemStart(_, "FIGURE", _, _) =>
           val index = content.length - 1
-          val note = process(filePrefix+"-"+elem+"-at-"+index,currentDivLevel, elem)
-          val sw = new PrintWriter(new File(filePrefix+"-"+elem+"-at-"+index+".txt"))
+          val note = process(idPrefix+"-FIGURE-at-"+index, "FIGURE", r)
+          val sw = new PrintWriter(new File(idPrefix+"-FIGURE-at-"+index+".txt"))
+          sw.append(note)
+          sw.close()
+        case EvElemStart(_, elem, _, _) if elem == "NOTE" || elem == "HEADNOTE" || elem == "TAILNOTE" || elem == "DEL" || elem == "CORR" =>
+          val index = content.length - 1
+          val note = process(idPrefix+"-"+elem+"-at-"+index, elem, r)
+          val sw = new PrintWriter(new File(idPrefix+"-"+elem+"-at-"+index+".txt"))
           sw.append(note)
           sw.close()
         case EvElemStart(_, "GAP", attrs, _) => content.append(attrs.get("DISP").flatMap(_.headOption).map(_.text).getOrElse("〈?〉"))
@@ -162,23 +186,23 @@ object EEBOIndexer extends OctavoIndexer {
         case EvElemEnd(_, "LIST") =>
           listDepth -= 1
           addedNewLine = true
-          if (content.length == 0 || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append('\n')
-        case EvElemStart(_, elem,_,_) if (paragraphElems.contains(elem)) =>
+          if (content.isEmpty || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append('\n')
+        case EvElemStart(_, elem,_,_) if paragraphElems.contains(elem) =>
           if (elem=="TABLE") inTable = true
           addedNewLine = true
-          if (content.length > 0) {
+          if (content.nonEmpty) {
             if (content.last != '\n') content.append("\n\n") else if (content.length < 2 || content.charAt(content.length - 2) != '\n') content.append('\n')
           }
-        case EvElemEnd(_, elem) if (paragraphElems.contains(elem)) =>
+        case EvElemEnd(_, elem) if paragraphElems.contains(elem) =>
           if (elem=="TABLE") inTable = false
           addedNewLine = true
-          if (content.length == 0 || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append('\n')
-        case EvElemStart(_, elem,_,_) if (lineElems.contains(elem)) =>
+          if (content.isEmpty || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append('\n')
+        case EvElemStart(_, elem,_,_) if lineElems.contains(elem) =>
           addedNewLine = true
-          if (content.length > 0 && content.last != '\n') content.append('\n')
-        case EvElemEnd(_, elem) if (lineElems.contains(elem)) =>
+          if (content.nonEmpty && content.last != '\n') content.append('\n')
+        case EvElemEnd(_, elem) if lineElems.contains(elem) =>
           addedNewLine = true
-          if (content.length == 0 || content.last != '\n') content.append('\n')
+          if (content.isEmpty || content.last != '\n') content.append('\n')
         case EvElemStart(_, "CELL",_,_) => content.append(" | ")
         case EvElemEnd(_, "CELL") => content.append(" | ")
         case EvElemStart(_, "ITEM",_,_) =>
@@ -188,30 +212,42 @@ object EEBOIndexer extends OctavoIndexer {
         case EvElemEnd(_, "LABEL") =>
           addedNewLine = true
           if (listDepth == 0) {
-            if (content.length == 0 || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append("\n")
-          } else if (content.length == 0 || content.last != '\n') content.append("\n")
-        case EvText(text) => {
+            if (content.isEmpty || content.last != '\n') content.append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') content.append("\n")
+          } else if (content.isEmpty || content.last != '\n') content.append("\n")
+        case EvText(text) =>
           val text2 = if (inTable) text.replaceAllLiterally("\n","") else if (lastAddedNewLine && text.head=='\n') text.tail else text
           content.append(text2.replaceAllLiterally("|","").replaceAllLiterally("∣",""))
-        }
         case er: EvEntityRef => content.append(decodeEntity(er.entity))
         case EvComment(_) =>
-        case ent => logger.warn("Unknown event in "+filePrefix+" : "+ent)
+        case ent => logger.warn("Unknown event in "+idPrefix+" : "+ent)
       }
       lastAddedNewLine = addedNewLine
     }
     content.toString.replaceAllLiterally(" |  | "," | ").replaceAll("\n\n+","\n\n").trim
   }
 
+  var metadataDirectory: String = _
 
   def index(file: File): Unit = {
-    implicit val xml = new XMLEventReader(Source.fromFile(file, "UTF-8"))
+    val r = tld.get
+    r.clearOptionalDocumentFields()
+    val metadataXML = new XMLEventReader(Source.fromFile(metadataDirectory+"/"+file.getName.replace(".xml",".hdr"), "UTF-8"))
+    while (metadataXML.hasNext) metadataXML.next match {
+      case EvElemStart(_, "TITLE",_,_) => r.fullTitleFields.setValue(readContents(metadataXML))
+      case EvElemStart(_, "IDNO",attrs,_) if attrs("TYPE").head.text == "stc" =>
+        val idno = readContents(metadataXML)
+        if (idno.startsWith("ESTC ")) r.estcIDFields.setValue(idno.substring(5))
+      case EvElemStart(_, "LANGUSAGE",attr,_) => r.languageFields.setValue(attr("ID").head.text)
+      case _ =>
+    }
+    metadataXML.stop()
+    val xml = new XMLEventReader(Source.fromFile(file, "UTF-8"))
     var break = false
     while (xml.hasNext && !break) xml.next match {
       case EvElemStart(_, "TEXT",_,_) => break = true
       case _ =>
     }
-    val content = process(file.getAbsolutePath, 0, "TEXT")
+    val content = process(file.getAbsolutePath, "TEXT", r)(xml)
     val cw = new PrintWriter(new File(file.getAbsolutePath+".txt"))
     cw.append(content)
     cw.close()
@@ -226,8 +262,52 @@ object EEBOIndexer extends OctavoIndexer {
       val replacement = lr2.replaceAllIn(m.group(2), m => Integer.valueOf(m.group(1), 16).toChar.toString)
       eeboMap += entity -> replacement
     }
-    feedAndProcessFedTasksInParallel(() =>
-      args.flatMap(n => getFileTree(new File(n))).filter(_.getName.endsWith(".xml")).foreach(file => addTask(file.getPath, () => index(file)))
-    )
-  }
+    val opts = new AOctavoOpts(args) {
+      val dpostings = opt[String](default = Some("blocktree"))
+      val dppostings = opt[String](default = Some("blocktree"))
+      val spostings = opt[String](default = Some("blocktree"))
+      val ppostings = opt[String](default = Some("fst"))
+      val senpostings = opt[String](default = Some("fst"))
+      val metadataDirectory = opt[String](required = true)
+      verify()
+    }
+    metadataDirectory = opts.metadataDirectory()
+    if (!opts.onlyMerge()) {
+      // document level
+      diw = iw(opts.index()+"/dindex", ds, opts.indexMemoryMb()/5)
+      // document part level
+      dpiw = iw(opts.index()+"/dpindex", dps, opts.indexMemoryMb()/5)
+      // section level
+      siw = iw(opts.index()+"/sindex", ss, opts.indexMemoryMb()/5)
+      // paragraph level
+      piw = iw(opts.index()+"/pindex", ps, opts.indexMemoryMb()/5)
+      // sentence level
+      seniw = iw(opts.index()+"/senindex", sens, opts.indexMemoryMb()/5)
+      feedAndProcessFedTasksInParallel(() =>
+        opts.directories().toStream.flatMap(n => getFileTree(new File(n))).filter(_.getName.endsWith(".xml")).foreach(file =>
+          addTask(file.getPath, () => index(file)))
+      )
+    }
+    waitForTasks(
+      runSequenceInOtherThread(
+        () => close(diw),
+        () => merge(opts.index()+"/dindex", ds, opts.indexMemoryMb()/5, toCodec(opts.dpostings(), termVectorFields))
+      ),
+      runSequenceInOtherThread(
+        () => close(dpiw),
+        () => merge(opts.index()+"/dpindex", dps, opts.indexMemoryMb()/5, toCodec(opts.dppostings(), termVectorFields))
+      ),
+      runSequenceInOtherThread(
+        () => close(siw),
+        () => merge(opts.index()+"/sindex", ss, opts.indexMemoryMb()/5, toCodec(opts.spostings(), termVectorFields))
+      ),
+      runSequenceInOtherThread(
+        () => close(piw),
+        () => merge(opts.index()+"/pindex", ps, opts.indexMemoryMb()/5, toCodec(opts.ppostings(), termVectorFields))
+      ),
+      runSequenceInOtherThread(
+        () => close(seniw),
+        () => merge(opts.index()+"/senindex", sens, opts.indexMemoryMb()/5, toCodec(opts.senpostings(), termVectorFields))
+      )
+    )  }
 }

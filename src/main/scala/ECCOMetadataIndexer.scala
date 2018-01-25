@@ -5,10 +5,6 @@ import org.apache.lucene.document.Document
 import org.apache.lucene.index.{DirectoryReader, DocValues, IndexWriter}
 import org.apache.lucene.store.MMapDirectory
 
-import scala.collection.mutable.ArrayBuffer
-import scala.concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.{Await, Future}
-import scala.concurrent.duration.Duration
 import scala.language.reflectiveCalls
 
 object ECCOMetadataIndexer extends OctavoIndexer {
@@ -40,7 +36,7 @@ object ECCOMetadataIndexer extends OctavoIndexer {
   var mseniw: IndexWriter = null.asInstanceOf[IndexWriter]
   var mpiw: IndexWriter = null.asInstanceOf[IndexWriter]
   
-  def process(path: String, metadata: Map[String, Array[String]], iw: IndexWriter): Future[Unit] = Future {
+  def process(path: String, metadata: Map[String, Array[String]], iw: IndexWriter): Unit = {
     val r = new Reuse()
     val ir = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault.getPath(path))).leaves().get(0).reader
     logger.info("Going to process "+ir.maxDoc+" documents in "+path+".")
@@ -120,32 +116,30 @@ object ECCOMetadataIndexer extends OctavoIndexer {
     msiw = iw(opts.index()+"/msindex", null, opts.indexMemoryMb()/5)
     mseniw = iw(opts.index()+"/msenindex", null, opts.indexMemoryMb()/5)
     mpiw = iw(opts.index()+"/mpindex", null, opts.indexMemoryMb()/5)
-    val futures = new ArrayBuffer[Future[Unit]]
-    futures += process(opts.index()+"/dindex", metadata, mdiw)
-    futures += process(opts.index()+"/dpindex", metadata, mdpiw)
-    futures += process(opts.index()+"/sindex", metadata, msiw)
-    futures += process(opts.index()+"/senindex", metadata, mseniw)
-    futures += process(opts.index()+"/pindex", metadata, mpiw)
-    Await.result(Future.sequence(futures),Duration.Inf)
     waitForTasks(
       runSequenceInOtherThread(
+        () => process(opts.index()+"/dindex", metadata, mdiw),
         () => close(mdiw), 
         () => merge(opts.index()+"/mdindex", null, opts.indexMemoryMb()/5, null)
       ),
       runSequenceInOtherThread(
+        () => process(opts.index()+"/dpindex", metadata, mdpiw),
         () => close(mdpiw), 
         () => merge(opts.index()+"/mdpindex", null, opts.indexMemoryMb()/5, null)
       ),
       runSequenceInOtherThread(
-        () => close(msiw), 
+        () => process(opts.index()+"/sindex", metadata, msiw),
+        () => close(msiw),
         () => merge(opts.index()+"/msindex", null, opts.indexMemoryMb()/5, null)
       ),
       runSequenceInOtherThread(
+        () => process(opts.index()+"/senindex", metadata, mseniw),
         () => close(mseniw),
         () => merge(opts.index()+"/msenindex", null, opts.indexMemoryMb()/5, null)
       ),
       runSequenceInOtherThread(
-        () => close(mpiw), 
+        () => process(opts.index()+"/pindex", metadata, mpiw),
+        () => close(mpiw),
         () => merge(opts.index()+"/mpindex", null, opts.indexMemoryMb()/5, null)
       )
     )

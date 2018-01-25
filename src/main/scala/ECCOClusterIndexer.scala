@@ -17,6 +17,7 @@ object ECCOClusterIndexer extends OctavoIndexer {
   
   class Reuse {
     val keya = new Array[Byte](java.lang.Long.BYTES+java.lang.Integer.BYTES*2)
+    val kbb = ByteBuffer.wrap(keya)
     val dkey = new DatabaseEntry(keya)
     val dval = new DatabaseEntry
     val btckeya = new Array[Byte](java.lang.Long.BYTES)
@@ -25,7 +26,6 @@ object ECCOClusterIndexer extends OctavoIndexer {
     val btcvala = new Array[Byte](java.lang.Integer.BYTES*3)
     val btcvbb = ByteBuffer.wrap(btcvala)
     val dbtcval = new DatabaseEntry(btcvala)
-    val kbb = ByteBuffer.wrap(keya)
     val d = new Document()
     val clusterIDFields = new StringNDVFieldPair("clusterID", d)
     val avgLengthFields = new IntPointNDVFieldPair("avgLength", d)

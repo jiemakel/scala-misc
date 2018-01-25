@@ -1,14 +1,21 @@
 import java.io.File
+import java.nio.ByteBuffer
 import java.text.BreakIterator
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
 import com.bizo.mighty.csv.CSVReader
+import com.brein.time.timeintervals.collections.ListIntervalCollection
+import com.brein.time.timeintervals.indexes.{IntervalTree, IntervalTreeBuilder}
+import com.brein.time.timeintervals.indexes.IntervalTreeBuilder.IntervalType
+import com.brein.time.timeintervals.intervals.IntegerInterval
+import com.sleepycat.je._
 import org.apache.lucene.document.{Document, Field, NumericDocValuesField}
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.search.{Sort, SortField}
 import org.rogach.scallop._
 
+import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
 import scala.language.{postfixOps, reflectiveCalls}
@@ -45,8 +52,17 @@ object ECCOIndexer extends OctavoIndexer {
   val tld = new ThreadLocal[Reuse] {
     override def initialValue() = new Reuse()
   }
+
+  class ReuseInterval(startIndex: Int, endIndex: Int, val reuseID: Int) extends IntegerInterval(startIndex,endIndex, false, true) {
+
+  }
   
   class Reuse {
+    val bookToClusters = bookToClustersDB.openCursor(null, null)
+    val bckeya = new Array[Byte](java.lang.Long.BYTES)
+    val bcbb = ByteBuffer.wrap(bckeya)
+    val bckey = new DatabaseEntry(bckeya)
+    val bcval = new DatabaseEntry
     val sbi = BreakIterator.getSentenceInstance(new Locale("en_GB"))
     val dd = new Document()
     val dpd = new Document()
@@ -65,6 +81,7 @@ object ECCOIndexer extends OctavoIndexer {
     val contentLengthFields = new IntPointNDVFieldPair("contentLength", dd, dpd, sd, pd, send)
     val documentLengthFields = new IntPointNDVFieldPair("documentLength", dd, dpd, sd, pd, send)
     val totalParagraphsFields = new IntPointNDVFieldPair("totalParagraphs", dd, dpd, sd, pd, send)
+    val reusesFields = new IntPointNDVFieldPair("reuses", dd, dpd, sd, pd, send)
     def clearOptionalDocumentFields() {
       dateStartFields.setValue(0)
       dateEndFields.setValue(Int.MaxValue)
@@ -74,20 +91,27 @@ object ECCOIndexer extends OctavoIndexer {
       fullTitleFields.setValue("")
       dd.removeFields("containsGraphicOfType")
       dd.removeFields("containsGraphicCaption")
+      dd.removeFields("reuseID")
     }
     def clearOptionalDocumentPartFields() {
       dpd.removeFields("containsGraphicOfType")
       dpd.removeFields("containsGraphicCaption")
+      dpd.removeFields("reuseID")
+    }
+    def clearOptionalSectionFields() {
+      sd.removeFields("reuseID")
     }
     def clearOptionalParagraphFields() {
       pd.removeFields("sectionID")
       pd.removeFields("headingLevel")
       pd.removeFields("heading")
+      pd.removeFields("reuseID")
     }
     def clearOptionalSentenceFields() {
       send.removeFields("sectionID")
       send.removeFields("headingLevel")
       send.removeFields("heading")
+      send.removeFields("reuseID")
     }
     val documentPartIdFields = new StringNDVFieldPair("partID", dpd, sd, pd)
     val paragraphIDFields = new StringNDVFieldPair("paragraphID", pd, send)
@@ -123,13 +147,18 @@ object ECCOIndexer extends OctavoIndexer {
   }
 
   private def trimSpace(value: String): String = {
+    if (value==null) return null
     var len = value.length
     var st = 0
     while (st < len && (value(st) == ' ' || value(st) == '\n')) st += 1
-    while (st < len && (value(len - 1) == ' ' || value(st) == '\n')) len -= 1
-    if ((st > 0) || (len < value.length)) substring(st, len)
+    while (st < len && (value(len - 1) == ' ' || value(len -1) == '\n')) len -= 1
+    if ((st > 0) || (len < value.length)) value.substring(st, len)
     else value
   }
+
+  private val treeBuilder = IntervalTreeBuilder.newBuilder()
+    .usePredefinedType(IntervalType.INTEGER)
+    .collectIntervals(_ => new ListIntervalCollection())
   
   private def index(id: String, file: File): Unit = {
     val filePrefix = file.getName.replace("_metadata.xml","")
@@ -142,10 +171,20 @@ object ECCOIndexer extends OctavoIndexer {
     r.collectionIDFields.setValue(id)
     var documentID: String = null
     var estcID: String = null
+    val documentClusters: IntervalTree = treeBuilder.build()
     while (xml.hasNext) xml.next match {
       case EvElemStart(_,"documentID",_,_) | EvElemStart(_,"PSMID",_,_) =>
         documentID = trimSpace(readContents)
         r.documentIDFields.setValue(documentID)
+        r.bcbb.putLong(0, documentID.toLong)
+        if (r.bookToClusters.getSearchKey(r.bckey, r.bcval, LockMode.DEFAULT) == OperationStatus.SUCCESS) {
+          val vbb = ByteBuffer.wrap(r.bcval.getData)
+          documentClusters.add(new ReuseInterval(vbb.getInt,vbb.getInt,vbb.getInt))
+          while (r.bookToClusters.getNextDup(r.bckey, r.bcval, LockMode.DEFAULT) == OperationStatus.SUCCESS) {
+            val vbb = ByteBuffer.wrap(r.bcval.getData)
+            documentClusters.add(new ReuseInterval(vbb.getInt,vbb.getInt,vbb.getInt))
+          }
+        }
       case EvElemStart(_,"ESTCID",_,_) =>
         estcID = trimSpace(readContents)
         r.estcIDFields.setValue(estcID)
@@ -241,7 +280,6 @@ object ECCOIndexer extends OctavoIndexer {
           if (pcontents.nonEmpty) {
             val c = pcontents.toString
             r.clearOptionalParagraphFields()
-            r.clearOptionalSentenceFields()
             r.paragraphIDFields.setValue(paragraphs.incrementAndGet)
             r.contentField.setStringValue(c)
             r.contentLengthFields.setValue(c.length)
@@ -252,16 +290,29 @@ object ECCOIndexer extends OctavoIndexer {
               hi.addToDocument(r.send)
               hasHeadingInfos = true
             }))
+            val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length,dcontents.size + dpcontents.size,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
+            r.reusesFields.setValue(reuses.size)
+            for (reuse <- reuses) {
+              val f = new StringSNDVFieldPair("reuseID",r.pd)
+              f.setValue(reuse.reuseID)
+            }
             piw.addDocument(r.pd)
             r.sbi.setText(c)
             var start = r.sbi.first()
             var end = r.sbi.next()
             while (end != BreakIterator.DONE) {
+              r.clearOptionalSentenceFields()
               val sentence = c.substring(start,end)
               r.sentenceIDField.setLongValue(sentences.incrementAndGet)
               r.contentField.setStringValue(sentence)
               r.contentLengthFields.setValue(sentence.length)
               r.contentTokensFields.setValue(getNumberOfTokens(sentence))
+              val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length + start,dcontents.size + dpcontents.size - c.length  + end,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
+              r.reusesFields.setValue(reuses.size)
+              for (reuse <- reuses) {
+                val f = new StringSNDVFieldPair("reuseID",r.send)
+                f.setValue(reuse.reuseID)
+              }
               seniw.addDocument(r.send)
               start = end
               end = r.sbi.next()
@@ -271,6 +322,7 @@ object ECCOIndexer extends OctavoIndexer {
         } else
           pcontents.append(line)
         if (line.startsWith("# ") || line.startsWith("## ") || line.startsWith("### ")) {
+          r.clearOptionalSectionFields()
           val level =
             if (line.startsWith("### ")) 2
             else if (line.startsWith("## ")) 1
@@ -285,6 +337,12 @@ object ECCOIndexer extends OctavoIndexer {
               r.headingFields.setValue(headingInfo.heading)
               if (headingInfo.content.nonEmpty) {
             	  val contentS = headingInfo.content.toString
+                val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - contentS.length,dcontents.size + dpcontents.size,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
+                r.reusesFields.setValue(reuses.size)
+                for (reuse <- reuses) {
+                  val f = new StringSNDVFieldPair("reuseID",r.sd)
+                  f.setValue(reuse.reuseID)
+                }
             	  r.contentField.setStringValue(contentS)
             	  r.contentLengthFields.setValue(contentS.length)
             	  r.contentTokensFields.setValue(getNumberOfTokens(contentS))
@@ -302,7 +360,6 @@ object ECCOIndexer extends OctavoIndexer {
       if (pcontents.nonEmpty) {
         val c = pcontents.toString
         r.clearOptionalParagraphFields()
-        r.clearOptionalSentenceFields()
         r.paragraphIDFields.setValue(paragraphs.incrementAndGet)
         r.contentField.setStringValue(c)
         r.contentLengthFields.setValue(c.length)
@@ -313,16 +370,29 @@ object ECCOIndexer extends OctavoIndexer {
           hi.addToDocument(r.send)
           hasHeadingInfos = true
         }))
+        val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length,dcontents.size + dpcontents.size,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
+        r.reusesFields.setValue(reuses.size)
+        for (reuse <- reuses) {
+          val f = new StringSNDVFieldPair("reuseID",r.pd)
+          f.setValue(reuse.reuseID)
+        }
         piw.addDocument(r.pd)
         r.sbi.setText(c)
         var start = r.sbi.first()
         var end = r.sbi.next()
         while (end != BreakIterator.DONE) {
+          r.clearOptionalSentenceFields()
           val sentence = c.substring(start,end)
           r.sentenceIDField.setLongValue(sentences.incrementAndGet)
           r.contentField.setStringValue(sentence)
           r.contentLengthFields.setValue(sentence.length)
           r.contentTokensFields.setValue(getNumberOfTokens(sentence))
+          val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length + start,dcontents.size + dpcontents.size - c.length  + end,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
+          r.reusesFields.setValue(reuses.size)
+          for (reuse <- reuses) {
+            val f = new StringSNDVFieldPair("reuseID",r.send)
+            f.setValue(reuse.reuseID)
+          }
           seniw.addDocument(r.send)
           start = end
           end = r.sbi.next()
@@ -340,18 +410,38 @@ object ECCOIndexer extends OctavoIndexer {
         	  r.contentField.setStringValue(contentS)
         	  r.contentLengthFields.setValue(contentS.length)
         	  r.contentTokensFields.setValue(getNumberOfTokens(contentS))
+            val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - contentS.length,dcontents.size + dpcontents.size,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
+            r.reusesFields.setValue(reuses.size)
+            for (reuse <- reuses) {
+              val f = new StringSNDVFieldPair("reuseID",r.sd)
+              f.setValue(reuse.reuseID)
+            }
           }
           siw.addDocument(r.sd)
         }
       val dpcontentsS = dpcontents.toString.trim
-      r.contentField.setStringValue(dpcontentsS)
-      r.contentLengthFields.setValue(dpcontentsS.length)
-      r.contentTokensFields.setValue(getNumberOfTokens(dpcontentsS))
-      dpiw.addDocument(r.dpd)
+      if (dpcontentsS.length > 0) {
+        r.contentField.setStringValue(dpcontentsS)
+        r.contentLengthFields.setValue(dpcontentsS.length)
+        r.contentTokensFields.setValue(getNumberOfTokens(dpcontentsS))
+        val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size, dcontents.size + dpcontents.size, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
+        r.reusesFields.setValue(reuses.size)
+        for (reuse <- reuses) {
+          val f = new StringSNDVFieldPair("reuseID", r.dpd)
+          f.setValue(reuse.reuseID)
+        }
+        dpiw.addDocument(r.dpd)
+      }
       dcontents.append(dpcontentsS)
       dcontents.append("\n\n")
     }
     val dcontentsS = dcontents.toString.trim
+    val reuses: Seq[ReuseInterval] = documentClusters.asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
+    r.reusesFields.setValue(reuses.size)
+    for (reuse <- reuses) {
+      val f = new StringSNDVFieldPair("reuseID",r.dd)
+      f.setValue(reuse.reuseID)
+    }
     r.contentField.setStringValue(dcontentsS)
     r.contentLengthFields.setValue(dcontentsS.length)
     r.contentTokensFields.setValue(getNumberOfTokens(dcontentsS))
@@ -366,16 +456,24 @@ object ECCOIndexer extends OctavoIndexer {
   val ss = new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("sectionID", SortField.Type.LONG))
   val ps = new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG))
   val sens = new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG))
-  
+
+  var bookToClustersDB: Database = _
+
   def main(args: Array[String]): Unit = {
     val opts = new AOctavoOpts(args) {
       val dpostings = opt[String](default = Some("blocktree"))
       val dppostings = opt[String](default = Some("blocktree"))
       val spostings = opt[String](default = Some("blocktree"))
       val ppostings = opt[String](default = Some("fst"))
-      val senpostings = opt[String](default = Some("fst"))
+      val senpostings = opt[String](default = Some("blocktree"))
+      val bookToClusterDb = opt[String](required = true)
       verify()
     }
+    val btcenvDir = new File(opts.bookToClusterDb())
+    btcenvDir.mkdirs()
+    val btcenv = new Environment(btcenvDir,new EnvironmentConfig().setAllowCreate(true).setTransactional(false).setSharedCache(true).setConfigParam(EnvironmentConfig.LOG_FILE_MAX,"1073741824"))
+    btcenv.setMutableConfig(btcenv.getMutableConfig.setCacheSize(opts.indexMemoryMb()*1024*1024/2))
+    bookToClustersDB = btcenv.openDatabase(null, "bookToCluster", new DatabaseConfig().setAllowCreate(true).setDeferredWrite(true).setTransactional(false).setSortedDuplicates(true))
     if (!opts.onlyMerge()) {
       // document level
       diw = iw(opts.index()+"/dindex", ds, opts.indexMemoryMb()/5)
