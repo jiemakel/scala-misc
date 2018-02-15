@@ -3,6 +3,7 @@ import java.util.concurrent.{ArrayBlockingQueue, ThreadPoolExecutor, TimeUnit}
 
 import com.bizo.mighty.csv.CSVWriter
 import com.typesafe.scalalogging.LazyLogging
+import org.rogach.scallop.ScallopConf
 
 import scala.collection.Searching
 import scala.collection.mutable.ArrayBuffer
@@ -90,6 +91,15 @@ object ECCOXML2Text extends LazyLogging {
       ret
     }
   }
+
+  private def decodeEntity(entity: String): String = {
+    XhtmlEntities.entMap.get(entity) match {
+      case Some(chr) => chr.toString
+      case None =>
+        logger.warn("Encountered unknown entity "+entity)
+        '〈' + entity + '〉'
+    }
+  }
   
   private def readContents(implicit xml: XMLEventReader): String = {
     var break = false
@@ -97,21 +107,11 @@ object ECCOXML2Text extends LazyLogging {
     while (xml.hasNext && !break) xml.next match {
       case EvElemStart(_,_,_,_) => return null
       case EvText(text) => content.append(text)
-      case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
-        case Some(chr) => content.append(chr)
-        case _ =>
-          logger.warn("Encountered unknown entity "+er.entity)
-          content.append('[')
-          content.append(er.entity)
-          content.append(']')
-      }
+      case er: EvEntityRef => content.append(decodeEntity(er.entity))
       case EvComment(comment) if (comment == " unknown entity apos; ") => content.append('\'')
       case EvComment(comment) if (comment.startsWith(" unknown entity")) =>
-        val entity = content.substring(16, content.length - 2)
-        logger.warn("Encountered unknown entity "+entity)
-        content.append('[')
-        content.append(entity)
-        content.append(']')
+        val entity = comment.substring(16, comment.length - 2)
+        content.append(decodeEntity(entity))
       case EvComment(comment) =>
         logger.debug("Encountered comment: "+comment)
       case EvElemEnd(_,_) => break = true 
@@ -139,11 +139,12 @@ object ECCOXML2Text extends LazyLogging {
     ret
   }
 
-  def process(file: File, prefixLength: Int, dest: String, guessParagraphs: Boolean): Future[Unit] = Future({
+  def process(file: File, prefixLength: Int, dest: String, guessParagraphs: Boolean, omitStructure: Boolean, omitHeadings: Boolean): Future[Unit] = Future({
     val dir = dest+file.getParentFile.getAbsolutePath.substring(prefixLength) + "/"
     new File(dir).mkdirs()
     val prefix = dir+file.getName.replace(".xml","")+"_"
     logger.info("Processing: "+file)
+    val dw: PrintWriter = new PrintWriter(new File(prefix.dropRight(1)+".txt"))
     val fis = new PushbackInputStream(new FileInputStream(file),2)
     var second = 0
     var first = fis.read()
@@ -200,16 +201,18 @@ object ECCOXML2Text extends LazyLogging {
             }
           case EvElemStart(_,"sectionHeader",attrs,_) =>
             val htype = attrs.get("type").map(_.head.text).getOrElse("")
-            content.append(htype match {
+            if (!omitStructure) content.append(htype match {
               case "other" => "### "
               case "section" => "## "
-              case _ =>  "# "
+              case _ => "# "
             })
             val heading = readContents
-            if (hw == null) hw = CSVWriter(prefix+partNum+"_"+currentSection.replaceAllLiterally("bodyPage","body")+"-headings.csv")
-            hw.write(Seq(""+page,htype,heading))
-            content.append(heading)
-            content.append("\n\n")
+            if (hw == null) hw = CSVWriter(prefix + partNum + "_" + currentSection.replaceAllLiterally("bodyPage", "body") + "-headings.csv")
+            hw.write(Seq("" + page, htype, heading))
+            if (!omitHeadings) {
+              content.append(heading)
+              content.append("\n\n")
+            }
           case EvElemStart(_,"graphicCaption",attrs,_) =>
             val htype = attrs.get("type").map(_.head.text).getOrElse("").toLowerCase
             val caption = readContents
@@ -241,6 +244,7 @@ object ECCOXML2Text extends LazyLogging {
             pw.append(content)
             pw.close()
             sw.append(content)
+            dw.append(content)
             content.setLength(0)
             page+=1
           case EvElemEnd(_,"text") => break = true
@@ -265,6 +269,7 @@ object ECCOXML2Text extends LazyLogging {
       case EvComment(_) => 
     }
     if (sw!=null) sw.close()
+    dw.close()
     if (gw!=null) gw.close()
     if (hw!=null) hw.close()
     sw = new PrintWriter(new File(prefix+"metadata.xml"))
@@ -280,16 +285,26 @@ object ECCOXML2Text extends LazyLogging {
   }
   
   def main(args: Array[String]): Unit = {
-    val dest = new File(args.last).getAbsolutePath
+    val opts = new ScallopConf(args) {
+      val directories = trailArg[List[String]](required = true)
+      val dest = opt[String](required = true)
+      val omitStructure = opt[Boolean]()
+      val omitHeadings = opt[Boolean]()
+      verify()
+    }
+    val dest = new File(opts.dest()).getAbsolutePath
     implicit val iec = ExecutionContext.Implicits.global
     val toProcess = for (
-        dirp<-args.dropRight(1).toStream;
+        dirp<-opts.directories().toStream;
         guessParagraphs = dirp.endsWith("+");
         dir = if (guessParagraphs) dirp.dropRight(1) else dirp;
         fd=new File(dir);
         _ = if (!fd.exists()) logger.warn(dir+" doesn't exist!");
         prefixLength = (if (!fd.isDirectory) fd.getParentFile.getAbsolutePath else fd.getAbsolutePath).length
     ) yield (guessParagraphs,fd,prefixLength)
+    val omitHeadings = opts.omitHeadings()
+    val omitStructure = opts.omitStructure() || omitHeadings
+
     val f = Future.sequence(toProcess.flatMap{ case (guessParagraphs,fd,prefixLength) =>
       getFileTree(fd)
         .filter(file => file.getName.endsWith(".xml") && !file.getName.startsWith("ECCO_tiff_manifest_") && !file.getName.endsWith("_metadata.xml") && {
@@ -301,7 +316,7 @@ object ECCOXML2Text extends LazyLogging {
           } else true
         })
         .map(file => {
-          val f = process(file, prefixLength, dest, guessParagraphs)
+          val f = process(file, prefixLength, dest, guessParagraphs, omitStructure, omitHeadings)
           val path = file.getPath
           f.recover {
             case cause =>

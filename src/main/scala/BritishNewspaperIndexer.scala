@@ -225,13 +225,13 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     var end = d.sbi.next()
     var csentences = 0
     while (end != BreakIterator.DONE) {
-      /*val sentence = paragraph.substring(start,end)
+      val sentence = paragraph.substring(start,end)
       d.sentenceIDField.setLongValue(sentences.incrementAndGet)
       d.textField.setStringValue(sentence)
       d.lengthFields.setValue(sentence.length)
       d.tokensFields.setValue(getNumberOfTokens(sentence))
-      siw.addDocument(d.sd)
-      start = end */
+      if (siw != null) siw.addDocument(d.sd)
+      start = end
       end = d.sbi.next()
       csentences += 1
     }
@@ -309,6 +309,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
           d.dateEndFields.setValue(edate)
         case EvElemEnd(_,"da") =>
           if (startYear.exists(_ > edate)) return
+        case EvElemEnd(_,"metadatainfo") => if ((startYear.isDefined || endYear.isDefined) && edate==0) return
         case EvElemStart(_, "article", _, _) => d.clearOptionalArticleFields()
         case EvElemStart(_, "id", _, _) => d.articleIDFields.setValue(readContents)
         case EvElemStart(_, "au_composed", _, _) => d.authorFields.setValue(readContents)
@@ -383,10 +384,10 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     }
   }
 
-  var siw: IndexWriter = null.asInstanceOf[IndexWriter]
-  var piw: IndexWriter = null.asInstanceOf[IndexWriter]
-  var aiw: IndexWriter = null.asInstanceOf[IndexWriter]
-  var iiw: IndexWriter = null.asInstanceOf[IndexWriter]
+  var siw: IndexWriter = _
+  var piw: IndexWriter = _
+  var aiw: IndexWriter = _
+  var iiw: IndexWriter = _
 
   val ss = new Sort(new SortField("issueID",SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG))
   val ps = new Sort(new SortField("issueID",SortField.Type.STRING), new SortField("articleID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG))
@@ -404,6 +405,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       val ppostings = opt[String](default = Some("blocktree"))
       val ipostings = opt[String](default = Some("blocktree"))
       val apostings = opt[String](default = Some("blocktree"))
+      val noSentenceIndex= opt[Boolean]()
       val startYear = opt[String]()
       val endYear = opt[String]()
       verify()
@@ -411,7 +413,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     startYear = opts.startYear.toOption.map(v => (v+"0000").toInt)
     endYear = opts.endYear.toOption.map(v => (v+"9999").toInt)
     if (!opts.onlyMerge()) {
-      siw = iw(opts.index()+"/sindex",ss,opts.indexMemoryMb() / 4)
+      if (!opts.noSentenceIndex()) siw = iw(opts.index()+"/sindex",ss,opts.indexMemoryMb() / 4)
       piw = iw(opts.index()+"/pindex",ps,opts.indexMemoryMb() / 4)
       aiw = iw(opts.index()+"/aindex",as,opts.indexMemoryMb() / 4)
       iiw = iw(opts.index()+"/iindex",is,opts.indexMemoryMb() / 4)
@@ -424,8 +426,8 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     }
     waitForTasks(
       runSequenceInOtherThread(
-        () => close(siw),
-        () => merge(opts.index()+"/sindex", ss,opts.indexMemoryMb() / 4, toCodec(opts.spostings(), postingsFormats))
+        () => if (siw != null) close(siw),
+        () => if (siw != null) merge(opts.index()+"/sindex", ss,opts.indexMemoryMb() / 4, toCodec(opts.spostings(), postingsFormats))
       ),
       runSequenceInOtherThread(
         () => close(piw), 

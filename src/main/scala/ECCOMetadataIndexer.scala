@@ -13,9 +13,10 @@ object ECCOMetadataIndexer extends OctavoIndexer {
     val d = new Document()
     val intPointFields = Set("pagecount.orig","document.items","publication_year","publication_decade","publication_frequency_annual","publication_interval_from","publication_interval_till","author_birth", "author_death", "publication_year_from", "publication_year_to", "publication_year_from","publication_year_till","volnumber","volcount","parts","publication_time")
     val floatPointFields = Set("pagecount","latitude","longitude","paper","width","height","area")
-    val fields = Seq("control_number","language.English","language.French","language.Latin","language.German","language.Scottish Gaelic","language.Italian","language.Greek Ancient to 1453 ","language.Welsh","language.Portuguese","language.Dutch","language.Greek Modern 1453- ","language.Hebrew","language.Spanish","language.Pahlavi","language.Swedish","language.Irish","language.Manx","language.Romance Other ","language.Algonquian Other ","language.Lithuanian","language.Turkish","language.English Old ca. 450-1100 ","language.Scots","language.Arabic","language.North American Indian Other ","language.Persian","language.French Middle ca. 1300-1600 ","language.Newari","language.Armenian","language.Tamil","language.Icelandic","language.Bengali","language.Russian","language.Malayalam","language.Danish","language.English Middle 1100-1500 ","language.Coptic","language.Mongolian","language.Gujarati","language.Malay","language.Sanskrit","language.Gothic","language.Mohawk","language.Delaware","language.Iroquoian Other ","language.Palauan","language.Arawak","language.Scottish Gaelix","multilingual","language","system_control_number","author_name","author_birth","author_death","title","publication_year_from","publication_year_till","pagecount","volnumber","volcount","parts","gatherings.original","width.original","height.original","obl.original","publication_frequency_annual","publication_frequency_text","publication_interval_from","publication_interval_till","subject_topic","publication_topic","publication_geography","original_row","publisher","latitude","longitude","publication_place","country","author_pseudonyme","author","author_gender","publication_year","publication_decade","first_edition","self_published","gatherings","width","height","obl","area","pagecount.orig","singlevol","multivol","issue","paper","paper.check","document.items","id","document_type","publication_time").map(field => 
+    val fields = Seq("control_number","language.English","language.French","language.Latin","language.German","language.Scottish Gaelic","language.Italian","language.Greek Ancient to 1453 ","language.Welsh","language.Portuguese","language.Dutch","language.Greek Modern 1453- ","language.Hebrew","language.Spanish","language.Pahlavi","language.Swedish","language.Irish","language.Manx","language.Romance Other ","language.Algonquian Other ","language.Lithuanian","language.Turkish","language.English Old ca. 450-1100 ","language.Scots","language.Arabic","language.North American Indian Other ","language.Persian","language.French Middle ca. 1300-1600 ","language.Newari","language.Armenian","language.Tamil","language.Icelandic","language.Bengali","language.Russian","language.Malayalam","language.Danish","language.English Middle 1100-1500 ","language.Coptic","language.Mongolian","language.Gujarati","language.Malay","language.Sanskrit","language.Gothic","language.Mohawk","language.Delaware","language.Iroquoian Other ","language.Palauan","language.Arawak","language.Scottish Gaelix","multilingual","language","system_control_number","author_name","author_birth","author_death","title","publication_year_from","publication_year_till","pagecount","volnumber","volcount","parts","gatherings.original","width.original","height.original","obl.original","publication_frequency_annual","publication_frequency_text","publication_interval_from","publication_interval_till","subject_topic","publication_topic","publication_geography","original_row","publisher","latitude","longitude","publication_place","country","author_pseudonyme","author","author_gender","publication_year","publication_decade","first_edition","self_published","gatherings","width","height","obl","area","pagecount.orig","singlevol","multivol","issue","paper","paper.check","document.items","id","document_type","publication_time").map(field =>
       (field , field match {
         case "title" => new TextSDVFieldPair("title", d)
+        case "original_row" | "paper.check" => null
         case "publication_geography" | "publication_topic" | "subject" => null
         case field if field.startsWith("language") => null
         case field if intPointFields.contains(field) => new IntPointNDVFieldPair(field, d)
@@ -23,10 +24,10 @@ object ECCOMetadataIndexer extends OctavoIndexer {
         case field => new StringSDVFieldPair(field, d)
       }))
     def clean() {
-      d.removeFields("languages")
-      d.removeFields("publication_geographies")
-      d.removeFields("publication_topics")
-      d.removeFields("subjects")
+      d.removeFields("estc_language")
+      d.removeFields("publication_geography")
+      d.removeFields("publication_topic")
+      d.removeFields("subject")
     }
   }
   
@@ -50,7 +51,7 @@ object ECCOMetadataIndexer extends OctavoIndexer {
         r.clean()
         if (!metadata.contains(estcID)) {
           logger.warn("Unknown ESTCID "+estcID)
-          for ((fieldName,field)<- r.fields)
+          for ((fieldName,field)<- r.fields) if (fieldName != "original_row" && fieldName != "paper.check")
             fieldName match {
               case "title" => field.asInstanceOf[TextSDVFieldPair].setValue("")
               case "publication_geography" | "publication_topic" | "subject" => 
@@ -62,7 +63,7 @@ object ECCOMetadataIndexer extends OctavoIndexer {
             }
         } else {
           val mrow = r.fields.zip(metadata(estcID))
-          for (((fieldName,field),fieldValue) <- mrow)
+          for (((fieldName,field),fieldValue) <- mrow) if (fieldName != "original_row" && fieldName != "paper.check")
             fieldValue match {
               case "NA" | "" => fieldName match {
                   case "title" => field.asInstanceOf[TextSDVFieldPair].setValue("")
@@ -78,9 +79,9 @@ object ECCOMetadataIndexer extends OctavoIndexer {
                   case "title" => field.asInstanceOf[TextSDVFieldPair].setValue(fieldValue)
                   case "publication_geography" | "publication_topic" | "subject" => for (value <- fieldValue.split(";"))
                     new StringSSDVFieldPair(fieldName, r.d).setValue(value.trim)
-                  case "language" => new StringSSDVFieldPair("languages", r.d).setValue(fieldValue)
+                  case "language" => new StringSSDVFieldPair("estc_language", r.d).setValue(fieldValue)
                   case "obl" => field.asInstanceOf[StringSDVFieldPair].setValue(if (fieldValue == "0") "FALSE" else "TRUE")
-                  case fieldName if fieldName.startsWith("language") => if (fieldValue == "TRUE") new StringSSDVFieldPair("languages", r.d).setValue(fieldName.substring(9))
+                  case fieldName if fieldName.startsWith("language") => if (fieldValue == "TRUE") new StringSSDVFieldPair("estc_language", r.d).setValue(fieldName.substring(9))
                   case fieldName if r.intPointFields.contains(fieldName) => try { field.asInstanceOf[IntPointNDVFieldPair].setValue(fieldValue.toInt) } catch {
                     case e: NumberFormatException => logger.error(fieldName, fieldValue); throw e              
                   }
