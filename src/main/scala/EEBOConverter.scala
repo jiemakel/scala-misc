@@ -1,11 +1,13 @@
 import java.io.{File, PrintWriter}
 
+import ECCOXML2Text.attrsToString
 import org.rogach.scallop.ScallopConf
 
 import scala.collection.immutable.HashSet
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
+import scala.xml.Utility
 import scala.xml.parsing.XhtmlEntities
 import scala.xml.pull._
 
@@ -206,7 +208,35 @@ object EEBOConverter extends ParallelProcessor {
     var text = 1
     val opts = new ProcessOpts(file.getAbsolutePath.replace(".xml",""),file.getAbsolutePath.replace(".xml",""), dest, prefixLength, inlineNotes, omitEmphases, omitStructure, null)
     new File(dest + file.getParentFile.getAbsolutePath.substring(prefixLength)).mkdirs()
+    var indent = ""
+    val metadata = new StringBuilder()
+    var lastWasText = false
     while (xml.hasNext) xml.next match {
+      case EvElemStart(_, "HEADER", _, _) =>
+        var break = false
+        while (!break) xml.next match {
+          case EvElemEnd(_, "HEADER") => break = true
+          case EvElemStart(_, label, attrs, _) =>
+            metadata.append(indent + "<" + label + attrsToString(attrs) + ">\n")
+            indent += "  "
+          case EvText(text) => if (!text.trim.isEmpty) {
+            if (!lastWasText) metadata.append(indent)
+            if (text.length==1 && Utility.Escapes.escMap.contains(text(0))) metadata.append(Utility.Escapes.escMap(text(0)))
+            else metadata.append(text)
+            lastWasText = !text.endsWith("\n")
+          }
+          case er: EvEntityRef =>
+            metadata.append('&'); metadata.append(er.entity); metadata.append(';')
+          case EvElemEnd(_, label) =>
+            indent = indent.substring(0,indent.length-2)
+            if (lastWasText) metadata.append('\n')
+            metadata.append(indent + "</"+label+">\n")
+            lastWasText = false
+          case EvComment(_) =>
+        }
+        val sw = new PrintWriter(new File(opts.outputFilePrefix+".metadata.xml"))
+        sw.append(metadata)
+        sw.close()
       case EvElemStart(_, "TEXT",_,_) =>
         val copts = opts.child(text+"_text", "TEXT")
         val content = process(copts)

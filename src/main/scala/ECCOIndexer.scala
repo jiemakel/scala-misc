@@ -6,8 +6,8 @@ import java.util.concurrent.atomic.AtomicLong
 
 import com.bizo.mighty.csv.CSVReader
 import com.brein.time.timeintervals.collections.ListIntervalCollection
-import com.brein.time.timeintervals.indexes.{IntervalTree, IntervalTreeBuilder}
 import com.brein.time.timeintervals.indexes.IntervalTreeBuilder.IntervalType
+import com.brein.time.timeintervals.indexes.{IntervalTree, IntervalTreeBuilder}
 import com.brein.time.timeintervals.intervals.IntegerInterval
 import com.sleepycat.je._
 import org.apache.lucene.document.{Document, Field, NumericDocValuesField}
@@ -42,8 +42,6 @@ object ECCOIndexer extends OctavoIndexer {
   
   val fileRegex = ".*_(.*)\\.txt".r
   
-  val headingRegex = "^# ".r
-
   private val sentences = new AtomicLong
   private val paragraphs = new AtomicLong
   private val sections = new AtomicLong
@@ -113,7 +111,7 @@ object ECCOIndexer extends OctavoIndexer {
       send.removeFields("heading")
       send.removeFields("reuseID")
     }
-    val documentPartIdFields = new StringNDVFieldPair("partID", dpd, sd, pd)
+    val documentPartIdFields = new StringNDVFieldPair("partID", dpd, sd, pd, send)
     val paragraphIDFields = new StringNDVFieldPair("paragraphID", pd, send)
     val sentenceIDField = new NumericDocValuesField("sentenceID", 0)
     send.add(sentenceIDField)
@@ -284,11 +282,9 @@ object ECCOIndexer extends OctavoIndexer {
             r.contentField.setStringValue(c)
             r.contentLengthFields.setValue(c.length)
             r.contentTokensFields.setValue(getNumberOfTokens(c))
-            var hasHeadingInfos = false
             headingInfos.foreach(_.foreach(hi => {
               hi.addToDocument(r.pd)
               hi.addToDocument(r.send)
-              hasHeadingInfos = true
             }))
             val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length,dcontents.size + dpcontents.size,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
             r.reusesFields.setValue(reuses.size)
@@ -319,8 +315,10 @@ object ECCOIndexer extends OctavoIndexer {
             }
             pcontents.clear()
           }
-        } else
+        } else {
           pcontents.append(line)
+          pcontents.append('\n')
+        }
         if (line.startsWith("# ") || line.startsWith("## ") || line.startsWith("### ")) {
           r.clearOptionalSectionFields()
           val level =
@@ -354,7 +352,8 @@ object ECCOIndexer extends OctavoIndexer {
           for (i <- 0 until level) headingInfos(i).foreach(_.content.append(line))
         } else
           headingInfos.foreach(_.foreach(_.content.append(line)))
-        dpcontents.append(line+"\n")
+        dpcontents.append(line)
+        dpcontents.append('\n')
       }
       fl.close()
       if (pcontents.nonEmpty) {

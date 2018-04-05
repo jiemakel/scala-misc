@@ -11,7 +11,6 @@ import org.rogach.scallop._
 
 import scala.collection.mutable.ArrayBuffer
 import scala.language.{postfixOps, reflectiveCalls}
-import scala.util.Try
 
 object ECCOClusterIndexer extends OctavoIndexer {
   
@@ -31,15 +30,12 @@ object ECCOClusterIndexer extends OctavoIndexer {
     val avgLengthFields = new IntPointNDVFieldPair("avgLength", d)
     val countFields = new IntPointNDVFieldPair("count", d)
     val documentIDFields = new StringSDVFieldPair("documentID", d)
-    val titleFields = new TextSDVFieldPair("title", d)
     val textField = new Field("text", "", contentFieldType)
     d.add(textField)
     val lengthFields = new IntPointNDVFieldPair("length", d)
     val tokensFields = new IntPointNDVFieldPair("tokens", d)
-    val authorFields = new TextSDVFieldPair("author", d)
     val startIndexFields = new IntPointNDVFieldPair("startIndex", d)
     val endIndexFields = new IntPointNDVFieldPair("endIndex", d)
-    val yearFields = new IntPointNDVFieldPair("year", d)
   }
   
   val termVectorFields = Seq("text")
@@ -53,25 +49,20 @@ object ECCOClusterIndexer extends OctavoIndexer {
     var token = p.nextToken
     while (token != End) {
       token match {
-        case FieldStart(field) if (field.startsWith("cluster_")) =>
+        case FieldStart(field) if field.startsWith("cluster_") =>
           val cluster = new Cluster
-          cluster.id = field.substring(8).toInt
+          cluster.id = (if (field.startsWith("cluster_e_")) "1"+field.substring(10) else "2"+field.substring(8)).toInt
           while (token != CloseObj) {
             token match {
-              case FieldStart("Avglength") => cluster.avgLength = p.nextToken.asInstanceOf[IntVal].value.toInt
-              case FieldStart("Count") => 
-                cluster.count = p.nextToken.asInstanceOf[IntVal].value.toInt
-              case FieldStart("Hits") => 
+              case FieldStart("length") | FieldStart("Avglength") => cluster.avgLength = p.nextToken.asInstanceOf[IntVal].value.toInt
+              case FieldStart("hits") | FieldStart("Hits") =>
                 var cm: Match = null
                 while (token != CloseArr) {
                   token match {
                     case OpenObj => cm = new Match()
                     case FieldStart("end_index") => cm.endIndex = p.nextToken.asInstanceOf[IntVal].value.toInt
                     case FieldStart("start_index") => cm.startIndex = p.nextToken.asInstanceOf[IntVal].value.toInt
-                    case FieldStart("title") => cm.title = p.nextToken.asInstanceOf[StringVal].value
-                    case FieldStart("author") => cm.author = p.nextToken.asInstanceOf[StringVal].value
                     case FieldStart("book_id") => cm.documentID = p.nextToken.asInstanceOf[StringVal].value
-                    case FieldStart("year") => cm.year = Try(p.nextToken.asInstanceOf[StringVal].value.toInt).getOrElse(-1)
                     case FieldStart("text") => cm.text = p.nextToken.asInstanceOf[StringVal].value
                     case CloseObj => cluster.matches += cm
                     case _ => 
@@ -83,16 +74,22 @@ object ECCOClusterIndexer extends OctavoIndexer {
             token = p.nextToken
           }
           val r = tld.get
+
           cluster.matches.foreach(cm => {
-            r.kbb.putLong(0, cm.documentID.toLong)
-            r.kbb.putInt(java.lang.Long.BYTES, cluster.id)
-            r.kbb.putInt(java.lang.Long.BYTES+java.lang.Integer.BYTES, cm.startIndex)
-            if (db.get(null, r.dkey, r.dval, LockMode.DEFAULT) == OperationStatus.SUCCESS) {
-              val vbb = ByteBuffer.wrap(r.dval.getData)
-              cm.startIndex = vbb.getInt
-              cm.endIndex = vbb.getInt
-            } else logger.warn("Did not find cluster mapping info for cluster "+cm.documentID+"/"+cm.startIndex+"/"+cm.endIndex)
-            r.btckbb.putLong(0, cm.documentID.toLong)
+            var ldid = (if (cm.documentID.head == 'A') "10"+cm.documentID.tail
+            else if (cm.documentID.head == 'B') "11"+cm.documentID.tail else "2" + cm.documentID).toLong
+/*            if (ldid == 0) {
+              ldid = ("2" + cm.documentID).toLong
+              r.kbb.putLong(0, cm.documentID.toLong)
+              r.kbb.putInt(java.lang.Long.BYTES, cluster.id)
+              r.kbb.putInt(java.lang.Long.BYTES + java.lang.Integer.BYTES, cm.startIndex)
+              if (db.get(null, r.dkey, r.dval, LockMode.DEFAULT) == OperationStatus.SUCCESS) {
+                val vbb = ByteBuffer.wrap(r.dval.getData)
+                cm.startIndex = vbb.getInt
+                cm.endIndex = vbb.getInt
+              } else logger.warn("Did not find cluster mapping info for cluster " + cm.documentID + "/" + cm.startIndex + "/" + cm.endIndex)
+            } */
+            r.btckbb.putLong(0, ldid)
             r.btcvbb.putInt(0, cm.startIndex)
             r.btcvbb.putInt(java.lang.Integer.BYTES, cm.endIndex)
             r.btcvbb.putInt(2*java.lang.Integer.BYTES, cluster.id)
@@ -113,14 +110,11 @@ object ECCOClusterIndexer extends OctavoIndexer {
     d.countFields.setValue(cluster.matches.size)
     for (m <- cluster.matches) {
       d.documentIDFields.setValue(m.documentID)
-      d.titleFields.setValue(m.title)
       d.textField.setStringValue(m.text)
       d.lengthFields.setValue(m.text.length)
       d.tokensFields.setValue(getNumberOfTokens(m.text.toString))
-      d.authorFields.setValue(m.author)
       d.startIndexFields.setValue(m.startIndex)
       d.endIndexFields.setValue(m.endIndex)
-      d.yearFields.setValue(m.year)
       diw.addDocument(d.d)
     }
   }
@@ -128,26 +122,22 @@ object ECCOClusterIndexer extends OctavoIndexer {
   var diw = null.asInstanceOf[IndexWriter]
   
   class Match {
-    var documentID: String = null
-    var title: String = null
-    var author: String = null
+    var documentID: String = _
     var startIndex: Int = -1
     var endIndex: Int = -1
-    var year: Int = -1
-    var text: String = null
+    var text: String = _
   }
   
   class Cluster {
     var id: Int = -1
     var avgLength: Int = -1
-    var count: Int = -1
     var matches: ArrayBuffer[Match] = new ArrayBuffer()
   }
   
   val cs = new Sort(new SortField("clusterID",SortField.Type.INT))
 
-  var bookToClusterDb: Database = null
-  var db: Database = null
+  var bookToClusterDb: Database = _
+  var db: Database = _
 
   def main(args: Array[String]): Unit = {
     val opts = new AOctavoOpts(args) {

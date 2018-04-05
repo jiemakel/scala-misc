@@ -1,9 +1,13 @@
 import java.nio.file.FileSystems
+import java.util.regex.Pattern
 
-import fi.seco.lucene.{OrdExposingFSTOrdPostingsFormat, Lucene70PerFieldPostingsFormatOrdTermVectorsCodec}
-import org.apache.lucene.analysis.CharArraySet
-import org.apache.lucene.analysis.standard.StandardAnalyzer
+import fi.seco.lucene.{Lucene70PerFieldPostingsFormatOrdTermVectorsCodec, OrdExposingFSTOrdPostingsFormat}
+import org.apache.lucene.analysis.Analyzer.TokenStreamComponents
+import org.apache.lucene.analysis.core.WhitespaceTokenizer
+import org.apache.lucene.analysis.miscellaneous.{HyphenatedWordsFilter, LengthFilter}
+import org.apache.lucene.analysis.pattern.PatternReplaceFilter
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
+import org.apache.lucene.analysis.{Analyzer, LowerCaseFilter, TokenFilter}
 import org.apache.lucene.codecs.Codec
 import org.apache.lucene.codecs.blocktreeords.BlockTreeOrdsPostingsFormat
 import org.apache.lucene.document._
@@ -17,7 +21,16 @@ import scala.language.postfixOps
 
 class OctavoIndexer extends ParallelProcessor {
    
-  val analyzer = new StandardAnalyzer(CharArraySet.EMPTY_SET)
+  val analyzer = new Analyzer() {
+    override def createComponents(fieldName: String) = {
+      val src = new WhitespaceTokenizer()
+      var tok: TokenFilter = new HyphenatedWordsFilter(src)
+      tok = new PatternReplaceFilter(tok,Pattern.compile("^\\p{Punct}*(.*?)\\p{Punct}*$"),"$1", false)
+      tok = new LowerCaseFilter(tok)
+      tok = new LengthFilter(tok, 1, Int.MaxValue)
+      new TokenStreamComponents(src,tok)
+    }
+  }
 
   def lsplit[A](str: List[A],pos: List[Int]): List[List[A]] = {
     val (rest, result) = pos.foldRight((str, List[List[A]]())) {
