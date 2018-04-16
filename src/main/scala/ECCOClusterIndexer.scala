@@ -45,6 +45,7 @@ object ECCOClusterIndexer extends OctavoIndexer {
   }
   
   private def index(file: File): Unit = parse(new InputStreamReader(new GZIPInputStream(new FileInputStream(file))), (p: Parser) => {
+    logger.info("Processing "+file+".")
     val path = file.getParentFile.getName
     var token = p.nextToken
     while (token != End) {
@@ -77,8 +78,8 @@ object ECCOClusterIndexer extends OctavoIndexer {
 
           cluster.matches.foreach(cm => {
             var ldid = (if (cm.documentID.head == 'A') "10"+cm.documentID.tail
-            else if (cm.documentID.head == 'B') "11"+cm.documentID.tail else "2" + cm.documentID).toLong
-/*            if (ldid == 0) {
+            else if (cm.documentID.head == 'B') "11"+cm.documentID.tail else "2" + cm.documentID).toLong // "0").toLong
+            /* if (ldid == 0) {
               ldid = ("2" + cm.documentID).toLong
               r.kbb.putLong(0, cm.documentID.toLong)
               r.kbb.putInt(java.lang.Long.BYTES, cluster.id)
@@ -153,6 +154,7 @@ object ECCOClusterIndexer extends OctavoIndexer {
     db = env.openDatabase(null, "sampleDatabase", new DatabaseConfig().setAllowCreate(false).setTransactional(false))
     val btcenvDir = new File(opts.bookToClusterDb())
     btcenvDir.mkdirs()
+    for (file <- btcenvDir.listFiles) file.delete()
     val btcenv = new Environment(btcenvDir,new EnvironmentConfig().setAllowCreate(true).setTransactional(false).setSharedCache(true).setConfigParam(EnvironmentConfig.LOG_FILE_MAX,"1073741824"))
     btcenv.setMutableConfig(btcenv.getMutableConfig.setCacheSize(opts.indexMemoryMb()*1024*1024/2))
     bookToClusterDb = btcenv.openDatabase(null, "bookToCluster", new DatabaseConfig().setAllowCreate(true).setDeferredWrite(true).setTransactional(false).setSortedDuplicates(true))
@@ -166,6 +168,5 @@ object ECCOClusterIndexer extends OctavoIndexer {
     env.close()
     close(diw)
     merge(opts.index()+"/dindex", cs, opts.indexMemoryMb(), toCodec(opts.postings(), termVectorFields))
-
   }
 }

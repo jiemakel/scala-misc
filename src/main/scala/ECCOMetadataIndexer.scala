@@ -32,6 +32,7 @@ object ECCOMetadataIndexer extends OctavoIndexer {
   }
   
   var mdiw: IndexWriter = null.asInstanceOf[IndexWriter]
+  var mwiw: IndexWriter = null.asInstanceOf[IndexWriter]
   var mdpiw: IndexWriter = null.asInstanceOf[IndexWriter]
   var msiw: IndexWriter = null.asInstanceOf[IndexWriter]
   var mseniw: IndexWriter = null.asInstanceOf[IndexWriter]
@@ -98,6 +99,7 @@ object ECCOMetadataIndexer extends OctavoIndexer {
   def main(args: Array[String]): Unit = {
     val opts = new AOctavoOpts(args) {
       val metadata = opt[String](required = true)
+      val hasWorkIndex = opt[Boolean]()
       verify()
     }
     val r = CSVReader(opts.metadata())
@@ -112,37 +114,43 @@ object ECCOMetadataIndexer extends OctavoIndexer {
       case any => any
     }))).toMap
     logger.info("Metadata loaded for "+metadata.size+" ids")
-    mdiw = iw(opts.index()+"/mdindex", null, opts.indexMemoryMb()/5)
-    mdpiw = iw(opts.index()+"/mdpindex", null, opts.indexMemoryMb()/5)
-    msiw = iw(opts.index()+"/msindex", null, opts.indexMemoryMb()/5)
-    mseniw = iw(opts.index()+"/msenindex", null, opts.indexMemoryMb()/5)
-    mpiw = iw(opts.index()+"/mpindex", null, opts.indexMemoryMb()/5)
-    waitForTasks(
-      runSequenceInOtherThread(
-        () => process(opts.index()+"/dindex", metadata, mdiw),
-        () => close(mdiw), 
-        () => merge(opts.index()+"/mdindex", null, opts.indexMemoryMb()/5, null)
-      ),
+    val parts = if (opts.hasWorkIndex()) 6 else 5
+    mdiw = iw(opts.index()+"/mdindex", null, opts.indexMemoryMb()/parts)
+    if (opts.hasWorkIndex()) mwiw = iw(opts.index()+"/mwindex", null, opts.indexMemoryMb()/parts)
+    mdpiw = iw(opts.index()+"/mdpindex", null, opts.indexMemoryMb()/parts)
+    msiw = iw(opts.index()+"/msindex", null, opts.indexMemoryMb()/parts)
+    mseniw = iw(opts.index()+"/msenindex", null, opts.indexMemoryMb()/parts)
+    mpiw = iw(opts.index()+"/mpindex", null, opts.indexMemoryMb()/parts)
+    var tasks = Seq(runSequenceInOtherThread(
+      () => process(opts.index()+"/dindex", metadata, mdiw),
+      () => close(mdiw),
+      () => merge(opts.index()+"/mdindex", null, opts.indexMemoryMb()/parts, null)
+    ),
       runSequenceInOtherThread(
         () => process(opts.index()+"/dpindex", metadata, mdpiw),
-        () => close(mdpiw), 
-        () => merge(opts.index()+"/mdpindex", null, opts.indexMemoryMb()/5, null)
+        () => close(mdpiw),
+        () => merge(opts.index()+"/mdpindex", null, opts.indexMemoryMb()/parts, null)
       ),
       runSequenceInOtherThread(
         () => process(opts.index()+"/sindex", metadata, msiw),
         () => close(msiw),
-        () => merge(opts.index()+"/msindex", null, opts.indexMemoryMb()/5, null)
+        () => merge(opts.index()+"/msindex", null, opts.indexMemoryMb()/parts, null)
       ),
       runSequenceInOtherThread(
         () => process(opts.index()+"/senindex", metadata, mseniw),
         () => close(mseniw),
-        () => merge(opts.index()+"/msenindex", null, opts.indexMemoryMb()/5, null)
+        () => merge(opts.index()+"/msenindex", null, opts.indexMemoryMb()/parts, null)
       ),
       runSequenceInOtherThread(
         () => process(opts.index()+"/pindex", metadata, mpiw),
         () => close(mpiw),
-        () => merge(opts.index()+"/mpindex", null, opts.indexMemoryMb()/5, null)
-      )
+        () => merge(opts.index()+"/mpindex", null, opts.indexMemoryMb()/parts, null)
+      ))
+    if (opts.hasWorkIndex()) tasks = tasks :+ runSequenceInOtherThread(
+      () => process(opts.index()+"/windex", metadata, mwiw),
+      () => close(mwiw),
+      () => merge(opts.index()+"/mwindex", null, opts.indexMemoryMb()/parts, null)
     )
+    waitForTasks(tasks:_*)
   }
 }

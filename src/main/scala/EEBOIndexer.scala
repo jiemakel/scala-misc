@@ -117,7 +117,7 @@ object EEBOIndexer extends OctavoIndexer {
       send.removeFields("reuseID")
     }
     def addAltTitle(altTitle: String): Unit = {
-      new StringSSDVFieldPair("altTitle", dd, wd, dpd, sd, pd, send).setValue(altTitle)
+      new TextSSDVFieldPair("altTitle", dd, wd, dpd, sd, pd, send).setValue(altTitle)
     }
     val workIdFields = new StringNDVFieldPair("workID", wd, dpd, sd, pd, send)
     val documentPartIdFields = new StringNDVFieldPair("partID", dpd, sd, pd, send)
@@ -126,6 +126,7 @@ object EEBOIndexer extends OctavoIndexer {
     send.add(sentenceIDField)
     val contentField = new Field("content","",contentFieldType)
     dd.add(contentField)
+    wd.add(contentField)
     dpd.add(contentField)
     sd.add(contentField)
     pd.add(contentField)
@@ -167,7 +168,7 @@ object EEBOIndexer extends OctavoIndexer {
     .usePredefinedType(IntervalType.INTEGER)
     .collectIntervals(_ => new ListIntervalCollection())
 
-  private val dpmatcher = "^[^_]*_([0-9]*)_text_([0-9]*)_([^_])*$".r
+  private val dpmatcher = "^[^_]*_([0-9]*)_text_([0-9]*)_([^_]*).txt$".r
 
   private case class DocumentPartFile(workNumber: Int, documentPartNumber: Int, filename: String) {
   }
@@ -235,9 +236,10 @@ object EEBOIndexer extends OctavoIndexer {
     for (workId <- workToFiles.keys.toSeq.sorted) {
       val wcontents = new StringBuilder
       r.clearOptionalWorkFields()
-      val workParts = workToFiles(workId)
       r.workIdFields.setValue(works.incrementAndGet)
-      for ((_, _, partType, file) <- workParts.sortBy(_._2)) {
+      val workParts = workToFiles(workId)
+      for ((wn, pn, partType, file) <- workParts.sortBy(_._2)) {
+        logger.info("Processing "+wn+","+pn+","+partType+","+file)
         val dpcontents = new StringBuilder
         r.clearOptionalDocumentPartFields()
         r.documentPartIdFields.setValue(documentparts.incrementAndGet)
@@ -427,7 +429,7 @@ object EEBOIndexer extends OctavoIndexer {
         val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size, dcontents.size + wcontents.size, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
         r.reusesFields.setValue(reuses.size)
         for (reuse <- reuses) {
-          val f = new StringSNDVFieldPair("reuseID", r.dpd)
+          val f = new StringSNDVFieldPair("reuseID", r.wd)
           f.setValue(reuse.reuseID)
         }
         wiw.addDocument(r.wd)
@@ -480,7 +482,7 @@ object EEBOIndexer extends OctavoIndexer {
       // document level
       diw = iw(opts.index()+"/dindex", ds, opts.indexMemoryMb()/2/6)
       // work level
-      wiw = iw(opts.index()+"/windex", ds, opts.indexMemoryMb()/2/6)
+      wiw = iw(opts.index()+"/windex", ws, opts.indexMemoryMb()/2/6)
       // document part level
       dpiw = iw(opts.index()+"/dpindex", dps, opts.indexMemoryMb()/2/6)
       // section level

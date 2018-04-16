@@ -14,8 +14,8 @@ object ECCOClusterMappingDBCreator extends ParallelProcessor {
   def index(file: File): Unit = {
     val lines = Source.fromFile(file).getLines()
     lines.next()
-    val keya = new Array[Byte](java.lang.Long.BYTES+java.lang.Integer.BYTES*2)
-    val valuea = new Array[Byte](java.lang.Integer.BYTES*2)
+    val keya = new Array[Byte](java.lang.Long.BYTES+java.lang.Integer.BYTES)
+    val valuea = new Array[Byte](java.lang.Integer.BYTES)
     val dkey = new DatabaseEntry(keya)
     val dvalue = new DatabaseEntry(valuea)
     val kbb = ByteBuffer.wrap(keya)
