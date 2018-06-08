@@ -51,7 +51,7 @@ object ECCOIndexer extends OctavoIndexer {
     override def initialValue() = new Reuse()
   }
 
-  class ReuseInterval(startIndex: Int, endIndex: Int, val reuseID: Int) extends IntegerInterval(startIndex,endIndex, false, true) {
+  class ReuseInterval(startIndex: Int, endIndex: Int, val reuseID: Long) extends IntegerInterval(startIndex,endIndex, false, true) {
 
   }
   
@@ -177,10 +177,10 @@ object ECCOIndexer extends OctavoIndexer {
         r.bcbb.putLong(0, documentID.toLong)
         if (r.bookToClusters.getSearchKey(r.bckey, r.bcval, LockMode.DEFAULT) == OperationStatus.SUCCESS) {
           val vbb = ByteBuffer.wrap(r.bcval.getData)
-          documentClusters.add(new ReuseInterval(vbb.getInt,vbb.getInt,vbb.getInt))
+          documentClusters.add(new ReuseInterval(vbb.getInt,vbb.getInt,vbb.getLong))
           while (r.bookToClusters.getNextDup(r.bckey, r.bcval, LockMode.DEFAULT) == OperationStatus.SUCCESS) {
             val vbb = ByteBuffer.wrap(r.bcval.getData)
-            documentClusters.add(new ReuseInterval(vbb.getInt,vbb.getInt,vbb.getInt))
+            documentClusters.add(new ReuseInterval(vbb.getInt,vbb.getInt,vbb.getLong))
           }
         }
       case EvElemStart(_,"ESTCID",_,_) =>
