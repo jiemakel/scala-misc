@@ -7,7 +7,7 @@ import org.apache.lucene.analysis.core.WhitespaceTokenizer
 import org.apache.lucene.analysis.miscellaneous.{HyphenatedWordsFilter, LengthFilter}
 import org.apache.lucene.analysis.pattern.PatternReplaceFilter
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
-import org.apache.lucene.analysis.{Analyzer, LowerCaseFilter, TokenFilter}
+import org.apache.lucene.analysis._
 import org.apache.lucene.codecs.Codec
 import org.apache.lucene.codecs.blocktreeords.BlockTreeOrdsPostingsFormat
 import org.apache.lucene.document._
@@ -15,12 +15,17 @@ import org.apache.lucene.index._
 import org.apache.lucene.search.Sort
 import org.apache.lucene.store.MMapDirectory
 import org.apache.lucene.util.BytesRef
+import org.joda.time.format.DateTimeFormatter
 import org.rogach.scallop.ScallopConf
 
 import scala.language.postfixOps
 
 class OctavoIndexer extends ParallelProcessor {
-   
+
+  def removeFields(field: String, docs: Document*): Unit = {
+    for (doc <- docs) doc.removeFields(field)
+  }
+
   val analyzer = new Analyzer() {
     override def createComponents(fieldName: String) = {
       val src = new WhitespaceTokenizer()
@@ -39,6 +44,17 @@ class OctavoIndexer extends ParallelProcessor {
         (rest, split :: res)
     }
     rest :: result
+  }
+
+  def getNumberOfTokens(ts: TokenStream): Int = {
+    val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
+    ts.reset()
+    var length = 0
+    while (ts.incrementToken())
+      length += oa.getPositionIncrement
+    ts.end()
+    ts.close()
+    length
   }
 
   def getNumberOfTokens(text: String): Int = {
@@ -137,7 +153,6 @@ class OctavoIndexer extends ParallelProcessor {
     }
   }
 
-  
   class IntPointSNDVFieldPair(field: String, docs: Document*) extends FieldPair(new IntPoint(field, 0), new SortedNumericDocValuesField(field, 0), docs:_*) {
     def setValue(v: Int) {
       indexField.setIntValue(v)
@@ -149,6 +164,20 @@ class OctavoIndexer extends ParallelProcessor {
     def setValue(v: Long) {
       indexField.setLongValue(v)
       storedField.setLongValue(v)
+    }
+  }
+
+  class LongPointSDVDateTimeFieldPair(field: String, df: DateTimeFormatter, docs: Document*) extends FieldPair(new LongPoint(field, 0l), new SortedDocValuesField(field, new BytesRef()), docs:_*) {
+    def setValue(v: String) {
+      indexField.setLongValue(df.parseMillis(v))
+      storedField.setStringValue(v)
+    }
+  }
+
+  class LongPointSSDVDateTimeFieldPair(field: String, df: DateTimeFormatter, docs: Document*) extends FieldPair(new LongPoint(field, 0l), new SortedSetDocValuesField(field, new BytesRef()), docs:_*) {
+    def setValue(v: String) {
+      indexField.setLongValue(df.parseMillis(v))
+      storedField.setStringValue(v)
     }
   }
 
