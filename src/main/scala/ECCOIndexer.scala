@@ -79,6 +79,8 @@ object ECCOIndexer extends OctavoIndexer {
     val contentLengthFields = new IntPointNDVFieldPair("contentLength", dd, dpd, sd, pd, send)
     val documentLengthFields = new IntPointNDVFieldPair("documentLength", dd, dpd, sd, pd, send)
     val totalParagraphsFields = new IntPointNDVFieldPair("totalParagraphs", dd, dpd, sd, pd, send)
+    val startOffsetFields = new IntPointNDVFieldPair("startOffset", dpd, sd, pd, send)
+    val endOffsetFields = new IntPointNDVFieldPair("endOffset", dpd, sd, pd, send)
     val reusesFields = new IntPointNDVFieldPair("reuses", dd, dpd, sd, pd, send)
     def clearOptionalDocumentFields() {
       dateStartFields.setValue(0)
@@ -130,7 +132,7 @@ object ECCOIndexer extends OctavoIndexer {
   
   val termVectorFields = Seq("content", "containsGraphicOfType")
   
-  class SectionInfo(val sectionID: Long, val headingLevel: Int, val heading: String) {
+  class SectionInfo(val sectionID: Long, val headingLevel: Int, val heading: String, val startOffset: Int) {
     val paragraphSectionIDFields = new StringSNDVFieldPair("sectionID")
     paragraphSectionIDFields.setValue(sectionID)
     val paragraphHeadingLevelFields = new IntPointSNDVFieldPair("headingLevel")
@@ -243,7 +245,7 @@ object ECCOIndexer extends OctavoIndexer {
     val filesToProcess = new ArrayBuffer[File] 
     for (file <- getFileTree(file.getParentFile); if file.getName.endsWith(".txt") && file.getName.startsWith(filePrefix)) if (file.getName.contains("_page"))
       for (curPage <- "_page([0-9]+)".r.findFirstMatchIn(file.getName).map(_.group(1).toInt); if curPage>lastPage) lastPage = curPage
-    else filesToProcess += file
+    else if (file.getName.indexOf('_', file.getName.indexOf('_') + 1) != -1) filesToProcess += file
     if (totalPages != lastPage) logger.warn(s"total pages $totalPages != actual $lastPage")
     var totalParagraphs = 0
     var totalLength = 0
@@ -253,7 +255,18 @@ object ECCOIndexer extends OctavoIndexer {
     }
     r.documentLengthFields.setValue(totalLength)
     r.totalParagraphsFields.setValue(totalParagraphs)
+/*    var curline: Seq[Int] = null
+    var pcuroffset = -1l
+    val ppl = Source.fromFile(file.getPath.replace("_metadata.xml","-payload.csv")).getLines
+    var scuroffset = -1l
+    val spl = Source.fromFile(file.getPath.replace("_metadata.xml","-payload.csv")).getLines
+    var dpcuroffset = -1l
+    val dppl = Source.fromFile(file.getPath.replace("_metadata.xml","-payload.csv")).getLines
+    var dcuroffset = -1l
+    val dpl = Source.fromFile(file.getPath.replace("_metadata.xml","-payload.csv")).getLines */
+    var dpoffset = 0
     for (file <- filesToProcess.sortBy(x => x.getName.substring(x.getName.indexOf('_') + 1, x.getName.indexOf('_', x.getName.indexOf('_') + 1)).toInt)) {
+      dpoffset = dcontents.length
       val dpcontents = new StringBuilder
       r.clearOptionalDocumentPartFields()
       r.documentPartIdFields.setValue(documentparts.incrementAndGet)
@@ -272,6 +285,7 @@ object ECCOIndexer extends OctavoIndexer {
         }
       val headingInfos = Seq(1,2,3).map(_ => None.asInstanceOf[Option[SectionInfo]]).toArray
       val pcontents = new StringBuilder
+      var poffset = dpoffset
       val fl = Source.fromFile(file)
       for (line <- fl.getLines) {
         if (line.isEmpty) {
@@ -280,8 +294,43 @@ object ECCOIndexer extends OctavoIndexer {
             r.clearOptionalParagraphFields()
             r.paragraphIDFields.setValue(paragraphs.incrementAndGet)
             r.contentField.setStringValue(c)
-            r.contentLengthFields.setValue(c.length)
+            r.startOffsetFields.setValue(poffset)
+            r.endOffsetFields.setValue(poffset + c.length)
+/*            val ts = new CachingTokenFilter(new TokenFilter(analyzer.tokenStream("content",c)) {
+
+              private val payloadAtt = addAttribute(classOf[PayloadAttribute])
+              private val offsetAtt = addAttribute(classOf[OffsetAttribute])
+              override def incrementToken(): Boolean = if (input.incrementToken) {
+                val myoffset = dcontents.length + offsetAtt.startOffset
+                while (pcuroffset < myoffset) {
+                  if (!ppl.hasNext) {
+                    payloadAtt.setPayload(null)
+                    return true
+                  }
+                  curline = ppl.next.split(',').map(_.toInt)
+                  pcuroffset = curline.head
+                }
+                if (pcuroffset == myoffset) {
+                  val bytes = new Array[Byte](5+5+5+5+5)
+                  val bo = new ByteArrayDataOutput(bytes)
+                  bo.writeVInt(curline(1))
+                  bo.writeVInt(curline(2))
+                  bo.writeVInt(curline(3))
+                  bo.writeVInt(curline(4))
+                  bo.writeVInt(curline(5))
+                  payloadAtt.setPayload(new BytesRef(bytes,0,bo.getPosition))
+                } else payloadAtt.setPayload(null)
+                true
+              } else false
+            })
+            ts.reset()
+            ts.incrementToken() // orderly load cache
+            ts.end()
+            ts.close()
+            r.contentField.setTokenStream(ts)
+            r.contentTokensFields.setValue(getNumberOfTokens(ts)) */
             r.contentTokensFields.setValue(getNumberOfTokens(c))
+            r.contentLengthFields.setValue(c.length)
             headingInfos.foreach(_.foreach(hi => {
               hi.addToDocument(r.pd)
               hi.addToDocument(r.send)
@@ -301,6 +350,8 @@ object ECCOIndexer extends OctavoIndexer {
               val sentence = c.substring(start,end)
               r.sentenceIDField.setLongValue(sentences.incrementAndGet)
               r.contentField.setStringValue(sentence)
+              r.startOffsetFields.setValue(poffset + start)
+              r.endOffsetFields.setValue(poffset + end)
               r.contentLengthFields.setValue(sentence.length)
               r.contentTokensFields.setValue(getNumberOfTokens(sentence))
               val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length + start,dcontents.size + dpcontents.size - c.length  + end,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
@@ -314,6 +365,7 @@ object ECCOIndexer extends OctavoIndexer {
               end = r.sbi.next()
             }
             pcontents.clear()
+            poffset = dcontents.length
           }
         } else {
           pcontents.append(line)
@@ -342,13 +394,15 @@ object ECCOIndexer extends OctavoIndexer {
                   f.setValue(reuse.reuseID)
                 }
             	  r.contentField.setStringValue(contentS)
+                r.startOffsetFields.setValue(headingInfo.startOffset)
+                r.endOffsetFields.setValue(headingInfo.startOffset + contentS.length)
             	  r.contentLengthFields.setValue(contentS.length)
             	  r.contentTokensFields.setValue(getNumberOfTokens(contentS))
               }
               siw.addDocument(r.sd)
               headingInfos(i) = None
             }
-          headingInfos(level) = Some(new SectionInfo(sections.incrementAndGet, level, line.substring(level+2)))
+          headingInfos(level) = Some(new SectionInfo(sections.incrementAndGet, level, line.substring(level+2),dcontents.length))
           for (i <- 0 until level) headingInfos(i).foreach(_.content.append(line))
         } else
           headingInfos.foreach(_.foreach(_.content.append(line)))
@@ -361,6 +415,8 @@ object ECCOIndexer extends OctavoIndexer {
         r.clearOptionalParagraphFields()
         r.paragraphIDFields.setValue(paragraphs.incrementAndGet)
         r.contentField.setStringValue(c)
+        r.startOffsetFields.setValue(poffset)
+        r.endOffsetFields.setValue(poffset + c.length)
         r.contentLengthFields.setValue(c.length)
         r.contentTokensFields.setValue(getNumberOfTokens(c))
         var hasHeadingInfos = false
@@ -384,6 +440,8 @@ object ECCOIndexer extends OctavoIndexer {
           val sentence = c.substring(start,end)
           r.sentenceIDField.setLongValue(sentences.incrementAndGet)
           r.contentField.setStringValue(sentence)
+          r.startOffsetFields.setValue(poffset + start)
+          r.endOffsetFields.setValue(poffset + end)
           r.contentLengthFields.setValue(sentence.length)
           r.contentTokensFields.setValue(getNumberOfTokens(sentence))
           val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length + start,dcontents.size + dpcontents.size - c.length  + end,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
@@ -396,6 +454,8 @@ object ECCOIndexer extends OctavoIndexer {
           start = end
           end = r.sbi.next()
         }
+        pcontents.clear()
+        poffset = dcontents.length
       }
       for (
           headingInfoOpt <- headingInfos;
@@ -407,6 +467,8 @@ object ECCOIndexer extends OctavoIndexer {
           if (headingInfo.content.nonEmpty) {
         	  val contentS = headingInfo.content.toString.trim
         	  r.contentField.setStringValue(contentS)
+            r.startOffsetFields.setValue(headingInfo.startOffset)
+            r.endOffsetFields.setValue(headingInfo.startOffset + contentS.length)
         	  r.contentLengthFields.setValue(contentS.length)
         	  r.contentTokensFields.setValue(getNumberOfTokens(contentS))
             val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - contentS.length,dcontents.size + dpcontents.size,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
@@ -423,6 +485,8 @@ object ECCOIndexer extends OctavoIndexer {
         r.contentField.setStringValue(dpcontentsS)
         r.contentLengthFields.setValue(dpcontentsS.length)
         r.contentTokensFields.setValue(getNumberOfTokens(dpcontentsS))
+        r.startOffsetFields.setValue(dpoffset)
+        r.endOffsetFields.setValue(dpoffset+dpcontentsS.length)
         val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size, dcontents.size + dpcontents.size, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
         r.reusesFields.setValue(reuses.size)
         for (reuse <- reuses) {
