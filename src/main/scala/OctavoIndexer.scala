@@ -170,14 +170,14 @@ class OctavoIndexer extends ParallelProcessor {
   class LongPointSDVDateTimeFieldPair(field: String, df: DateTimeFormatter, docs: Document*) extends FieldPair(new LongPoint(field, 0l), new SortedDocValuesField(field, new BytesRef()), docs:_*) {
     def setValue(v: String) {
       indexField.setLongValue(df.parseMillis(v))
-      storedField.setStringValue(v)
+      storedField.setBytesValue(new BytesRef(v))
     }
   }
 
   class LongPointSSDVDateTimeFieldPair(field: String, df: DateTimeFormatter, docs: Document*) extends FieldPair(new LongPoint(field, 0l), new SortedSetDocValuesField(field, new BytesRef()), docs:_*) {
     def setValue(v: String) {
       indexField.setLongValue(df.parseMillis(v))
-      storedField.setStringValue(v)
+      storedField.setBytesValue(new BytesRef(v))
     }
   }
 
