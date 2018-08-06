@@ -3,7 +3,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 import org.apache.lucene.analysis.TokenStream
 import org.apache.lucene.analysis.tokenattributes.{CharTermAttribute, OffsetAttribute, PositionIncrementAttribute}
-import org.apache.lucene.document.{Document, Field, NumericDocValuesField}
+import org.apache.lucene.document._
 import org.apache.lucene.index.{FieldInfo, IndexWriter}
 import org.apache.lucene.search.{Sort, SortField}
 import org.apache.lucene.util.BytesRef
@@ -64,9 +64,13 @@ object Suomi24Indexer extends OctavoIndexer {
 
   class Reuse {
     var scontents = new ArrayBuffer[LBWordToAnalysis]
+    val scontentS = new StringBuilder
     var parcontents = new ArrayBuffer[Seq[LBWordToAnalysis]]
+    val parcontentS = new StringBuilder
     var postcontents = new ArrayBuffer[Seq[Seq[LBWordToAnalysis]]]
+    val postcontentS = new StringBuilder
     val tcontents = new ArrayBuffer[Seq[Seq[Seq[LBWordToAnalysis]]]]
+    val tcontentS = new StringBuilder
 
     val td = new Document()
     val postd = new Document()
@@ -83,6 +87,11 @@ object Suomi24Indexer extends OctavoIndexer {
     postd.add(contentField)
     pard.add(contentField)
     send.add(contentField)
+    val analysisField = new StoredField("analysis", "")
+    td.add(analysisField)
+    postd.add(analysisField)
+    pard.add(analysisField)
+    send.add(analysisField)
     val contentLengthFields = new IntPointNDVFieldPair("contentLength", td, postd, pard, send)
     val contentTokensFields = new IntPointNDVFieldPair("contentTokens", td, postd, pard, send)
     val sectionFields = new StringSDVFieldPair("section",td,postd,pard,send)
@@ -90,6 +99,8 @@ object Suomi24Indexer extends OctavoIndexer {
     val threadDateEndFields = new LongPointSDVDateTimeFieldPair("enddatetime",ISODateTimeFormat.basicDateTime,td,postd,pard,send)
     val dateTimeFields = new LongPointSDVDateTimeFieldPair("datetime",ISODateTimeFormat.basicDateTimeNoMillis,postd,pard,send)
     val commentsFields = new IntPointNDVFieldPair("comments",td,postd,pard,send)
+    val paragraphsFields = new IntPointNDVFieldPair("paragraphs",td,postd)
+    val sentencesFields = new IntPointNDVFieldPair("sentences",td,postd)
     val viewsFields = new IntPointNDVFieldPair("views",postd,pard,send)
     var urlFields = new StringSDVFieldPair("url",td,postd,pard,send)
     val headingFields = new StringSDVFieldPair("heading",td,postd,pard,send)
@@ -131,10 +142,16 @@ object Suomi24Indexer extends OctavoIndexer {
   private val paragraphs = new AtomicLong
   private val sentences = new AtomicLong
 
+  private def appendLine(line: String, sbs: StringBuilder*) = for (sb <- sbs) {
+    sb.append(line)
+    sb.append('\n')
+  }
 
   private def indexThread(tid: Int, tinfo: String, posts: Seq[(String,Seq[String])]): Unit = {
     val r = tld.get
     r.tcontents.clear()
+    r.tcontentS.clear()
+    appendLine(tinfo,r.tcontentS)
     r.clearMultiThreadFields()
     r.threadIDFields.setValue(tid)
     r.commentsFields.setValue(commsR.findFirstMatchIn(tinfo).get.group(1).toInt)
@@ -149,6 +166,8 @@ object Suomi24Indexer extends OctavoIndexer {
       if (postID % 10000 == 0) logger.info(postID+": "+tid)
       r.postIDFields.setValue(postID)
       r.postcontents = new ArrayBuffer[Seq[Seq[LBWordToAnalysis]]](r.postcontents.length)
+      r.postcontentS.clear()
+      appendLine(pinfo,r.postcontentS,r.tcontentS)
       r.headingFields.setValue(headingR.findFirstMatchIn(pinfo).get.group(1))
       r.viewsFields.setValue(viewsR.findFirstMatchIn(pinfo).map(_.group(1).toInt).getOrElse(0))
       val timeM = timeR.findFirstMatchIn(pinfo).get
@@ -160,13 +179,18 @@ object Suomi24Indexer extends OctavoIndexer {
       r.nickFields.setValue(nick)
       new StringSSDVFieldPair("nick",r.td).setValue(nick)
       for (line <- post.dropRight(1)) { // drop </text>
-        if (line == "<paragraph>") {
+        if (line.startsWith("<paragraph")) {
+          r.parcontentS.clear()
+          appendLine(line,r.tcontentS,r.postcontentS,r.parcontentS)
           r.paragraphIDFields.setValue(paragraphs.incrementAndGet())
           r.parcontents = new ArrayBuffer[Seq[LBWordToAnalysis]](r.parcontents.length)
-        } else if (line == "<sentence>") {
+        } else if (line.startsWith("<sentence")) {
+          r.scontentS.clear()
+          appendLine(line,r.tcontentS,r.postcontentS,r.parcontentS,r.scontentS)
           r.sentenceIDField.setLongValue(sentences.incrementAndGet())
           r.scontents = new ArrayBuffer[LBWordToAnalysis](r.scontents.length)
         } else if (line == "</paragraph>") {
+          appendLine(line,r.tcontentS,r.postcontentS,r.parcontentS)
           if (r.parcontents.nonEmpty) {
             val parcontents = r.parcontents.flatten
             val content = parcontents.map(_.word).mkString(" ")
@@ -174,24 +198,43 @@ object Suomi24Indexer extends OctavoIndexer {
             r.contentField.setTokenStream(new LBAnalysisTokenStream(parcontents.map((1, _))))
             r.contentLengthFields.setValue(content.length)
             r.contentTokensFields.setValue(parcontents.length)
+            r.sentencesFields.setValue(r.parcontents.length)
+            r.analysisField.setStringValue(r.parcontentS.toString)
             pariw.addDocument(r.pard)
             r.postcontents += r.parcontents
           }
         } else if (line == "</sentence>") {
+          appendLine(line,r.tcontentS,r.postcontentS,r.parcontentS,r.scontentS)
           if (r.scontents.nonEmpty) {
             val content = r.scontents.map(_.word).mkString(" ")
             r.contentField.setStringValue(content)
             r.contentField.setTokenStream(new LBAnalysisTokenStream(r.scontents.map((1, _))))
             r.contentLengthFields.setValue(content.length)
             r.contentTokensFields.setValue(r.scontents.length)
+            r.analysisField.setStringValue(r.scontentS.toString)
             seniw.addDocument(r.send)
             r.parcontents += r.scontents
           }
         } else {
+          appendLine(line,r.tcontentS,r.postcontentS,r.parcontentS,r.scontentS)
           val parts = line.split("\t")
-          r.scontents += LBWordToAnalysis(parts(0), Seq("L="+parts(2),"POS="+parts(3),"HEAD="+parts(5),"DEPREL="+parts(6)) ++ parts(4).split("\\|").map("A="+_))
+          var analysis: ArrayBuffer[String] = new ArrayBuffer[String]
+          if (parts.length >= 3)
+            analysis += "L="+parts(2) else analysis += "L="+parts(0) // else also guards against segments with no terms for termvector
+          if (parts.length >= 4)
+            analysis += "POS="+parts(3)
+          if (parts.length >= 5)
+            analysis ++= parts(4).split("\\|").filter(_!="_").map("A="+_)
+          if (parts.length >= 7) {
+            analysis += "HEAD=" + parts(5)
+            analysis += "DEPREL=" + parts(6)
+          }
+          if (parts.length >= 8 && parts(7) != "_")
+            analysis += "TAG=" + parts(7)
+          r.scontents += LBWordToAnalysis(parts(0), analysis)
         }
       }
+      appendLine("</text>",r.tcontentS,r.postcontentS)
       if (r.postcontents.nonEmpty) {
         val content = r.postcontents.map(_.flatten.map(_.word).mkString(" ")).mkString("\n\n")
         r.contentField.setStringValue(content)
@@ -208,6 +251,9 @@ object Suomi24Indexer extends OctavoIndexer {
         r.contentField.setTokenStream(new LBAnalysisTokenStream(postcontents))
         r.contentLengthFields.setValue(content.length)
         r.contentTokensFields.setValue(postcontents.length)
+        r.paragraphsFields.setValue(r.postcontents.length)
+        r.sentencesFields.setValue(r.postcontents.foldLeft(0){(l,v) => l+v.length})
+        r.analysisField.setStringValue(r.postcontentS.toString)
         postiw.addDocument(r.postd)
         r.tcontents += r.postcontents
       }
@@ -239,6 +285,9 @@ object Suomi24Indexer extends OctavoIndexer {
       r.contentField.setTokenStream(new LBAnalysisTokenStream(threadcontents))
       r.contentLengthFields.setValue(content.length)
       r.contentTokensFields.setValue(threadcontents.length)
+      r.paragraphsFields.setValue(r.tcontents.foldLeft(0){(l,v) => l+v.length})
+      r.sentencesFields.setValue(r.tcontents.foldLeft(0){(l,v) => l+v.foldLeft(0){(l2,v2) => l2+v2.length}})
+      r.analysisField.setStringValue(r.tcontentS.toString)
       tiw.addDocument(r.td)
     }
   }

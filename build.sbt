@@ -34,7 +34,7 @@ libraryDependencies ++= Seq(
   "com.breinify" % "brein-time-utilities" % "1.6.4" exclude("org.slf4j","slf4j-log4j12") exclude("log4j","log4j") exclude("commons-logging", "commons-logging"),
   "org.rogach" %% "scallop" % "2.1.1",
   "org.jsoup" % "jsoup" % "1.10.2",
-  "com.optimaize.languagedetector" % "language-detector" % "0.6",
+  "com.optimaize.languagedetector" % "language-detector" % "0.6" exclude("com.intellij","annotations"),
   "org.jetbrains.xodus" % "xodus-environment" % "1.2.3"
 )
 
