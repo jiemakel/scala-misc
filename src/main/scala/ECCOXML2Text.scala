@@ -267,7 +267,7 @@ object ECCOXML2Text extends LazyLogging {
                 state.offset += 1
               }
               for (word <- state.currentLine) {
-                state.smw.append(""+state.offset+','+state.page+','+word.startX+','+word.startY+','+(word.endX-word.startX)+','+(word.endY-word.startY)+'\n')
+                state.smw.append(""+state.offset+','+state.page+','+word.startX+','+word.startY+','+(word.endX-word.startX)+','+(word.endY-word.startY)+ '\n')
                 state.offset += word.word.length + 1
               }
               state.offset -= 1

@@ -480,7 +480,7 @@ object ECCOIndexer extends OctavoIndexer {
           }
           siw.addDocument(r.sd)
         }
-      val dpcontentsS = dpcontents.toString.trim
+      val dpcontentsS = dpcontents.toString
       if (dpcontentsS.length > 0) {
         r.contentField.setStringValue(dpcontentsS)
         r.contentLengthFields.setValue(dpcontentsS.length)
@@ -496,7 +496,6 @@ object ECCOIndexer extends OctavoIndexer {
         dpiw.addDocument(r.dpd)
       }
       dcontents.append(dpcontentsS)
-      dcontents.append("\n\n")
     }
     val dcontentsS = dcontents.toString.trim
     val reuses: Seq[ReuseInterval] = documentClusters.asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]

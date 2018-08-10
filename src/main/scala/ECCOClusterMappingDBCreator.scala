@@ -44,7 +44,7 @@ object ECCOClusterMappingDBCreator extends ParallelProcessor {
     val envDir = new File(opts.mappingsDb())
     envDir.mkdirs()
     val env = new Environment(envDir,new EnvironmentConfig().setAllowCreate(true).setTransactional(false).setConfigParam(EnvironmentConfig.LOG_FILE_MAX,"1073741824"))
-    db = env.openDatabase(null, "sampleDatabase", new DatabaseConfig().setAllowCreate(true).setDeferredWrite(true).setTransactional(false))
+    db = env.openDatabase(null, "sampleDatabase", new DatabaseConfig().setAllowCreate(true).setDeferredWrite(true).setTransactional(false).setKeyPrefixing(true))
     feedAndProcessFedTasksInParallel(() =>
       opts.directories().toStream.flatMap(n => getFileTree(new File(n))).filter(_.getName.endsWith(".csv")).foreach(file => addTask(file.getPath, () => index(file)))
     )
