@@ -70,12 +70,15 @@ object EEBOIndexer extends OctavoIndexer {
     val collectionIDFields = new StringSDVFieldPair("collectionID", dd, wd, dpd, sd, pd, send)
     val documentIDFields = new StringSDVFieldPair("documentID", dd, wd, dpd, sd, pd, send)
     val estcIDFields = new StringSDVFieldPair("ESTCID", dd, wd, dpd, sd, pd, send)
+    val vidFields = new StringSDVFieldPair("VID", dd, wd, dpd, sd, pd, send)
     val totalPagesFields = new IntPointNDVFieldPair("totalPages", dd, wd, dpd, sd, pd, send)
     val languageFields = new StringSDVFieldPair("language", dd, wd, dpd, sd, pd, send)
     val fullTitleFields = new TextSDVFieldPair("fullTitle",dd, wd,dpd,sd,pd, send)
     val contentLengthFields = new IntPointNDVFieldPair("contentLength", dd, wd, dpd, sd, pd, send)
     val documentLengthFields = new IntPointNDVFieldPair("documentLength", dd, wd, dpd, sd, pd, send)
     val totalParagraphsFields = new IntPointNDVFieldPair("totalParagraphs", dd, wd, dpd, sd, pd, send)
+    val startOffsetFields = new IntPointNDVFieldPair("startOffset", wd, dpd, sd, pd, send)
+    val endOffsetFields = new IntPointNDVFieldPair("endOffset", wd, dpd, sd, pd, send)
     val reusesFields = new IntPointNDVFieldPair("reuses", dd, wd, dpd, sd, pd, send)
     def clearOptionalDocumentFields() {
       totalPagesFields.setValue(0)
@@ -204,6 +207,8 @@ object EEBOIndexer extends OctavoIndexer {
           estcID = tdocumentID.substring(5)
           r.estcIDFields.setValue(estcID)
         }
+      case EvElemStart(_,"VID",_,_) =>
+        r.vidFields.setValue(trimSpace(readContents))
       case EvElemStart(_,"LANGUSAGE",attr,_) =>
         r.languageFields.setValue(attr("ID").head.text)
       case EvElemStart(_,"TITLE",attr,_) if attr("TYPE") != null && attr("TYPE").head.text == "alt" =>
@@ -272,6 +277,8 @@ object EEBOIndexer extends OctavoIndexer {
                 hi.addToDocument(r.pd)
                 hi.addToDocument(r.send)
               }))
+              r.startOffsetFields.setValue(dcontents.size + dpcontents.size - c.length)
+              r.endOffsetFields.setValue(dcontents.size + dpcontents.size)
               val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length, dcontents.size + dpcontents.size, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
               r.reusesFields.setValue(reuses.size)
               for (reuse <- reuses) {
@@ -289,6 +296,8 @@ object EEBOIndexer extends OctavoIndexer {
                 r.contentField.setStringValue(sentence)
                 r.contentLengthFields.setValue(sentence.length)
                 r.contentTokensFields.setValue(getNumberOfTokens(sentence))
+                r.startOffsetFields.setValue(dcontents.size + dpcontents.size - c.length + start)
+                r.endOffsetFields.setValue(dcontents.size + dpcontents.size - c.length + end)
                 val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length + start, dcontents.size + dpcontents.size - c.length + end, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
                 r.reusesFields.setValue(reuses.size)
                 for (reuse <- reuses) {
@@ -320,6 +329,8 @@ object EEBOIndexer extends OctavoIndexer {
                 r.headingFields.setValue(headingInfo.heading)
                 if (headingInfo.content.nonEmpty) {
                   val contentS = headingInfo.content.toString
+                  r.startOffsetFields.setValue(dcontents.size + dpcontents.size - contentS.length)
+                  r.endOffsetFields.setValue(dcontents.size + dpcontents.size)
                   val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - contentS.length, dcontents.size + dpcontents.size, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
                   r.reusesFields.setValue(reuses.size)
                   for (reuse <- reuses) {
@@ -356,6 +367,8 @@ object EEBOIndexer extends OctavoIndexer {
             hi.addToDocument(r.send)
             hasHeadingInfos = true
           }))
+          r.startOffsetFields.setValue(dcontents.size + dpcontents.size - c.length)
+          r.endOffsetFields.setValue(dcontents.size + dpcontents.size)
           val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length, dcontents.size + dpcontents.size, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
           r.reusesFields.setValue(reuses.size)
           for (reuse <- reuses) {
@@ -373,6 +386,8 @@ object EEBOIndexer extends OctavoIndexer {
             r.contentField.setStringValue(sentence)
             r.contentLengthFields.setValue(sentence.length)
             r.contentTokensFields.setValue(getNumberOfTokens(sentence))
+            r.startOffsetFields.setValue(dcontents.size + dpcontents.size - c.length + start)
+            r.endOffsetFields.setValue(dcontents.size + dpcontents.size - c.length + end)
             val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length + start, dcontents.size + dpcontents.size - c.length + end, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
             r.reusesFields.setValue(reuses.size)
             for (reuse <- reuses) {
@@ -396,6 +411,8 @@ object EEBOIndexer extends OctavoIndexer {
             r.contentField.setStringValue(contentS)
             r.contentLengthFields.setValue(contentS.length)
             r.contentTokensFields.setValue(getNumberOfTokens(contentS))
+            r.startOffsetFields.setValue(dcontents.size + dpcontents.size - contentS.length)
+            r.endOffsetFields.setValue(dcontents.size + dpcontents.size)
             val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - contentS.length, dcontents.size + dpcontents.size, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
             r.reusesFields.setValue(reuses.size)
             for (reuse <- reuses) {
@@ -410,6 +427,8 @@ object EEBOIndexer extends OctavoIndexer {
           r.contentField.setStringValue(dpcontentsS)
           r.contentLengthFields.setValue(dpcontentsS.length)
           r.contentTokensFields.setValue(getNumberOfTokens(dpcontentsS))
+          r.startOffsetFields.setValue(dcontents.size)
+          r.endOffsetFields.setValue(dcontents.size + dpcontents.size)
           val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size, dcontents.size + dpcontents.size, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
           r.reusesFields.setValue(reuses.size)
           for (reuse <- reuses) {
@@ -426,6 +445,8 @@ object EEBOIndexer extends OctavoIndexer {
         r.contentField.setStringValue(wcontentsS)
         r.contentLengthFields.setValue(wcontentsS.length)
         r.contentTokensFields.setValue(getNumberOfTokens(wcontentsS))
+        r.startOffsetFields.setValue(dcontents.size)
+        r.endOffsetFields.setValue(dcontents.size + wcontents.size)
         val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size, dcontents.size + wcontents.size, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
         r.reusesFields.setValue(reuses.size)
         for (reuse <- reuses) {

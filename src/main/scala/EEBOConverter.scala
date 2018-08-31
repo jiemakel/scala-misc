@@ -37,7 +37,8 @@ object EEBOConverter extends ParallelProcessor {
     writers.foreach(_.append(content))
   }
 
-  private def clean(content: StringBuilder): String = {
+  private def clean(content: StringBuilder): String = clean(content.toString)
+  private def clean(content: String): String = {
     trimSpace(content.toString.replaceAllLiterally(" |  | "," | ").replaceAll("\n\n+","\n\n"))
   }
 
@@ -74,8 +75,11 @@ object EEBOConverter extends ParallelProcessor {
       elem)
   }
 
+  private class PageTracker(val pbw: PrintWriter, val dcontent: StringBuilder) {
+    var lastPage: String = "-1"
+  }
 
-  private def process(opts: ProcessOpts)(implicit xml: XMLEventReader): String = {
+  private def process(opts: ProcessOpts)(implicit xml: XMLEventReader, pt: PageTracker): String = {
     val pcontent = new StringBuilder()
     val scontent = new StringBuilder()
     val content = new StringBuilder()
@@ -130,7 +134,15 @@ object EEBOConverter extends ParallelProcessor {
         case EvElemEnd(_, "FIGDESC") => append(" 〉")
         case EvElemStart(_, "HI", _, _) => if (!opts.omitEmphases) append("*")
         case EvElemEnd(_, "HI") => if (!opts.omitEmphases) append("*")
-        case EvElemStart(_, "PB", _, _) => //MS="y" REF="48" N="90"
+        case EvElemStart(_, "PB", attrs, _) => //MS="y" REF="48" N="90"
+          val pid: String = attrs("REF").headOption.map(_.text).getOrElse("-1")
+          if (pid!=pt.lastPage) {
+            val bb = clean(pt.dcontent.toString + content.toString)
+            println(bb.length, pid, bb)
+            val offset = bb.length
+            pt.pbw.append("" + offset + ',' + pid + '\n')
+            pt.lastPage = pid
+          }
         case EvElemEnd(_, "PB") =>
           val pcc = clean(pcontent)
           if (pcc.nonEmpty) {
@@ -203,10 +215,12 @@ object EEBOConverter extends ParallelProcessor {
 
 
   def index(file: File, dest: String, prefixLength: Int, inlineNotes: Boolean, omitEmphases: Boolean, omitStructure: Boolean): Unit = {
+    val opts = new ProcessOpts(file.getAbsolutePath.replace(".xml",""),file.getAbsolutePath.replace(".xml",""), dest, prefixLength, inlineNotes, omitEmphases, omitStructure, null)
     implicit val xml = new XMLEventReader(Source.fromFile(file, "UTF-8"))
     val dcontent = new StringBuilder()
+    val pbw = new PrintWriter(new File(opts.outputFilePrefix+"_pbs.csv"))
+    implicit val pt = new PageTracker(pbw,dcontent)
     var text = 1
-    val opts = new ProcessOpts(file.getAbsolutePath.replace(".xml",""),file.getAbsolutePath.replace(".xml",""), dest, prefixLength, inlineNotes, omitEmphases, omitStructure, null)
     new File(dest + file.getParentFile.getAbsolutePath.substring(prefixLength)).mkdirs()
     var indent = ""
     val metadata = new StringBuilder()
@@ -255,6 +269,7 @@ object EEBOConverter extends ParallelProcessor {
       cw.append(clean(dcontent))
       cw.close()
     }
+    pbw.close()
     logger.info("Successfully processed "+file)
   }
 

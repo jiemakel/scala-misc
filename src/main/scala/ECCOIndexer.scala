@@ -56,7 +56,7 @@ object ECCOIndexer extends OctavoIndexer {
   }
   
   class Reuse {
-    val bookToClusters = bookToClustersDB.openCursor(null, null)
+    val bookToFragments = bookToFragmentsDB.openCursor(null, null)
     val bckeya = new Array[Byte](java.lang.Long.BYTES)
     val bcbb = ByteBuffer.wrap(bckeya)
     val bckey = new DatabaseEntry(bckeya)
@@ -171,18 +171,18 @@ object ECCOIndexer extends OctavoIndexer {
     r.collectionIDFields.setValue(id)
     var documentID: String = null
     var estcID: String = null
-    val documentClusters: IntervalTree = treeBuilder.build()
+    val documentFragments: IntervalTree = treeBuilder.build()
     while (xml.hasNext) xml.next match {
       case EvElemStart(_,"documentID",_,_) | EvElemStart(_,"PSMID",_,_) =>
         documentID = trimSpace(readContents)
         r.documentIDFields.setValue(documentID)
         r.bcbb.putLong(0, documentID.toLong)
-        if (r.bookToClusters.getSearchKey(r.bckey, r.bcval, LockMode.DEFAULT) == OperationStatus.SUCCESS) {
+        if (r.bookToFragments.getSearchKey(r.bckey, r.bcval, LockMode.DEFAULT) == OperationStatus.SUCCESS) {
           val vbb = ByteBuffer.wrap(r.bcval.getData)
-          documentClusters.add(new ReuseInterval(vbb.getInt,vbb.getInt,vbb.getLong))
-          while (r.bookToClusters.getNextDup(r.bckey, r.bcval, LockMode.DEFAULT) == OperationStatus.SUCCESS) {
+          documentFragments.add(new ReuseInterval(vbb.getInt,vbb.getInt,vbb.getLong))
+          while (r.bookToFragments.getNextDup(r.bckey, r.bcval, LockMode.DEFAULT) == OperationStatus.SUCCESS) {
             val vbb = ByteBuffer.wrap(r.bcval.getData)
-            documentClusters.add(new ReuseInterval(vbb.getInt,vbb.getInt,vbb.getLong))
+            documentFragments.add(new ReuseInterval(vbb.getInt,vbb.getInt,vbb.getLong))
           }
         }
       case EvElemStart(_,"ESTCID",_,_) =>
@@ -335,7 +335,7 @@ object ECCOIndexer extends OctavoIndexer {
               hi.addToDocument(r.pd)
               hi.addToDocument(r.send)
             }))
-            val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length,dcontents.size + dpcontents.size,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
+            val reuses: Seq[ReuseInterval] = documentFragments.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length,dcontents.size + dpcontents.size,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
             r.reusesFields.setValue(reuses.size)
             for (reuse <- reuses) {
               val f = new StringSNDVFieldPair("reuseID",r.pd)
@@ -354,7 +354,7 @@ object ECCOIndexer extends OctavoIndexer {
               r.endOffsetFields.setValue(poffset + end)
               r.contentLengthFields.setValue(sentence.length)
               r.contentTokensFields.setValue(getNumberOfTokens(sentence))
-              val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length + start,dcontents.size + dpcontents.size - c.length  + end,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
+              val reuses: Seq[ReuseInterval] = documentFragments.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length + start,dcontents.size + dpcontents.size - c.length  + end,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
               r.reusesFields.setValue(reuses.size)
               for (reuse <- reuses) {
                 val f = new StringSNDVFieldPair("reuseID",r.send)
@@ -387,7 +387,7 @@ object ECCOIndexer extends OctavoIndexer {
               r.headingFields.setValue(headingInfo.heading)
               if (headingInfo.content.nonEmpty) {
             	  val contentS = headingInfo.content.toString
-                val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - contentS.length,dcontents.size + dpcontents.size,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
+                val reuses: Seq[ReuseInterval] = documentFragments.overlap(new IntegerInterval(dcontents.size + dpcontents.size - contentS.length,dcontents.size + dpcontents.size,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
                 r.reusesFields.setValue(reuses.size)
                 for (reuse <- reuses) {
                   val f = new StringSNDVFieldPair("reuseID",r.sd)
@@ -425,7 +425,7 @@ object ECCOIndexer extends OctavoIndexer {
           hi.addToDocument(r.send)
           hasHeadingInfos = true
         }))
-        val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length,dcontents.size + dpcontents.size,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
+        val reuses: Seq[ReuseInterval] = documentFragments.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length,dcontents.size + dpcontents.size,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
         r.reusesFields.setValue(reuses.size)
         for (reuse <- reuses) {
           val f = new StringSNDVFieldPair("reuseID",r.pd)
@@ -444,7 +444,7 @@ object ECCOIndexer extends OctavoIndexer {
           r.endOffsetFields.setValue(poffset + end)
           r.contentLengthFields.setValue(sentence.length)
           r.contentTokensFields.setValue(getNumberOfTokens(sentence))
-          val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length + start,dcontents.size + dpcontents.size - c.length  + end,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
+          val reuses: Seq[ReuseInterval] = documentFragments.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length + start,dcontents.size + dpcontents.size - c.length  + end,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
           r.reusesFields.setValue(reuses.size)
           for (reuse <- reuses) {
             val f = new StringSNDVFieldPair("reuseID",r.send)
@@ -471,7 +471,7 @@ object ECCOIndexer extends OctavoIndexer {
             r.endOffsetFields.setValue(headingInfo.startOffset + contentS.length)
         	  r.contentLengthFields.setValue(contentS.length)
         	  r.contentTokensFields.setValue(getNumberOfTokens(contentS))
-            val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - contentS.length,dcontents.size + dpcontents.size,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
+            val reuses: Seq[ReuseInterval] = documentFragments.overlap(new IntegerInterval(dcontents.size + dpcontents.size - contentS.length,dcontents.size + dpcontents.size,false,true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
             r.reusesFields.setValue(reuses.size)
             for (reuse <- reuses) {
               val f = new StringSNDVFieldPair("reuseID",r.sd)
@@ -487,7 +487,7 @@ object ECCOIndexer extends OctavoIndexer {
         r.contentTokensFields.setValue(getNumberOfTokens(dpcontentsS))
         r.startOffsetFields.setValue(dpoffset)
         r.endOffsetFields.setValue(dpoffset+dpcontentsS.length)
-        val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size, dcontents.size + dpcontents.size, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
+        val reuses: Seq[ReuseInterval] = documentFragments.overlap(new IntegerInterval(dcontents.size, dcontents.size + dpcontents.size, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
         r.reusesFields.setValue(reuses.size)
         for (reuse <- reuses) {
           val f = new StringSNDVFieldPair("reuseID", r.dpd)
@@ -498,7 +498,7 @@ object ECCOIndexer extends OctavoIndexer {
       dcontents.append(dpcontentsS)
     }
     val dcontentsS = dcontents.toString.trim
-    val reuses: Seq[ReuseInterval] = documentClusters.asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
+    val reuses: Seq[ReuseInterval] = documentFragments.asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
     r.reusesFields.setValue(reuses.size)
     for (reuse <- reuses) {
       val f = new StringSNDVFieldPair("reuseID",r.dd)
@@ -519,7 +519,7 @@ object ECCOIndexer extends OctavoIndexer {
   val ps = new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG))
   val sens = new Sort(new SortField("documentID",SortField.Type.STRING), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG))
 
-  var bookToClustersDB: Database = _
+  var bookToFragmentsDB: Database = _
 
   def main(args: Array[String]): Unit = {
     val opts = new AOctavoOpts(args) {
@@ -528,14 +528,14 @@ object ECCOIndexer extends OctavoIndexer {
       val spostings = opt[String](default = Some("blocktree"))
       val ppostings = opt[String](default = Some("fst"))
       val senpostings = opt[String](default = Some("blocktree"))
-      val bookToClusterDb = opt[String](required = true)
+      val bookToFragmentDb = opt[String](required = true)
       verify()
     }
-    val btcenvDir = new File(opts.bookToClusterDb())
+    val btcenvDir = new File(opts.bookToFragmentDb())
     btcenvDir.mkdirs()
     val btcenv = new Environment(btcenvDir,new EnvironmentConfig().setAllowCreate(true).setTransactional(false).setSharedCache(true).setConfigParam(EnvironmentConfig.LOG_FILE_MAX,"1073741824"))
     btcenv.setMutableConfig(btcenv.getMutableConfig.setCacheSize(opts.indexMemoryMb()*1024*1024/2))
-    bookToClustersDB = btcenv.openDatabase(null, "bookToCluster", new DatabaseConfig().setAllowCreate(true).setDeferredWrite(true).setTransactional(false).setSortedDuplicates(true))
+    bookToFragmentsDB = btcenv.openDatabase(null, "bookToFragment", new DatabaseConfig().setAllowCreate(true).setDeferredWrite(true).setTransactional(false).setSortedDuplicates(true))
     if (!opts.onlyMerge()) {
       // document level
       diw = iw(opts.index()+"/dindex", ds, opts.indexMemoryMb()/5)
