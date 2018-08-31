@@ -2,7 +2,7 @@ name := """scala-misc"""
 
 version := "1.0"
 
-scalaVersion := "2.12.3"
+scalaVersion := "2.12.6"
 
 libraryDependencies ++= Seq(
   "com.typesafe.play" %% "play-json" % "2.6.0-M6",
@@ -35,7 +35,7 @@ libraryDependencies ++= Seq(
   "org.rogach" %% "scallop" % "2.1.1",
   "org.jsoup" % "jsoup" % "1.10.2",
   "com.optimaize.languagedetector" % "language-detector" % "0.6" exclude("com.intellij","annotations"),
-  "org.jetbrains.xodus" % "xodus-environment" % "1.2.3"
+  "org.jetbrains.xodus" % "xodus-environment" % "1.2.3" exclude("org.jetbrains","annotations")
 )
 
 resolvers ++= Seq(
