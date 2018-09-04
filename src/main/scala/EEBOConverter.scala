@@ -60,11 +60,12 @@ object EEBOConverter extends ParallelProcessor {
     val inlineNotes: Boolean,
     val omitEmphases: Boolean,
     val omitStructure: Boolean,
-    val currentElem: String,
+    val startOffset: Int,
+    val currentElem: String
    ) {
     val outputFilePrefix = dest + "/" + this.currentFilePrefix.substring(prefixLength)
     val outputRootPrefix = dest + "/" + this.currentRootPrefix.substring(prefixLength)
-    def child(prefix: String, elem: String): ProcessOpts = new ProcessOpts(
+    def child(prefix: String, startOffset: Int, elem: String): ProcessOpts = new ProcessOpts(
       this.currentFilePrefix + "_" + prefix,
       this.currentRootPrefix,
       this.dest,
@@ -72,6 +73,7 @@ object EEBOConverter extends ParallelProcessor {
       this.inlineNotes,
       this.omitEmphases,
       this.omitStructure,
+      startOffset,
       elem)
   }
 
@@ -120,7 +122,7 @@ object EEBOConverter extends ParallelProcessor {
             content.append("\n\n")
           }
           scontent.clear()
-          val cpo = opts.child(dpart+"_"+elem.toLowerCase, elem)
+          val cpo = opts.child(dpart+"_"+elem.toLowerCase, opts.startOffset + content.length, elem)
           val cc = process(cpo)
           if (cc.nonEmpty) {
             val sw = new PrintWriter(new File(cpo.outputFilePrefix + ".txt"))
@@ -138,8 +140,7 @@ object EEBOConverter extends ParallelProcessor {
           val pid: String = attrs("REF").headOption.map(_.text).getOrElse("-1")
           if (pid!=pt.lastPage) {
             val bb = clean(pt.dcontent.toString + content.toString)
-            println(bb.length, pid, bb)
-            val offset = bb.length
+            val offset = opts.startOffset + bb.length
             pt.pbw.append("" + offset + ',' + pid + '\n')
             pt.lastPage = pid
           }
@@ -155,7 +156,7 @@ object EEBOConverter extends ParallelProcessor {
         case EvElemStart(_, elem, _, _) if elem == "NOTE" || elem == "HEADNOTE" || elem == "TAILNOTE" || elem == "DEL" || elem == "CORR" =>
           if (!opts.inlineNotes) {
             val index = content.length - 1
-            val cpo = opts.child(elem.toLowerCase+"_at_"+ index, elem)
+            val cpo = opts.child(elem.toLowerCase+"_at_"+ index, Int.MinValue , elem) // if there are page breaks in notes, :::DDD~
             val note = process(cpo)
             val sw = new PrintWriter(cpo.outputFilePrefix + ".txt")
             sw.append(note)
@@ -215,7 +216,7 @@ object EEBOConverter extends ParallelProcessor {
 
 
   def index(file: File, dest: String, prefixLength: Int, inlineNotes: Boolean, omitEmphases: Boolean, omitStructure: Boolean): Unit = {
-    val opts = new ProcessOpts(file.getAbsolutePath.replace(".xml",""),file.getAbsolutePath.replace(".xml",""), dest, prefixLength, inlineNotes, omitEmphases, omitStructure, null)
+    val opts = new ProcessOpts(file.getAbsolutePath.replace(".xml",""),file.getAbsolutePath.replace(".xml",""), dest, prefixLength, inlineNotes, omitEmphases, omitStructure, 0, null)
     implicit val xml = new XMLEventReader(Source.fromFile(file, "UTF-8"))
     val dcontent = new StringBuilder()
     val pbw = new PrintWriter(new File(opts.outputFilePrefix+"_pbs.csv"))
@@ -252,7 +253,7 @@ object EEBOConverter extends ParallelProcessor {
         sw.append(metadata)
         sw.close()
       case EvElemStart(_, "TEXT",_,_) =>
-        val copts = opts.child(text+"_text", "TEXT")
+        val copts = opts.child(text+"_text", dcontent.length, "TEXT")
         val content = process(copts)
         if (content.nonEmpty) {
           val sw = new PrintWriter(new File(copts.outputFilePrefix + ".txt"))
