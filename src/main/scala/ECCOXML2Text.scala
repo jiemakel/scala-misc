@@ -361,9 +361,8 @@ object ECCOXML2Text extends LazyLogging {
         _ = if (!fd.exists()) logger.warn(dir+" doesn't exist!");
         prefixLength = (if (!fd.isDirectory) fd.getParentFile.getAbsolutePath else fd.getAbsolutePath).length
     ) yield (guessParagraphs,fd,prefixLength)
+    val omitStructure = opts.omitStructure()
     val omitHeadings = opts.omitHeadings()
-    val omitStructure = opts.omitStructure() || omitHeadings
-
     val f = Future.sequence(toProcess.flatMap{ case (guessParagraphs,fd,prefixLength) =>
       getFileTree(fd)
         .filter(file => file.getName.endsWith(".xml") && !file.getName.startsWith("ECCO_tiff_manifest_") && !file.getName.endsWith("_metadata.xml") && {
