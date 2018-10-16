@@ -71,9 +71,9 @@ object METSALTO2Text extends ParallelProcessor {
       val seenTextBlocks = new mutable.HashSet[String]
       val seenImageBlocks = new mutable.HashSet[String]
       val seenComposedBlocks = new mutable.HashSet[String]
-      // the following stores the order in which blocks were encountered in the ALTO file for later use in page-oriented serialization
+      // the following stores the VPOS in which blocks were encountered in the ALTO file for later use in page-oriented serialization
       val altoBlockOrder = new mutable.HashMap[String,Int]
-      var blocks = 0
+      val iw = new PrintWriter(new File(destdirectory+"issue.txt"))
       var break = false
       for (file <- new File(directory.getPath).listFiles;if file.getName.startsWith("alto_")) {
         val s = Source.fromFile(file,"UTF-8")
@@ -84,21 +84,18 @@ object METSALTO2Text extends ParallelProcessor {
           case EvElemStart(_,"Page",attrs,_) =>
             page = Some(new ArrayBuffer[String])
             pageBlocks.put(attrs("ID").head.text,page.get)
-            altoBlockOrder.put(attrs("ID").head.text,blocks)
-            blocks+=1
+            altoBlockOrder.put(attrs("ID").head.text,0)
           case EvElemStart(_,"ComposedBlock",attrs,_) =>
             val composedBlockId = attrs("ID").head.text
             composedBlock = Some(new ArrayBuffer[String])
             page.foreach(_+=composedBlockId)
             composedBlocks.put(composedBlockId,composedBlock.get)
-            altoBlockOrder.put(composedBlockId,blocks)
-            blocks+=1
+            altoBlockOrder.put(composedBlockId,attrs("VPOS").head.text.toInt)
           case EvElemStart(_,"GraphicalElement",attrs,_) =>
             val imageBlock = attrs("ID").head.text
             composedBlock.orElse(page).foreach(_+=imageBlock)
             imageBlocks.put(imageBlock,Image(directory,file.getName.replace("alto_","").replace(".xml",""),Integer.parseInt(attrs("HPOS").head.text)*30/254,Integer.parseInt(attrs("VPOS").head.text)*300/254,Integer.parseInt(attrs("WIDTH").head.text)*300/254,Integer.parseInt(attrs("HEIGHT").head.text)*300/254))
-            altoBlockOrder.put(imageBlock,blocks)
-            blocks+=1
+            altoBlockOrder.put(imageBlock,attrs("VPOS").head.text.toInt)
           case EvElemEnd(_,"ComposedBlock") =>
             composedBlock = None
           case EvElemEnd(_,"Page") =>
@@ -118,8 +115,7 @@ object METSALTO2Text extends ParallelProcessor {
               case _ =>
             }
             textBlocks.put(textBlock,text)
-            altoBlockOrder.put(textBlock,blocks)
-            blocks+=1
+            altoBlockOrder.put(textBlock,attrs("VPOS").head.text.toInt)
           case _ =>
         }
         s.close()
@@ -128,7 +124,7 @@ object METSALTO2Text extends ParallelProcessor {
       val s = Source.fromFile(metsFile,"UTF-8")
       val xml = new XMLEventReader(s)
       var current = Level("","","",new StringBuilder(),serialize = false)
-      blocks = 0
+      var blocks = 0
       val blockOrder = new mutable.HashMap[String,Int]
       /** recursive function to serialize a (possibly composed) block */
       def processArea: String => Unit = (areaId: String) => {
@@ -228,6 +224,7 @@ object METSALTO2Text extends ParallelProcessor {
                   val pw = new PrintWriter(new File(destdirectory+hc.fileNamePrefix+".txt"))
                   pw.append(hc.content)
                   pw.close()
+                  iw.append(hc.content)
                 }
               }
               if (hc.serialize || articleMetadata.contains(hc.id)) {
@@ -251,6 +248,7 @@ object METSALTO2Text extends ParallelProcessor {
         processArea(block)
         var pw = new PrintWriter(new File(destdirectory+"other_texts_"+block+".txt"))
         pw.append(current.content)
+        iw.append(current.content)
         pw.close()
         pw = new PrintWriter(new File(destdirectory+"other_texts_"+block+"_metadata.xml"))
         pw.println("<metadata>\n<blocks>"+composedBlocks(block).sorted.mkString(",")+"</blocks>\n<pages>"+current.pages.toSeq.sorted.mkString(",")+"</pages>\n</metadata>")
@@ -260,25 +258,31 @@ object METSALTO2Text extends ParallelProcessor {
       val unclaimedPageBlocks = new mutable.HashMap[Int,mutable.Buffer[String]]
       for (textBlock <- textBlocks.keys;if !seenTextBlocks.contains(textBlock))
         unclaimedPageBlocks.getOrElseUpdate(Integer.parseInt(textBlock.substring(1).replaceFirst("_.*","")),new ArrayBuffer[String]) += textBlock
-      for (page <- unclaimedPageBlocks.keys) {
+      for (page <- unclaimedPageBlocks.keys.toSeq.sorted) {
         var pw = new PrintWriter(new File(destdirectory+"other_texts_page_"+page+"_metadata.xml"))
         pw.println("<metadata>\n<blocks>"+unclaimedPageBlocks(page).sorted.mkString(",")+"</blocks>\n</metadata>")
         pw.close()
         pw = new PrintWriter(new File(destdirectory+"other_texts_page_"+page+".txt"))
-        for (text <- unclaimedPageBlocks(page).sorted.map(textBlocks(_))) pw.println(text)
+        for (text <- unclaimedPageBlocks(page).sortWith(altoBlockOrder(_)<altoBlockOrder(_)).map(textBlocks(_))) {
+          pw.println(text)
+          iw.println(text)
+        }
         pw.close()
       }
-      // finally, we serialize also page plaintexts. The blocks are organized sorted first by how they appear in the logical order, then by inserting any blocks not appearing in the logical order after their ALTO predecessor.
-      for (page <- pageBlocks.keys) {
+      iw.close()
+      val iwm = new PrintWriter(new File(destdirectory+"issue_metadata.xml"))
+      iwm.println("<metadata>")
+      // finally, we serialize also page and issue plaintexts. The blocks are organized sorted first by how they appear in the logical order, then by inserting any blocks not appearing in the logical order after their ALTO predecessor.
+      for (page <- pageBlocks.keys.toSeq.sortWith(_.substring(1).toInt<_.substring(1).toInt)) {
         current = Level("","","",new StringBuilder(),serialize = false)
         var (refBlocks,unrefBlocks) = pageBlocks(page).partition(blockOrder.contains)
         refBlocks = refBlocks.sortWith(blockOrder(_)<blockOrder(_))
         if (refBlocks.isEmpty) refBlocks = unrefBlocks.sortWith(altoBlockOrder(_)<altoBlockOrder(_))
         else unrefBlocks.sortWith(altoBlockOrder(_)<altoBlockOrder(_)).foreach( b => {
-          val myBlockOrder = altoBlockOrder(b)-1
+          val myBlockOrder = altoBlockOrder(b)
           var i = 0
-          while (i<refBlocks.length-1 && myBlockOrder!=altoBlockOrder(refBlocks(i))) i+=1
-          refBlocks.insert(i+1,b)
+          while (i<refBlocks.length && myBlockOrder>altoBlockOrder(refBlocks(i))) i+=1
+          refBlocks.insert(i,b)
         })
         pageBlocks.put(page,refBlocks)
         processArea(page)
@@ -286,9 +290,14 @@ object METSALTO2Text extends ParallelProcessor {
         pw.append(current.content)
         pw.close()
         pw = new PrintWriter(new File(destdirectory+"page_"+page+"_metadata.xml"))
-        pw.println("<metadata>\n<blocks>"+pageBlocks(page).sorted.mkString(",")+"</blocks>\n</metadata>")
+        val ps = "<blocks>"+pageBlocks(page).sorted.mkString(",")+"</blocks>"
+        pw.println("<metadata>\n"+ps+"\n</metadata>")
+        iwm.println("<page id=\""+page+"\">\n"+ps+"\n</page>")
         pw.close()
       }
+      iwm.println("</metadata>")
+      iw.close()
+      iwm.close()
       s.close()
   }
 
