@@ -48,7 +48,8 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     val dateEndFields = new IntPointNDVFieldPair("dateEnd", sd, pd, ad, id) // <searchableDateEnd>17851129</searchableDateEnd>
     val authorFields = new TextSDVFieldPair("author", sd, pd, ad) // <au_composed>Tom Whipple</au_composed>
     val sectionFields = new StringSDVFieldPair("section", sd, pd, ad) // <sc>A</sc>
-    
+
+    val ocrConfidenceFields = new IntPointNDVFieldPair("ocrConfidence", sd, pd, ad, id)
     val lengthFields = new IntPointNDVFieldPair("length", sd, pd, ad, id)
     val tokensFields = new IntPointNDVFieldPair("tokens", sd, pd, ad, id)
 
@@ -289,28 +290,45 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     try {
       val state = new State()
       var edate = 0
-      while (xml.hasNext) xml.next match {
+      var issueConfidence = 0
+      var articleConfidence = 0
+      var articleConfidenceCount = 0
+      var break = false
+      // read metadatainfo first. If it doesn't exist, we have a broken issue and the whole thing gets skipped
+      while (xml.hasNext && !break) xml.next match {
         case EvElemStart(_, "issue", attrs, _) => d.issueIDFields.setValue(attrs("ID").head.text)
         case EvElemStart(_, "newspaperID", _, _) => d.newspaperIDFields.setValue(readContents)
-        case EvElemStart(_, "language", _, _) => d.languageFields.setValue(readContents)
-        case EvElemStart(_, "dw", _, _) => d.dayOfWeekFields.setValue(readContents)
-        case EvElemStart(_, "is", _, _) => d.issueNumberFields.setValue(readContents)
-        case EvElemStart(_, "pc", _, _) => d.issuePagesFields.setValue(readContents.toInt)
+        case EvElemStart(_, "ocr", _, _) =>
+          val confidence = readContents
+          val confidenceAsInt = (confidence.substring(0,confidence.indexOf('.'))+confidence.substring(confidence.indexOf('.')+1,confidence.length)).toInt
+          issueConfidence = confidenceAsInt
         case EvElemStart(_, "searchableDateStart", _, _) =>
           val dateS = readContents
           val sdate = dateS.toInt
           edate = dateS.replace("00","99").toInt
-          if (endYear.exists(sdate > _)) return
           d.dateStartFields.setValue(sdate)
           d.dateEndFields.setValue(edate)
         case EvElemStart(_, "searchableDateEnd", _, _) =>
           edate = readContents.toInt
-          if (startYear.exists(_ > edate)) return
           d.dateEndFields.setValue(edate)
-        case EvElemEnd(_,"da") =>
-          if (startYear.exists(_ > edate)) return
-        case EvElemEnd(_,"metadatainfo") => if ((startYear.isDefined || endYear.isDefined) && edate==0) return
-        case EvElemStart(_, "article", _, _) => d.clearOptionalArticleFields()
+        case EvElemStart(_, "dw", _, _) => d.dayOfWeekFields.setValue(readContents)
+        case EvElemStart(_, "is", _, _) => d.issueNumberFields.setValue(readContents)
+        case EvElemStart(_, "language", _, _) => d.languageFields.setValue(readContents)
+        case EvElemEnd(_,"metadatainfo") => break = true
+      }
+      while (xml.hasNext) xml.next match {
+        case EvElemStart(_, "ocrLanguage", _, _) => d.languageFields.setValue(readContents)
+        case EvElemStart(_, "pc", _, _) => d.issuePagesFields.setValue(readContents.toInt)
+        case EvElemStart(_, "ocr", _, _) =>
+          val confidence = readContents
+          val confidenceAsInt = (confidence.substring(0,confidence.indexOf('.'))+confidence.substring(confidence.indexOf('.')+1,confidence.length)).toInt
+          articleConfidence += confidenceAsInt
+          articleConfidenceCount += 1
+          d.ocrConfidenceFields.setValue(confidenceAsInt)
+        case EvElemStart(_, "article", _, _) =>
+          d.clearOptionalArticleFields()
+          articleConfidence = 0
+          articleConfidenceCount = 0
         case EvElemStart(_, "id", _, _) => d.articleIDFields.setValue(readContents)
         case EvElemStart(_, "au_composed", _, _) => d.authorFields.setValue(readContents)
         case EvElemStart(_, "sc", _, _) => d.sectionFields.setValue(readContents)
@@ -340,6 +358,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
         case EvElemStart(_, "pi", _, _) => d.pagesInArticle += 1
         case EvElemEnd(_, "article") =>
           val article = d.articleContents.toString
+          d.ocrConfidenceFields.setValue(articleConfidence/articleConfidenceCount)
           d.textField.setStringValue(article)
           d.lengthFields.setValue(article.length)
           d.tokensFields.setValue(getNumberOfTokens(article))
@@ -370,15 +389,18 @@ object BritishNewspaperIndexer extends OctavoIndexer {
         case _ =>
       }
       val issue = d.issueContents.toString
-      d.textField.setStringValue(issue)
-      d.lengthFields.setValue(issue.length)
-      d.tokensFields.setValue(getNumberOfTokens(issue))
-      d.paragraphsFields.setValue(d.paragraphsInIssue)
-      d.illustrationsFields.setValue(d.illustrationsInIssue)
-      d.sentencesFields.setValue(d.sentencesInIssue)
-      d.articlesFields.setValue(d.articlesInIssue)
-      iiw.addDocument(d.id)
-      logger.info("File " + file + " processed.")
+      if (issue.nonEmpty) {
+        d.ocrConfidenceFields.setValue(issueConfidence)
+        d.textField.setStringValue(issue)
+        d.lengthFields.setValue(issue.length)
+        d.tokensFields.setValue(getNumberOfTokens(issue))
+        d.paragraphsFields.setValue(d.paragraphsInIssue)
+        d.illustrationsFields.setValue(d.illustrationsInIssue)
+        d.sentencesFields.setValue(d.sentencesInIssue)
+        d.articlesFields.setValue(d.articlesInIssue)
+        iiw.addDocument(d.id)
+        logger.info("File " + file + " processed.")
+      } else logger.warn("File " + file + "yielded no content.")
     } finally {
       while (xml.hasNext) xml.next() // stupid XMLEventReader.stop() deadlocks and leaves threads hanging
     }
