@@ -7,8 +7,7 @@ import com.brein.time.timeintervals.intervals.IntegerInterval
 import com.typesafe.scalalogging.LazyLogging
 
 import scala.collection.JavaConverters._
-import scala.collection.immutable
-import scala.collection.mutable
+import scala.collection.{immutable, mutable}
 import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
@@ -58,6 +57,7 @@ object DetectColumnsInALTO extends LazyLogging {
   case class Style(font: String, size: Int, bold: Boolean, italics: Boolean, underlined: Boolean) {
     var chars = 0l
     var words = 0l
+    var area = 0l
   }
 
   var pw1: PrintWriter = _
@@ -66,6 +66,11 @@ object DetectColumnsInALTO extends LazyLogging {
   var pw4: PrintWriter = _
   var pw5: PrintWriter = _
   var pw6: PrintWriter = _
+  var pw7: PrintWriter = _
+  var pw8: PrintWriter = _
+  var pw9: PrintWriter = _
+  var pw10: PrintWriter = _
+  var pw11: PrintWriter = _
 
   private val treeBuilder = IntervalTreeBuilder.newBuilder()
     .usePredefinedType(IntervalType.INTEGER)
@@ -81,8 +86,8 @@ object DetectColumnsInALTO extends LazyLogging {
     implicit val xml = new XMLEventReader(s)
     val textBlocks: IntervalTree = treeBuilder.build()
     var issn: String = "?"
-    var binding: String = "?"
     var date: String = "?"
+    var binding: String = "?"
     var words = 0l
     var characters = 0l
     val page: Int = Try(Integer.parseInt(altoFile.getName.substring(altoFile.getName.lastIndexOf('_') + 1, altoFile.getName.length - 4))).getOrElse(0)
@@ -90,10 +95,37 @@ object DetectColumnsInALTO extends LazyLogging {
     var bstyle: Style = null
     var lstyle: Style = null
     var sstyle: Style = null
+    var preSoftware: String = "?"
+    var preVersion: String = "?"
+    var ocrSoftware: String = "?"
+    var ocrVersion: String = "?"
+    var curBlock: Block = null
+    var curBlockWords = 0l
+    var curBlockChars = 0l
     while (xml.hasNext) xml.next match {
       case EvElemStart(_, "identifier", _, _) => issn = readContents
       case EvElemStart(_, "bindingIdentifier", _, _) => binding = readContents
       case EvElemStart(_, "published", _, _) => date = readContents
+      case EvElemStart(_, "preProcessingStep",_,_) =>
+        var break = false
+        preSoftware = "?"
+        preVersion = "?"
+        while (xml.hasNext && !break) xml.next match {
+          case EvElemStart(_, "softwareName",_,_) => preSoftware = readContents
+          case EvElemStart(_, "softwareVersion",_,_) => preVersion = readContents
+          case EvElemEnd(_, "preProcessingStep") => break = true
+          case _ =>
+        }
+      case EvElemStart(_, "ocrProcessingStep",_,_) =>
+        var break = false
+        ocrSoftware = "?"
+        ocrVersion = "?"
+        while (xml.hasNext && !break) xml.next match {
+          case EvElemStart(_, "softwareName",_,_) => ocrSoftware = readContents
+          case EvElemStart(_, "softwareVersion",_,_) => ocrVersion = readContents
+          case EvElemEnd(_, "ocrProcessingStep") => break = true
+          case _ =>
+        }
       case EvElemStart(_, "TextStyle", attrs, _) => try {
         val id = attrs("ID").head.text
         val size = attrs("FONTSIZE").head.text.toInt
@@ -107,7 +139,7 @@ object DetectColumnsInALTO extends LazyLogging {
         val height = attrs("HEIGHT").head.text.toInt
         val width = attrs("WIDTH").head.text.toInt
         pw6.synchronized {
-          pw6.println(issn + "," + binding + "," + date + "," + page + "," + width + "," + height)
+          pw6.println(binding + "," + page + "," + width + "," + height)
         }
       } catch {
         case e: Exception => logger.warn("Exception processing page attrs " + attrs, e)
@@ -116,7 +148,7 @@ object DetectColumnsInALTO extends LazyLogging {
         val height = attrs("HEIGHT").head.text.toInt
         val width = attrs("WIDTH").head.text.toInt
         pw5.synchronized {
-          pw5.println(issn + "," + binding + "," + date + "," + page + "," + width + "," + height)
+          pw5.println(binding  + "," + page + "," + width + "," + height)
         }
       } catch {
         case e: Exception => logger.warn("Exception processing printspace attrs " + attrs, e)
@@ -126,43 +158,70 @@ object DetectColumnsInALTO extends LazyLogging {
         val vpos = Integer.parseInt(attrs("VPOS").head.text)
         val width = Integer.parseInt(attrs("WIDTH").head.text)
         val height = Integer.parseInt(attrs("HEIGHT").head.text)
-        val block = Block(hpos, vpos, hpos + width, vpos + height)
+        curBlock = Block(hpos, vpos, hpos + width, vpos + height)
+        curBlockWords = 0l
+        curBlockChars = 0l
         bstyle = null
         for (styles <- Option(attrs("STYLEREFS"));
              style <- styles.head.text.split(" ")) if (styleMap.contains(style)) bstyle = styleMap(style)
-        if (width >= 0 && height >= 0)
-          textBlocks.insert(block)
+        if (width >= 0 && height >= 0) {
+          if (bstyle != null) bstyle.area += width * height
+          textBlocks.insert(curBlock)
+        }
       } catch {
         case e: Exception => logger.warn("Exception processing text block " + attrs, e)
       }
+      case EvElemEnd(_, "TextBlock") =>
+        pw8.synchronized {
+          pw8.println(binding + "," + page + "," + curBlock.hpos1 + "," + curBlock.vpos1 + "," + curBlock.hpos2 + "," + curBlock.vpos2 + "," + curBlockWords + "," + curBlockChars)
+        }
       case EvElemStart(_, "TextLine", attrs, _) => try {
         lstyle = null
         for (styles <- Option(attrs("STYLEREFS"));
              style <- styles.head.text.split(" ")) if (styleMap.contains(style)) lstyle = styleMap(style)
+        if (lstyle != null) {
+          val width = Integer.parseInt(attrs("WIDTH").head.text)
+          val height = Integer.parseInt(attrs("HEIGHT").head.text)
+          lstyle.area += width * height
+          if (bstyle != null) bstyle.area -= width * height
+        }
       } catch {
         case e: Exception => logger.warn("Exception processing textline attrs " + attrs, e)
       }
       case EvElemStart(_, "String", attrs, _) =>
         val cchars = attrs("CONTENT").head.text.length
         characters += cchars
+        curBlockChars += cchars
         words += 1
+        curBlockWords += 1
         sstyle = null
         for (styles <- Option(attrs("STYLEREFS"));
              style <- styles.head.text.split(" ")) if (styleMap.contains(style)) sstyle = styleMap(style)
         val cstyle = if (sstyle != null) sstyle else if (lstyle != null) lstyle else bstyle
         if (cstyle!=null) {
+          val width = Integer.parseInt(attrs("WIDTH").head.text)
+          val height = Integer.parseInt(attrs("HEIGHT").head.text)
+          cstyle.area += width * height
+          if (lstyle != null) lstyle.area -= width * height
+          if (bstyle != null) bstyle.area -= width * height
           cstyle.words += 1
           cstyle.chars += cchars
         }
       case _ =>
     }
     s.close()
+    pw9.synchronized {
+      pw9.println(binding  + "," + issn + "," + date)
+    }
+    pw7.synchronized {
+      pw7.println(binding  + "," + page + "," + preSoftware + "," + preVersion + "," + ocrSoftware + "," + ocrVersion)
+    }
     pw1.synchronized {
-      pw1.println(issn + "," + binding + "," + date + "," + page + "," + words + "," + characters)
+      pw1.println(binding  + "," + page + "," + words + "," + characters)
     }
     pw4.synchronized {
       for (style <- styleMap.valuesIterator)
-        pw4.println(issn + "," + binding + "," + date + "," + page + "," + style.font + "," + style.size + "," + tob(style.bold) + "," + tob(style.italics) + "," + tob(style.underlined) + "," + style.words + "," + style.chars)
+        pw4.println(binding  + "," + page + "," + style.font + "," + style.size + "," + tob(style.bold) + "," + tob(style.italics) + "," + tob(style.underlined) + "," + style.words + "," + style.chars + "," + style.area)
     }
     val cols: mutable.Buffer[(Int, Long)] = new ArrayBuffer[(Int, Long)]
     val rowIntervals: IntervalTree = treeBuilder.build()
@@ -208,8 +267,8 @@ object DetectColumnsInALTO extends LazyLogging {
       }
     }
     pw2.synchronized {
-      if (scols.isEmpty) pw2.println(issn+","+binding+","+date+","+page+",0,0,0,0")
-      else pw2.println(issn+","+binding+","+date+","+page+","+mode2+","+mode1+","+scols(wmedianindex)._1+","+scols(scols.length / 2)._1) // area weighted mode, mode of all blocks, area weighted median, median of all blocks
+      if (scols.isEmpty) pw2.println(binding +","+page+",0,0,0,0")
+      else pw2.println(binding +","+page+","+mode2+","+mode1+","+scols(wmedianindex)._1+","+scols(scols.length / 2)._1) // area weighted mode, mode of all blocks, area weighted median, median of all blocks
     }
   }
 
@@ -254,10 +313,13 @@ object DetectColumnsInALTO extends LazyLogging {
       case EvElemStart(_, "file",attrs,_) if attrs("ID").head.text.startsWith("IMG") =>
         val dims = imgsizes(attrs("ID").head.text)
         pw3.synchronized {
-          pw3.println(issn + "," + binding + "," + date + "," + page + "," + dims._1 + "," + dims._2)
+          pw3.println(binding + "," + page + "," + dims._1 + "," + dims._2)
         }
         page += 1
       case _ =>
+    }
+    pw10.synchronized {
+      pw10.println(binding + "," + issn + "," + date)
     }
     s.close()
   }
@@ -272,17 +334,27 @@ object DetectColumnsInALTO extends LazyLogging {
   def main(args: Array[String]): Unit = {
     val prefix = args(args.length-1)
     pw1 = new PrintWriter(new FileWriter(prefix+"npwordschars.csv"))
-    pw1.println("ISSN,issueId,date,page,words,chars")
+    pw1.println("issueId,page,words,chars")
     pw2 = new PrintWriter(new FileWriter(prefix+"npcolumns.csv"))
-    pw2.println("ISSN,issueId,date,page,wmodecols,modecols,wmediancols,mediancols")
+    pw2.println("issueId,page,wmodecols,modecols,wmediancols,mediancols")
     pw3 = new PrintWriter(new FileWriter(prefix+"npsizes1.csv"))
-    pw3.println("ISSN,issueId,date,page,width,height")
+    pw3.println("issueId,page,width,height")
     pw4 = new PrintWriter(new FileWriter(prefix+"npstyles.csv"))
-    pw4.println("ISSN,issueId,date,page,font,size,bold,italics,underlined,words,chars")
+    pw4.println("issueId,page,font,size,bold,italics,underlined,words,chars,area")
     pw5 = new PrintWriter(new FileWriter(prefix+"npsizes2.csv"))
-    pw5.println("ISSN,issueId,date,page,width,height")
+    pw5.println("issueId,page,width,height")
     pw6 = new PrintWriter(new FileWriter(prefix+"npsizes3.csv"))
-    pw6.println("ISSN,issueId,date,page,width,height")
+    pw6.println("issueId,page,width,height")
+    pw7 = new PrintWriter(new FileWriter(prefix+"npsoftware.csv"))
+    pw7.println("issueId,page,presoftware,preversion,ocrsoftware,ocrversion")
+    pw8 = new PrintWriter(new FileWriter(prefix+"npboxes.csv"))
+    pw8.println("issueId,page,xmin,ymin,xmax,ymax,words,chars")
+    pw9 = new PrintWriter(new FileWriter(prefix+"npissues.csv"))
+    pw9.println("issueId,ISSN,date")
+    pw10 = new PrintWriter(new FileWriter(prefix+"npissues2.csv"))
+    pw10.println("issueId,ISSN,date")
+    pw11 = new PrintWriter(new FileWriter(prefix+"npcolumns-2.csv"))
+    pw11.println("issueId,ISSN,columnwidth,words,chars,area")
     val toProcess: Seq[File] = for (
         dir<-args.dropRight(1);
         fd=new File(dir);
@@ -311,9 +383,17 @@ object DetectColumnsInALTO extends LazyLogging {
     else logger.info("Successfully processed all ALTO files.")
     pw1.close()
     pw2.close()
+    pw4.close()
+    pw5.close()
+    pw6.close()
+    pw7.close()
+    pw8.close()
+    pw9.close()
     results = Await.result(f2, Duration.Inf)
     if (results.exists(_.isFailure)) logger.error("Processing of at least one METS file resulted in an error.")
     else logger.info("Successfully processed all METS files.")
     pw3.close()
+    pw10.close()
+    pw11.close()
   }
 }
