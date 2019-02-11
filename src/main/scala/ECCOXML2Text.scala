@@ -53,10 +53,24 @@ object ECCOXML2Text extends LazyLogging {
     var offset = 0l
     var page = 1
     var smw: PrintWriter = _
+    var lmw: CSVWriter = _
     val content = new StringBuilder()
     var currentLine: ArrayBuffer[Word] = new ArrayBuffer //midx,startx,endx,starty,endy,content
     var lastLine: ArrayBuffer[Word] = _
-    def testParagraphBreakAtEndOfLine(guessParagraphs: Boolean): Option[String] = {
+    def testParagraphBreakAtEndOfLine(guessParagraphs: Boolean, emitLineBoxes: Boolean): Option[String] = {
+      if (emitLineBoxes && currentLine.nonEmpty) {
+        var lsy = Int.MaxValue
+        var ley = Int.MinValue
+        var lsx = Int.MaxValue
+        var lex = Int.MinValue
+        for (word <- currentLine) {
+          if (word.startX < lsx) lsx = word.startX
+          if (word.endX > lex) lex = word.endX
+          if (word.startY < lsy) lsy = word.startY
+          if (word.endY > ley) ley = word.endY
+        }
+        lmw.write(Seq(""+page,""+lsx,""+lsy,""+lex,""+ley,currentLine.map(_.word).mkString(" ")))
+      }
       var ret: Option[String] = None
       if (lastLine != null) { // we have two lines, check for a paragraph change between them.
         if (lastLine.nonEmpty) {
@@ -135,7 +149,7 @@ object ECCOXML2Text extends LazyLogging {
     content.toString
   }
   
-  private def readNextWordPossiblyEmittingAParagraph(pos: Seq[Int], state: State, guessParagraphs: Boolean)(implicit xml: XMLEventReader): Option[String] = {
+  private def readNextWordPossiblyEmittingAParagraph(pos: Seq[Int], state: State, guessParagraphs: Boolean, emitLineBoxes: Boolean)(implicit xml: XMLEventReader): Option[String] = {
     val word = readContents
     val (curStartX,curEndX) = if (pos(0)<pos(2)) (pos(0),pos(2)) else (pos(2),pos(0))
     val curMidX = (curStartX + curEndX) / 2
@@ -146,13 +160,13 @@ object ECCOXML2Text extends LazyLogging {
       val pos = Searching.search(state.currentLine).search(Word(curMidX,-1,-1,-1,-1,"")).insertionPoint - 1
       val Word(_,_,_,_, lastEndY, _) = state.currentLine(if (pos == -1) 0 else pos)
       if (curStartY > lastEndY || curMidX < state.currentLine.last.midX) // new line or new paragraph
-        ret = state.testParagraphBreakAtEndOfLine(guessParagraphs)
+        ret = state.testParagraphBreakAtEndOfLine(guessParagraphs, emitLineBoxes)
       state.currentLine += Word(curMidX, curStartX, curEndX, curStartY, curEndY, word.toString)
     } else state.currentLine += Word(curMidX, curStartX, curEndX, curStartY, curEndY, word.toString)
     ret
   }
 
-  def process(file: File, prefixLength: Int, dest: String, guessParagraphs: Boolean, omitStructure: Boolean, omitHeadings: Boolean): Future[Unit] = Future({
+  def process(file: File, prefixLength: Int, dest: String, guessParagraphs: Boolean, omitStructure: Boolean, omitHeadings: Boolean, emitLineBoxes: Boolean): Future[Unit] = Future({
     val dir = dest+file.getParentFile.getAbsolutePath.substring(prefixLength) + "/"
     new File(dir).mkdirs()
     val prefix = dir+file.getName.replace(".xml","")+"_"
@@ -197,6 +211,7 @@ object ECCOXML2Text extends LazyLogging {
     var partNum = 0
     val state = new State()
     state.smw = new PrintWriter(new File(prefix.substring(0,prefix.length-1)+"-payload.csv"))
+    if (emitLineBoxes) state.lmw = CSVWriter(prefix.substring(0,prefix.length-1)+"-lineboxes.csv")
     while (xml.hasNext) xml.next match {
       case EvElemStart(_,"text",_,_) =>
         while (xml.hasNext && !break) xml.next match {
@@ -238,7 +253,7 @@ object ECCOXML2Text extends LazyLogging {
             gw.write(Seq(""+state.page,htype,attrs.get("colorimage").map(_.head.text).getOrElse(""),caption))
           case EvElemStart(_,"wd",attrs,_) =>
             val pos = attrs("pos").head.text.split(",")
-            readNextWordPossiblyEmittingAParagraph(pos.map(_.toInt), state, guessParagraphs) match {
+            readNextWordPossiblyEmittingAParagraph(pos.map(_.toInt), state, guessParagraphs, emitLineBoxes) match {
             case Some(paragraph) => 
               content.append(paragraph)
               content.append("\n\n")
@@ -246,7 +261,7 @@ object ECCOXML2Text extends LazyLogging {
             case None => 
           }
           case EvElemEnd(_,"p") =>
-            state.testParagraphBreakAtEndOfLine(guessParagraphs) match {
+            state.testParagraphBreakAtEndOfLine(guessParagraphs, emitLineBoxes) match {
               case Some(paragraph) => 
                 content.append(paragraph)
                 content.append("\n\n")
@@ -328,6 +343,7 @@ object ECCOXML2Text extends LazyLogging {
     }
     if (sw!=null) sw.close()
     if (state.smw != null) state.smw.close()
+    if (emitLineBoxes) state.lmw.close()
     dw.close()
     if (gw!=null) gw.close()
     if (hw!=null) hw.close()
@@ -349,6 +365,7 @@ object ECCOXML2Text extends LazyLogging {
       val dest = opt[String](required = true)
       val omitStructure = opt[Boolean]()
       val omitHeadings = opt[Boolean]()
+      val emitLineBoxes = opt[Boolean]()
       verify()
     }
     val dest = new File(opts.dest()).getAbsolutePath
@@ -363,6 +380,7 @@ object ECCOXML2Text extends LazyLogging {
     ) yield (guessParagraphs,fd,prefixLength)
     val omitStructure = opts.omitStructure()
     val omitHeadings = opts.omitHeadings()
+    val emitLineBoxes = opts.emitLineBoxes()
     val f = Future.sequence(toProcess.flatMap{ case (guessParagraphs,fd,prefixLength) =>
       getFileTree(fd)
         .filter(file => file.getName.endsWith(".xml") && !file.getName.startsWith("ECCO_tiff_manifest_") && !file.getName.endsWith("_metadata.xml") && {
@@ -374,7 +392,7 @@ object ECCOXML2Text extends LazyLogging {
           } else true
         })
         .map(file => {
-          val f = process(file, prefixLength, dest, guessParagraphs, omitStructure, omitHeadings)
+          val f = process(file, prefixLength, dest, guessParagraphs, omitStructure, omitHeadings, emitLineBoxes)
           val path = file.getPath
           f.recover {
             case cause =>
