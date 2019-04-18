@@ -124,6 +124,13 @@ class OctavoIndexer extends ParallelProcessor {
     }
   }
 
+  class LatLonFieldPair(field: String, docs: Document*) extends FieldPair(new LatLonPoint(field,0,0), new LatLonDocValuesField(field, 0, 0), docs:_*) {
+    def setValue(lat: Double, lon: Double) {
+      indexField.setLocationValue(lat, lon)
+      storedField.setLocationValue(lat, lon)
+    }
+  }
+
   class FloatPointFDVFieldPair(field: String, docs: Document*) extends FieldPair(new FloatPoint(field, 0.0f), new FloatDocValuesField(field, 0.0f), docs:_*) {
     def setValue(v: Float) {
       indexField.setFloatValue(v)
