@@ -26,11 +26,12 @@ object TwitterIndexer extends OctavoIndexer {
     val sourceFields = new StringSDVFieldPair("source",td)
     val inReplyToUserIdFields = new StringSDVFieldPair("inReplyToUserId",td)
     val inReplyToScreenNameFields = new StringSDVFieldPair("inReplyToScreenName",td)
+    val tweetType = new StringSDVFieldPair("type",td)
     val userIdFields = new StringSDVFieldPair("userId", td)
-    val userNameFields = new StringSDVFieldPair("userName",td)
+    val userNameFields = new TextSDVFieldPair("userName",td)
     val userScreenNameFields = new StringSDVFieldPair("userScreenName",td)
-    val userLocationFields = new StringSDVFieldPair("userLocation",td)
-    val userDescriptionFields = new StringSDVFieldPair("userDescription",td)
+    val userLocationFields = new TextSDVFieldPair("userLocation",td)
+    val userDescriptionFields = new TextSDVFieldPair("userDescription",td)
     val userFollowersCountFields = new IntPointNDVFieldPair("userFollowersCount",td)
     val userFriendsCountFields = new IntPointNDVFieldPair("userFriendsCount",td)
     val userListedCountFields = new IntPointNDVFieldPair("userListedCount", td)
@@ -47,7 +48,7 @@ object TwitterIndexer extends OctavoIndexer {
     val favoriteCountFields = new IntPointNDVFieldPair("favoriteCount", td)
     val possiblySensitiveFields = new StringSDVFieldPair("possiblySensitive", td)
     val placeId = new StringSDVFieldPair("placeId",td)
-    val placeFullName = new StringSDVFieldPair("placeFullName",td)
+    val placeFullName = new TextSDVFieldPair("placeFullName",td)
     val placeType = new StringSDVFieldPair("placeType",td)
     val country = new StringSDVFieldPair("country",td)
     val placeCoordinates = new LatLonFieldPair("placeCoordinates", td)
@@ -119,12 +120,14 @@ object TwitterIndexer extends OctavoIndexer {
     d.userFavouritesCountFields.setValue((user \ "favourites_count").asInstanceOf[JInt].num.intValue)
     d.userVerifiedFields.setValue((user \ "verified").asInstanceOf[JBool].values.toString)
     d.userLanguageFields.setValue((user \ "lang").asInstanceOf[JString].values)
+    d.tweetType.setValue("tweet")
     t \ "retweeted_status" match {
       case JNull | JNothing =>
         d.retweetIdFields.setValue("")
         d.retweetUserIdFields.setValue("")
         d.retweetScreenNameFields.setValue("")
       case rt =>
+        d.tweetType.setValue("retweet")
         d.retweetIdFields.setValue((rt \ "id_str").asInstanceOf[JString].values)
         val rtuser = (rt \ "user").asInstanceOf[JObject]
         d.retweetUserIdFields.setValue((rtuser \ "id_str").asInstanceOf[JString].values)
@@ -136,6 +139,7 @@ object TwitterIndexer extends OctavoIndexer {
         d.quotedUserIdFields.setValue("")
         d.quotedScreenNameFields.setValue("")
       case rt =>
+        d.tweetType.setValue("quoted")
         d.quotedIdFields.setValue((rt \ "id_str").asInstanceOf[JString].values)
         val rtuser = (rt \ "user").asInstanceOf[JObject]
         d.quotedUserIdFields.setValue((rtuser \ "id_str").asInstanceOf[JString].values)
@@ -143,7 +147,9 @@ object TwitterIndexer extends OctavoIndexer {
     }
     t \ "in_reply_to_screen_name" match {
       case JNull => d.inReplyToScreenNameFields.setValue("")
-      case JString(str) => d.inReplyToScreenNameFields.setValue(str)
+      case JString(str) =>
+        d.tweetType.setValue("reply")
+        d.inReplyToScreenNameFields.setValue(str)
     }
     d.retweetCountFields.setValue((t \ "retweet_count").asInstanceOf[JInt].num.intValue)
     d.favoriteCountFields.setValue((t \ "favorite_count").asInstanceOf[JInt].num.intValue)
@@ -163,8 +169,12 @@ object TwitterIndexer extends OctavoIndexer {
         d.placeFullName.setValue((p \ "full_name").asInstanceOf[JString].values)
         d.placeType.setValue((p \ "place_type").asInstanceOf[JString].values)
         d.country.setValue((p \ "country").asInstanceOf[JString].values)
-        val coords = (p \ "bounding_box" \ "coordinates")(0).asInstanceOf[JArray].arr.map{ case JArray(a) => (a.head.asInstanceOf[JDouble].num.doubleValue,a(1).asInstanceOf[JDouble].num.doubleValue) }
-        d.placeCoordinates.setValue((coords.head._2+coords(1)._2)/2,(coords.head._1+coords(1)._1)/2)
+        (p \ "bounding_box" \ "coordinates")(0) match {
+          case JArray(a) =>
+            val coords = a.map{ case JArray(a) => (a.head.asInstanceOf[JDouble].num.doubleValue,a(1).asInstanceOf[JDouble].num.doubleValue) }
+            d.placeCoordinates.setValue((coords.head._2+coords(1)._2)/2,(coords.head._1+coords(1)._1)/2)
+          case JNothing =>
+        }
     }
     tiw.addDocument(d.td)
   }
@@ -188,7 +198,7 @@ object TwitterIndexer extends OctavoIndexer {
     waitForTasks(
       runSequenceInOtherThread(
         () => close(tiw),
-        () => merge(opts.index()+"/aindex", ts,opts.indexMemoryMb() / 1, toCodec(opts.tpostings(), termVectorFields))
+        () => merge(opts.index()+"/tindex", ts,opts.indexMemoryMb() / 1, toCodec(opts.tpostings(), termVectorFields))
       ),
     )
   }
