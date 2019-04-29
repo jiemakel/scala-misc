@@ -2,7 +2,7 @@ name := """scala-misc"""
 
 version := "1.0"
 
-scalaVersion := "2.12.6"
+scalaVersion := "2.12.8"
 
 libraryDependencies ++= Seq(
   "com.typesafe.play" %% "play-json" % "2.6.0-M6",
@@ -23,10 +23,10 @@ libraryDependencies ++= Seq(
   "it.geosolutions.imageio-ext" % "imageio-ext-kakadu" % "1.1.19",
   "it.geosolutions.imageio-ext" % "imageio-ext-kakadujni" % "6.3.1",
   "it.geosolutions.imageio-ext" % "imageio-ext-tiff" % "1.1.19",
-  "org.apache.lucene" % "lucene-core" % "7.1.0",
-  "org.apache.lucene" % "lucene-analyzers-common" % "7.1.0",
-  "org.apache.lucene" % "lucene-queryparser" % "7.1.0",
-  "org.apache.lucene" % "lucene-highlighter" % "7.1.0",
+  "org.apache.lucene" % "lucene-core" % "8.0.0",
+  "org.apache.lucene" % "lucene-analyzers-common" % "8.0.0",
+  "org.apache.lucene" % "lucene-queryparser" % "8.0.0",
+  "org.apache.lucene" % "lucene-highlighter" % "8.0.0",
   "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.1",
   "com.sleepycat" % "je" % "7.5.11",
   "org.apache.commons" % "commons-math3" % "3.6.1",
