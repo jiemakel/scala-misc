@@ -1,12 +1,12 @@
 name := """scala-misc"""
 
-version := "1.0"
+version := "1.1"
 
 scalaVersion := "2.12.8"
 
 libraryDependencies ++= Seq(
   "com.typesafe.play" %% "play-json" % "2.6.0-M6",
-  "fi.seco" %% "lucene-morphologicalanalyzer" % "1.1.3" exclude("commons-logging", "commons-logging"),
+  "fi.seco" %% "lucene-morphologicalanalyzer" % "1.2.1" exclude("commons-logging", "commons-logging"),
   "org.scala-lang.modules" %% "scala-java8-compat" % "0.8.0",
   "org.json4s" %% "json4s-native" % "3.5.1" ,
   "com.fasterxml" % "aalto-xml" % "1.0.0",
@@ -27,7 +27,7 @@ libraryDependencies ++= Seq(
   "org.apache.lucene" % "lucene-analyzers-common" % "8.0.0",
   "org.apache.lucene" % "lucene-queryparser" % "8.0.0",
   "org.apache.lucene" % "lucene-highlighter" % "8.0.0",
-  "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.1",
+  "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.2",
   "com.sleepycat" % "je" % "7.5.11",
   "org.apache.commons" % "commons-math3" % "3.6.1",
   "com.google.guava" % "guava" % "21.0",

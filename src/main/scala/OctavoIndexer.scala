@@ -1,7 +1,7 @@
 import java.nio.file.FileSystems
 import java.util.regex.Pattern
 
-import fi.seco.lucene.{Lucene70PerFieldPostingsFormatOrdTermVectorsCodec, OrdExposingFSTOrdPostingsFormat}
+import fi.seco.lucene.{Lucene80PerFieldPostingsFormatOrdTermVectorsCodec, OrdExposingFSTOrdPostingsFormat}
 import org.apache.lucene.analysis.Analyzer.TokenStreamComponents
 import org.apache.lucene.analysis.core.WhitespaceTokenizer
 import org.apache.lucene.analysis.miscellaneous.{HyphenatedWordsFilter, LengthFilter}
@@ -69,7 +69,7 @@ class OctavoIndexer extends ParallelProcessor {
     length
   }
 
-  val indexingCodec = new TermVectorFilteringLucene70Codec()
+  val indexingCodec = new TermVectorFilteringLucene80Codec()
   
   class FieldPair[F1 <: Field,F2 <: Field](val indexField: F1, val storedField: F2, docs: Document*) {
     docs.foreach(add)
@@ -261,7 +261,7 @@ class OctavoIndexer extends ParallelProcessor {
   }
   
   def toCodec(postingsFormatS: String, perFieldPostings: Seq[String]): Codec = {
-    val finalCodec = new Lucene70PerFieldPostingsFormatOrdTermVectorsCodec()
+    val finalCodec = new Lucene80PerFieldPostingsFormatOrdTermVectorsCodec()
     val postingsFormat = postingsFormatS match {
       case "fst" => new OrdExposingFSTOrdPostingsFormat()
       case "blocktree" => new BlockTreeOrdsPostingsFormat()
