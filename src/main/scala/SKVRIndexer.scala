@@ -2,7 +2,7 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 
 import com.bizo.mighty.csv.CSVReader
-import org.apache.lucene.document.{Document, Field, NumericDocValuesField, SortedDocValuesField}
+import org.apache.lucene.document.{Field, NumericDocValuesField, SortedDocValuesField}
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.search.{Sort, SortField}
 import org.apache.lucene.util.BytesRef
@@ -40,28 +40,31 @@ object SKVRIndexer extends OctavoIndexer {
   }
 
   class Reuse {
-    val dd = new Document()
-    val send = new Document()
-    val skvrIDFields = new StringSDVFieldPair("skvrID", dd, send)
+    val dd = new FluidDocument()
+    val send = new FluidDocument()
+    val skvrIDFields = new StringSDVFieldPair("skvrID").r(dd, send)
     val urlField = new SortedDocValuesField("skvrURL", new BytesRef())
-    dd.add(urlField)
-    send.add(urlField)
-    val collectorFields = new StringSDVFieldPair("collector", dd, send)
-    val regionFields = new StringSDVFieldPair("region", dd, send)
-    val placeFields = new StringSDVFieldPair("place", dd, send)
-    val yearFields = new IntPointNDVFieldPair("year", dd, send)
+    dd.addRequired(urlField)
+    send.addRequired(urlField)
+    val collectorFields = new StringSDVFieldPair("collector").r(dd, send)
+    val regionFields = new StringSDVFieldPair("region").r(dd, send)
+    val placeFields = new StringSDVFieldPair("place").r(dd, send)
+    val yearFields = new IntPointNDVFieldPair("year").r(dd, send)
     val contentField = new Field("content","",contentFieldType)
-    dd.add(contentField)
-    send.add(contentField)
+    dd.addRequired(contentField)
+    send.addRequired(contentField)
     val lineIDField = new NumericDocValuesField("lineID", 0)
-    send.add(lineIDField)
-    val contentLengthFields = new IntPointNDVFieldPair("contentLength", dd, send)
-    val contentTokensFields = new IntPointNDVFieldPair("contentTokens", dd, send)
+    send.addRequired(lineIDField)
+    val contentLengthFields = new IntPointNDVFieldPair("contentLength").r(dd, send)
+    val contentTokensFields = new IntPointNDVFieldPair("contentTokens").r(dd, send)
     def clearMultiDocumentFields() {
+      dd.clearOptional()
+      send.clearOptional()
+      /*
       dd.removeFields("themeID")
       send.removeFields("themeID")
       dd.removeFields("theme")
-      send.removeFields("theme")
+      send.removeFields("theme") */
     }
   }
 
@@ -90,8 +93,8 @@ object SKVRIndexer extends OctavoIndexer {
     r.placeFields.setValue(place)
     r.collectorFields.setValue(collectors(collectorId))
     for (pthemes <- poemThemes.get(did);themeID <- pthemes) {
-      new StringSNDVFieldPair("themeID",r.dd,r.send).setValue(themeID)
-      new TextSSDVFieldPair("theme",r.dd,r.send).setValue(themes(themeID))
+      new StringSNDVFieldPair("themeID").o(r.dd,r.send).setValue(themeID)
+      new TextSSDVFieldPair("theme").o(r.dd,r.send).setValue(themes(themeID))
     }
     r.urlField.setBytesValue(new BytesRef("https://skvr.fi/poem/"+did))
     val fl = Source.fromFile(file)

@@ -3,7 +3,7 @@ import java.text.BreakIterator
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
-import org.apache.lucene.document.{Document, Field, NumericDocValuesField}
+import org.apache.lucene.document.{Field, NumericDocValuesField}
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.search.{Sort, SortField}
 import org.rogach.scallop._
@@ -20,30 +20,30 @@ object DelpherIndexer extends OctavoIndexer {
   private val sentences = new AtomicLong
   
   class Reuse {
-    val sd = new Document // sentence
-    val pd = new Document // paragraph
-    val ad = new Document // article
-    val id = new Document // issue
+    val sd = new FluidDocument // sentence
+    val pd = new FluidDocument // paragraph
+    val ad = new FluidDocument // article
+    val id = new FluidDocument // issue
 
     val sbi = BreakIterator.getSentenceInstance(new Locale("nl"))
     
     val issueContents = new StringBuilder()
     val articleContents = new StringBuilder()
     
-    val issueIDFields = new StringSDVFieldPair("issueID", sd, pd, ad, id)
-    val newspaperIDFields = new StringSDVFieldPair("newspaperID", sd, pd, ad, id)
-    val newspaperFields = new StringSDVFieldPair("newspaper", sd, pd, ad, id)
-    val articleIDFields = new StringSDVFieldPair("articleID", sd, pd, ad)
-    val paragraphIDFields = new StringNDVFieldPair("paragraphID", sd, pd)
+    val issueIDFields = new StringSDVFieldPair("issueID").r(sd, pd, ad, id)
+    val newspaperIDFields = new StringSDVFieldPair("newspaperID").r(sd, pd, ad, id)
+    val newspaperFields = new StringSDVFieldPair("newspaper").r(sd, pd, ad, id)
+    val articleIDFields = new StringSDVFieldPair("articleID").r(sd, pd, ad)
+    val paragraphIDFields = new StringNDVFieldPair("paragraphID").r(sd, pd)
     val sentenceIDField = new NumericDocValuesField("sentenceID", 0)
-    sd.add(sentenceIDField)
+    sd.addRequired(sentenceIDField)
 
-    val titleFields = new TextSDVFieldPair("title", sd, pd, ad)
+    val titleFields = new TextSDVFieldPair("title").r(sd, pd, ad)
 
-    val dateFields = new IntPointNDVFieldPair("date", sd, pd, ad, id)
+    val dateFields = new IntPointNDVFieldPair("date").r(sd, pd, ad, id)
 
-    val lengthFields = new IntPointNDVFieldPair("length", sd, pd, ad, id)
-    val tokensFields = new IntPointNDVFieldPair("tokens", sd, pd, ad, id)
+    val lengthFields = new IntPointNDVFieldPair("length").r(sd, pd, ad, id)
+    val tokensFields = new IntPointNDVFieldPair("tokens").r(sd, pd, ad, id)
 
     var paragraphsInArticle = 0
     var sentencesInArticle = 0
@@ -51,15 +51,15 @@ object DelpherIndexer extends OctavoIndexer {
     var sentencesInIssue = 0
     var articlesInIssue = 0
     
-    val paragraphsFields = new IntPointNDVFieldPair("paragraphs", ad, id)
-    val sentencesFields = new IntPointNDVFieldPair("sentences", pd, ad, id)
-    val articlesFields = new IntPointNDVFieldPair("articles", id)
+    val paragraphsFields = new IntPointNDVFieldPair("paragraphs").r(ad, id)
+    val sentencesFields = new IntPointNDVFieldPair("sentences").r(pd, ad, id)
+    val articlesFields = new IntPointNDVFieldPair("articles").r(id)
 
     val textField = new Field("text", "", contentFieldType)
-    sd.add(textField)
-    pd.add(textField)
-    ad.add(textField)
-    id.add(textField)
+    sd.addRequired(textField)
+    pd.addRequired(textField)
+    ad.addRequired(textField)
+    id.addRequired(textField)
     
     def clearOptionalIssueFields() {
       sentencesInIssue = 0

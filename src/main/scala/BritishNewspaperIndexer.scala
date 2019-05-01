@@ -22,36 +22,36 @@ object BritishNewspaperIndexer extends OctavoIndexer {
   private val sentences = new AtomicLong
   
   class Reuse {
-    val sd = new Document // sentence
-    val pd = new Document // paragraph
-    val ad = new Document // article
-    val id = new Document // issue
+    val sd = new FluidDocument // sentence
+    val pd = new FluidDocument // paragraph
+    val ad = new FluidDocument // article
+    val id = new FluidDocument // issue
 
     val sbi = BreakIterator.getSentenceInstance(new Locale("en_GB"))
     
     val issueContents = new StringBuilder()
     val articleContents = new StringBuilder()
     
-    val collectionIDFields = new StringSDVFieldPair("collectionID", sd, pd, ad, id) // given as parameter
+    val collectionIDFields = new StringSDVFieldPair("collectionID").r(sd, pd, ad, id) // given as parameter
     
-    val issueIDFields = new StringSDVFieldPair("issueID", sd, pd, ad, id) // <issue ID="N0176185" FAID="BBCN0001" COLID="C00000" contentType="Newspaper">
-    val newspaperIDFields = new StringSDVFieldPair("newspaperID", sd, pd, ad, id) // <newspaperID>
-    val articleIDFields = new StringSDVFieldPair("articleID", sd, pd, ad) // <id>WO2_B0897WEJOSAPO_1724_11_28-0001-001</id>
-    val paragraphIDFields = new StringNDVFieldPair("paragraphID", sd, pd)
+    val issueIDFields = new StringSDVFieldPair("issueID").r(sd, pd, ad, id) // <issue ID="N0176185" FAID="BBCN0001" COLID="C00000" contentType="Newspaper">
+    val newspaperIDFields = new StringSDVFieldPair("newspaperID").r(sd, pd, ad, id) // <newspaperID>
+    val articleIDFields = new StringSDVFieldPair("articleID").r(sd, pd, ad) // <id>WO2_B0897WEJOSAPO_1724_11_28-0001-001</id>
+    val paragraphIDFields = new StringNDVFieldPair("paragraphID").r(sd, pd)
     val sentenceIDField = new NumericDocValuesField("sentenceID", 0)
-    sd.add(sentenceIDField)
+    sd.addRequired(sentenceIDField)
     
-    val languageFields = new StringSDVFieldPair("language", sd, pd, ad, id) // <language ocr="English" primary="Y">English</language>
-    val dayOfWeekFields = new StringSDVFieldPair("dayOfWeek", sd, pd, ad, id) // <dw>Saturday</dw>
-    val issueNumberFields = new StringSDVFieldPair("issueNumber", sd, pd, ad, id) //<is>317</is>
-    val dateStartFields = new IntPointNDVFieldPair("dateStart", sd, pd, ad, id) // <searchableDateStart>17851129</searchableDateStart>
-    val dateEndFields = new IntPointNDVFieldPair("dateEnd", sd, pd, ad, id) // <searchableDateEnd>17851129</searchableDateEnd>
-    val authorFields = new TextSDVFieldPair("author", sd, pd, ad) // <au_composed>Tom Whipple</au_composed>
-    val sectionFields = new StringSDVFieldPair("section", sd, pd, ad) // <sc>A</sc>
+    val languageFields = new StringSDVFieldPair("language").r(sd, pd, ad, id) // <language ocr="English" primary="Y">English</language>
+    val dayOfWeekFields = new StringSDVFieldPair("dayOfWeek").r(sd, pd, ad, id) // <dw>Saturday</dw>
+    val issueNumberFields = new StringSDVFieldPair("issueNumber").r(sd, pd, ad, id) //<is>317</is>
+    val dateStartFields = new IntPointNDVFieldPair("dateStart").r(sd, pd, ad, id) // <searchableDateStart>17851129</searchableDateStart>
+    val dateEndFields = new IntPointNDVFieldPair("dateEnd").r(sd, pd, ad, id) // <searchableDateEnd>17851129</searchableDateEnd>
+    val authorFields = new TextSDVFieldPair("author").r(sd, pd, ad) // <au_composed>Tom Whipple</au_composed>
+    val sectionFields = new StringSDVFieldPair("section").r(sd, pd, ad) // <sc>A</sc>
 
-    val ocrConfidenceFields = new IntPointNDVFieldPair("ocrConfidence", sd, pd, ad, id)
-    val lengthFields = new IntPointNDVFieldPair("length", sd, pd, ad, id)
-    val tokensFields = new IntPointNDVFieldPair("tokens", sd, pd, ad, id)
+    val ocrConfidenceFields = new IntPointNDVFieldPair("ocrConfidence").r(sd, pd, ad, id)
+    val lengthFields = new IntPointNDVFieldPair("length").r(sd, pd, ad, id)
+    val tokensFields = new IntPointNDVFieldPair("tokens").r(sd, pd, ad, id)
 
     var pagesInArticle = 0
     var paragraphsInArticle = 0
@@ -62,28 +62,28 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     var sentencesInIssue = 0
     var articlesInIssue = 0
     
-    val paragraphsFields = new IntPointNDVFieldPair("paragraphs", ad, id)
-    val sentencesFields = new IntPointNDVFieldPair("sentences", pd, ad, id)
-    val articlesFields = new IntPointNDVFieldPair("articles", id)
-    val illustrationsFields = new IntPointNDVFieldPair("illustrations", ad, id)
+    val paragraphsFields = new IntPointNDVFieldPair("paragraphs").r(ad, id)
+    val sentencesFields = new IntPointNDVFieldPair("sentences").r(pd, ad, id)
+    val articlesFields = new IntPointNDVFieldPair("articles").r(id)
+    val illustrationsFields = new IntPointNDVFieldPair("illustrations").r(ad, id)
     
-    val articlePagesFields = new IntPointNDVFieldPair("pages", ad)
-    val issuePagesFields = new IntPointNDVFieldPair("pages", id)
+    val articlePagesFields = new IntPointNDVFieldPair("pages").r(ad)
+    val issuePagesFields = new IntPointNDVFieldPair("pages").r(id)
     
     val textField = new Field("text", "", contentFieldType)
-    sd.add(textField)
-    pd.add(textField)
-    ad.add(textField)
-    id.add(textField)
+    sd.addRequired(textField)
+    pd.addRequired(textField)
+    ad.addRequired(textField)
+    id.addRequired(textField)
     
-    val supplementTitleFields = new TextSDVFieldPair("supplementTitle", sd, pd, ad)
+    val supplementTitleFields = new TextSDVFieldPair("supplementTitle").r(sd, pd, ad)
     
-    val titleFields = new TextSDVFieldPair("title", sd, pd, ad) // <ti>The Ducal Shopkeepers and Petty Hucksters</ti>
+    val titleFields = new TextSDVFieldPair("title").r(sd, pd, ad) // <ti>The Ducal Shopkeepers and Petty Hucksters</ti>
     
     val subtitles = new StringBuilder()
-    val subtitlesFields = new TextSDVFieldPair("subtitles", sd, pd, ad) //   <ta>Sketch of the week</ta> <ta>Slurs and hyperbole vied with tosh to make the headlines, says Tom Whipple</ta>
+    val subtitlesFields = new TextSDVFieldPair("subtitles").r(sd, pd, ad) //   <ta>Sketch of the week</ta> <ta>Slurs and hyperbole vied with tosh to make the headlines, says Tom Whipple</ta>
     
-    val articleTypeFields = new StringSDVFieldPair("articleType", sd, pd, ad) // <ct>Arts and entertainment</ct>
+    val articleTypeFields = new StringSDVFieldPair("articleType").r(sd, pd, ad) // <ct>Arts and entertainment</ct>
     def clearOptionalIssueFields() {
       sentencesInIssue = 0
       paragraphsInIssue = 0
@@ -95,8 +95,9 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       dateStartFields.setValue(0)
       dateEndFields.setValue(Int.MaxValue)
       languageFields.setValue("")
-      id.removeFields("containsGraphicOfType")
-      id.removeFields("containsGraphicCaption")
+      id.clearOptional()
+/*      id.removeFields("containsGraphicOfType")
+      id.removeFields("containsGraphicCaption") */
     }
     def clearOptionalArticleFields() {
       sentencesInArticle = 0
@@ -111,8 +112,9 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       supplementTitleFields.setValue("")
       subtitles.clear()
       subtitlesFields.setValue("")
-      ad.removeFields("containsGraphicOfType")
-      ad.removeFields("containsGraphicCaption")
+      ad.clearOptional()
+/*      ad.removeFields("containsGraphicOfType")
+      ad.removeFields("containsGraphicCaption") */
     }
   }
   
@@ -346,14 +348,14 @@ object BritishNewspaperIndexer extends OctavoIndexer {
           d.illustrationsInIssue += 1
           attrs("type").headOption.foreach(n => {
             val f = new Field("containsGraphicOfType", n.text, notStoredStringFieldWithTermVectors)
-            d.id.add(f)
-            d.ad.add(f)
+            d.id.addOptional(f)
+            d.ad.addOptional(f)
           })
           val c = readContents
           if (!c.isEmpty) {
             val f = new Field("containsGraphicCaption", c, normsOmittingStoredTextField)
-            d.id.add(f)
-            d.ad.add(f)
+            d.id.addOptional(f)
+            d.ad.addOptional(f)
           }
         case EvElemStart(_, "pi", _, _) => d.pagesInArticle += 1
         case EvElemEnd(_, "article") =>

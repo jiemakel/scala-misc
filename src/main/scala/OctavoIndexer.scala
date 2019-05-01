@@ -3,11 +3,11 @@ import java.util.regex.Pattern
 
 import fi.seco.lucene.{Lucene80PerFieldPostingsFormatOrdTermVectorsCodec, OrdExposingFSTOrdPostingsFormat}
 import org.apache.lucene.analysis.Analyzer.TokenStreamComponents
+import org.apache.lucene.analysis._
 import org.apache.lucene.analysis.core.WhitespaceTokenizer
 import org.apache.lucene.analysis.miscellaneous.{HyphenatedWordsFilter, LengthFilter}
 import org.apache.lucene.analysis.pattern.PatternReplaceFilter
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
-import org.apache.lucene.analysis._
 import org.apache.lucene.codecs.Codec
 import org.apache.lucene.codecs.blocktreeords.BlockTreeOrdsPostingsFormat
 import org.apache.lucene.document._
@@ -21,10 +21,6 @@ import org.rogach.scallop.ScallopConf
 import scala.language.postfixOps
 
 class OctavoIndexer extends ParallelProcessor {
-
-  def removeFields(field: String, docs: Document*): Unit = {
-    for (doc <- docs) doc.removeFields(field)
-  }
 
   val analyzer = new Analyzer() {
     override def createComponents(fieldName: String) = {
@@ -47,7 +43,7 @@ class OctavoIndexer extends ParallelProcessor {
   }
 
   def getNumberOfTokens(ts: TokenStream): Int = {
-    val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
+    val oa = ts.getAttribute(classOf[PositionIncrementAttribute])
     ts.reset()
     var length = 0
     while (ts.incrementToken())
@@ -59,7 +55,7 @@ class OctavoIndexer extends ParallelProcessor {
 
   def getNumberOfTokens(text: String): Int = {
     val ts = analyzer.tokenStream("", text)
-    val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
+    val oa = ts.getAttribute(classOf[PositionIncrementAttribute])
     ts.reset()
     var length = 0
     while (ts.incrementToken())
@@ -71,67 +67,102 @@ class OctavoIndexer extends ParallelProcessor {
 
   val indexingCodec = new TermVectorFilteringLucene80Codec()
   
-  class FieldPair[F1 <: Field,F2 <: Field](val indexField: F1, val storedField: F2, docs: Document*) {
-    docs.foreach(add)
-    def add(d: Document) {
-      d.add(indexField)
-      d.add(storedField)
+  class FieldPair[F1 <: Field,F2 <: Field](val indexField: F1, val storedField: F2) {
+    def r(docs: FluidDocument*): this.type = {
+      for (d<-docs) {
+        d.addRequired(indexField)
+        d.addRequired(storedField)
+      }
+      this
+    }
+    def o(docs: FluidDocument*): this.type = {
+      for (d<-docs) {
+        d.addOptional(indexField)
+        d.addOptional(storedField)
+      }
+      this
     }
   }
-  
+
+  class ContentField(field: String) {
+    val f = new Field(field, "", contentFieldType)
+    val tokenStream = new ReusableCachedTokenStream(analyzer.tokenStream(field,""))
+    f.setTokenStream(tokenStream)
+    def numberOfTokens: Int = OctavoIndexer.this.getNumberOfTokens(tokenStream)
+    def setValue(v: String) {
+      f.setStringValue(v)
+      tokenStream.fill(analyzer.tokenStream(field,v))
+    }
+    def r(docs: FluidDocument*): this.type = {
+      for (d<-docs)
+        d.addRequired(f)
+      this
+    }
+    def o(docs: FluidDocument*): this.type = {
+      for (d<-docs)
+        d.addOptional(f)
+      this
+    }
+  }
+
+
+
   val normsOmittingNotStoredTextField = new FieldType(TextField.TYPE_NOT_STORED)
   normsOmittingNotStoredTextField.setOmitNorms(true)
   
-  class TextSDVFieldPair(field: String, docs: Document*)  extends FieldPair(new Field(field, "", normsOmittingNotStoredTextField), new SortedDocValuesField(field, new BytesRef()), docs:_*) {
+  class TextSDVFieldPair(field: String) extends FieldPair(new Field(field, "", normsOmittingNotStoredTextField), new SortedDocValuesField(field, new BytesRef())) {
+    val tokenStream = new ReusableCachedTokenStream(analyzer.tokenStream(field,""))
+    indexField.setTokenStream(tokenStream)
     def setValue(v: String) {
-      indexField.setStringValue(v)
+      tokenStream.fill(analyzer.tokenStream(field,v))
+      indexField.setTokenStream(tokenStream)
       storedField.setBytesValue(new BytesRef(v))
     }
   }
   
-  class TextSSDVFieldPair(field: String, docs: Document*)  extends FieldPair(new Field(field, "", normsOmittingNotStoredTextField), new SortedSetDocValuesField(field, new BytesRef()), docs:_*) {
+  class TextSSDVFieldPair(field: String) extends FieldPair(new Field(field, "", normsOmittingNotStoredTextField), new SortedSetDocValuesField(field, new BytesRef())) {
     def setValue(v: String) {
       indexField.setStringValue(v)
       storedField.setBytesValue(new BytesRef(v))
     }
   }
 
-  class StringSSDVFieldPair(field: String, docs: Document*)  extends FieldPair(new Field(field, "", StringField.TYPE_NOT_STORED), new SortedSetDocValuesField(field, new BytesRef()), docs:_*) {
+  class StringSSDVFieldPair(field: String) extends FieldPair(new Field(field, "", StringField.TYPE_NOT_STORED), new SortedSetDocValuesField(field, new BytesRef())) {
     def setValue(v: String) {
       indexField.setStringValue(v)
       storedField.setBytesValue(new BytesRef(v))
     }
   }
 
-  class StringSDVFieldPair(field: String, docs: Document*) extends FieldPair(new Field(field, "", StringField.TYPE_NOT_STORED), new SortedDocValuesField(field, new BytesRef()), docs:_*) {
+  class StringSDVFieldPair(field: String) extends FieldPair(new Field(field, "", StringField.TYPE_NOT_STORED), new SortedDocValuesField(field, new BytesRef())) {
     def setValue(v: String) {
       indexField.setStringValue(v)
       storedField.setBytesValue(new BytesRef(v))
     }
   }
 
-  class StringNDVFieldPair(field: String, docs: Document*) extends FieldPair(new Field(field, "", StringField.TYPE_NOT_STORED), new NumericDocValuesField(field, 0), docs:_*) {
+  class StringNDVFieldPair(field: String) extends FieldPair(new Field(field, "", StringField.TYPE_NOT_STORED), new NumericDocValuesField(field, 0)) {
     def setValue(v: Long) {
       indexField.setStringValue(""+v)
       storedField.setLongValue(v)
     }
   }
   
-  class StringSNDVFieldPair(field: String, docs: Document*) extends FieldPair(new Field(field, "", StringField.TYPE_NOT_STORED), new SortedNumericDocValuesField(field, 0), docs:_*) {
+  class StringSNDVFieldPair(field: String) extends FieldPair(new Field(field, "", StringField.TYPE_NOT_STORED), new SortedNumericDocValuesField(field, 0)) {
     def setValue(v: Long) {
       indexField.setStringValue(""+v)
       storedField.setLongValue(v)
     }
   }
 
-  class LatLonFieldPair(field: String, docs: Document*) extends FieldPair(new LatLonPoint(field,0,0), new LatLonDocValuesField(field, 0, 0), docs:_*) {
+  class LatLonFieldPair(field: String) extends FieldPair(new LatLonPoint(field,0,0), new LatLonDocValuesField(field, 0, 0)) {
     def setValue(lat: Double, lon: Double) {
       indexField.setLocationValue(lat, lon)
       storedField.setLocationValue(lat, lon)
     }
   }
 
-  class FloatPointFDVFieldPair(field: String, docs: Document*) extends FieldPair(new FloatPoint(field, 0.0f), new FloatDocValuesField(field, 0.0f), docs:_*) {
+  class FloatPointFDVFieldPair(field: String) extends FieldPair(new FloatPoint(field, 0.0f), new FloatDocValuesField(field, 0.0f)) {
     def setValue(v: Float) {
       indexField.setFloatValue(v)
       storedField.setFloatValue(v)
@@ -139,56 +170,56 @@ class OctavoIndexer extends ParallelProcessor {
   }
 
   
-  class DoublePointDDVFieldPair(field: String, docs: Document*) extends FieldPair(new DoublePoint(field, 0.0), new DoubleDocValuesField(field, 0.0), docs:_*) {
+  class DoublePointDDVFieldPair(field: String) extends FieldPair(new DoublePoint(field, 0.0), new DoubleDocValuesField(field, 0.0)) {
     def setValue(v: Double) {
       indexField.setDoubleValue(v)
       storedField.setDoubleValue(v)
     }
   }
   
-  class IntPointNDVFieldPair(field: String, docs: Document*) extends FieldPair(new IntPoint(field, 0), new NumericDocValuesField(field, 0), docs:_*) {
+  class IntPointNDVFieldPair(field: String) extends FieldPair(new IntPoint(field, 0), new NumericDocValuesField(field, 0)) {
     def setValue(v: Int) {
       indexField.setIntValue(v)
       storedField.setLongValue(v)
     }
   }
 
-  class IntPointSDVFieldPair(field: String, docs: Document*) extends FieldPair(new IntPoint(field, 0), new SortedDocValuesField(field, new BytesRef()), docs:_*) {
+  class IntPointSDVFieldPair(field: String) extends FieldPair(new IntPoint(field, 0), new SortedDocValuesField(field, new BytesRef())) {
     def setValue(v: Int, sv: String) {
       indexField.setIntValue(v)
       storedField.setBytesValue(new BytesRef(sv))
     }
   }
 
-  class IntPointSNDVFieldPair(field: String, docs: Document*) extends FieldPair(new IntPoint(field, 0), new SortedNumericDocValuesField(field, 0), docs:_*) {
+  class IntPointSNDVFieldPair(field: String) extends FieldPair(new IntPoint(field, 0), new SortedNumericDocValuesField(field, 0)) {
     def setValue(v: Int) {
       indexField.setIntValue(v)
       storedField.setLongValue(v)
     }
   }
 
-  class LongPointNDVFieldPair(field: String, docs: Document*) extends FieldPair(new LongPoint(field, 0l), new NumericDocValuesField(field, 0), docs:_*) {
+  class LongPointNDVFieldPair(field: String) extends FieldPair(new LongPoint(field, 0l), new NumericDocValuesField(field, 0)) {
     def setValue(v: Long) {
       indexField.setLongValue(v)
       storedField.setLongValue(v)
     }
   }
 
-  class LongPointSDVDateTimeFieldPair(field: String, df: DateTimeFormatter, docs: Document*) extends FieldPair(new LongPoint(field, 0l), new SortedDocValuesField(field, new BytesRef()), docs:_*) {
+  class LongPointSDVDateTimeFieldPair(field: String, df: DateTimeFormatter) extends FieldPair(new LongPoint(field, 0l), new SortedDocValuesField(field, new BytesRef())) {
     def setValue(v: String) {
       indexField.setLongValue(df.parseMillis(v))
       storedField.setBytesValue(new BytesRef(v))
     }
   }
 
-  class LongPointSSDVDateTimeFieldPair(field: String, df: DateTimeFormatter, docs: Document*) extends FieldPair(new LongPoint(field, 0l), new SortedSetDocValuesField(field, new BytesRef()), docs:_*) {
+  class LongPointSSDVDateTimeFieldPair(field: String, df: DateTimeFormatter) extends FieldPair(new LongPoint(field, 0l), new SortedSetDocValuesField(field, new BytesRef())) {
     def setValue(v: String) {
       indexField.setLongValue(df.parseMillis(v))
       storedField.setBytesValue(new BytesRef(v))
     }
   }
 
-  class LongPointSNDVFieldPair(field: String, docs: Document*) extends FieldPair(new LongPoint(field, 0l), new SortedNumericDocValuesField(field, 0), docs:_*) {
+  class LongPointSNDVFieldPair(field: String) extends FieldPair(new LongPoint(field, 0l), new SortedNumericDocValuesField(field, 0)) {
     def setValue(v: Long) {
       indexField.setLongValue(v)
       storedField.setLongValue(v)

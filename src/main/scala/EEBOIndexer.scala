@@ -61,84 +61,90 @@ object EEBOIndexer extends OctavoIndexer {
     val bckey = new DatabaseEntry(bckeya)
     val bcval = new DatabaseEntry
     val sbi = BreakIterator.getSentenceInstance(new Locale("en_GB"))
-    val dd = new Document()
-    val wd = new Document()
-    val dpd = new Document()
-    val sd = new Document()
-    val pd = new Document()
-    val send = new Document()
-    val collectionIDFields = new StringSDVFieldPair("collectionID", dd, wd, dpd, sd, pd, send)
-    val documentIDFields = new StringSDVFieldPair("documentID", dd, wd, dpd, sd, pd, send)
-    val estcIDFields = new StringSDVFieldPair("ESTCID", dd, wd, dpd, sd, pd, send)
-    val vidFields = new StringSDVFieldPair("VID", dd, wd, dpd, sd, pd, send)
-    val totalPagesFields = new IntPointNDVFieldPair("totalPages", dd, wd, dpd, sd, pd, send)
-    val languageFields = new StringSDVFieldPair("language", dd, wd, dpd, sd, pd, send)
-    val fullTitleFields = new TextSDVFieldPair("fullTitle",dd, wd,dpd,sd,pd, send)
-    val contentLengthFields = new IntPointNDVFieldPair("contentLength", dd, wd, dpd, sd, pd, send)
-    val documentLengthFields = new IntPointNDVFieldPair("documentLength", dd, wd, dpd, sd, pd, send)
-    val totalParagraphsFields = new IntPointNDVFieldPair("totalParagraphs", dd, wd, dpd, sd, pd, send)
-    val startOffsetFields = new IntPointNDVFieldPair("startOffset", wd, dpd, sd, pd, send)
-    val endOffsetFields = new IntPointNDVFieldPair("endOffset", wd, dpd, sd, pd, send)
-    val reusesFields = new IntPointNDVFieldPair("reuses", dd, wd, dpd, sd, pd, send)
+    val dd = new FluidDocument()
+    val wd = new FluidDocument()
+    val dpd = new FluidDocument()
+    val sd = new FluidDocument()
+    val pd = new FluidDocument()
+    val send = new FluidDocument()
+    val collectionIDFields = new StringSDVFieldPair("collectionID").r(dd, wd, dpd, sd, pd, send)
+    val documentIDFields = new StringSDVFieldPair("documentID").r(dd, wd, dpd, sd, pd, send)
+    val estcIDFields = new StringSDVFieldPair("ESTCID").r(dd, wd, dpd, sd, pd, send)
+    val vidFields = new StringSDVFieldPair("VID").r(dd, wd, dpd, sd, pd, send)
+    val totalPagesFields = new IntPointNDVFieldPair("totalPages").r(dd, wd, dpd, sd, pd, send)
+    val languageFields = new StringSDVFieldPair("language").r(dd, wd, dpd, sd, pd, send)
+    val fullTitleFields = new TextSDVFieldPair("fullTitle").r(dd, wd,dpd,sd,pd, send)
+    val contentLengthFields = new IntPointNDVFieldPair("contentLength").r(dd, wd, dpd, sd, pd, send)
+    val documentLengthFields = new IntPointNDVFieldPair("documentLength").r(dd, wd, dpd, sd, pd, send)
+    val totalParagraphsFields = new IntPointNDVFieldPair("totalParagraphs").r(dd, wd, dpd, sd, pd, send)
+    val startOffsetFields = new IntPointNDVFieldPair("startOffset").r(wd, dpd, sd, pd, send)
+    val endOffsetFields = new IntPointNDVFieldPair("endOffset").r(wd, dpd, sd, pd, send)
+    val reusesFields = new IntPointNDVFieldPair("reuses").r(dd, wd, dpd, sd, pd, send)
     def clearOptionalDocumentFields() {
       totalPagesFields.setValue(0)
       languageFields.setValue("")
       fullTitleFields.setValue("")
-      dd.removeFields("altTitle")
-      wd.removeFields("altTitle")
-      dpd.removeFields("altTitle")
-      sd.removeFields("altTitle")
-      pd.removeFields("altTitle")
-      send.removeFields("altTitle")
-      dd.removeFields("containsGraphicOfType")
+      dd.clearOptional()
+      dd.removeRequiredFields("altTitle")
+      wd.removeRequiredFields("altTitle")
+      dpd.removeRequiredFields("altTitle")
+      sd.removeRequiredFields("altTitle")
+      pd.removeRequiredFields("altTitle")
+      send.removeRequiredFields("altTitle")
+/*      dd.removeFields("containsGraphicOfType")
       dd.removeFields("containsGraphicCaption")
-      dd.removeFields("reuseID")
+      dd.removeFields("reuseID") */
     }
     def clearOptionalWorkFields(): Unit = {
-      wd.removeFields("containsGraphicOfType")
+      wd.clearOptional()
+/*      wd.removeFields("containsGraphicOfType")
       wd.removeFields("containsGraphicCaption")
-      wd.removeFields("reuseID")
+      wd.removeFields("reuseID") */
     }
     def clearOptionalDocumentPartFields() {
-      dpd.removeFields("containsGraphicOfType")
+      dpd.clearOptional()
+/*      dpd.removeFields("containsGraphicOfType")
       dpd.removeFields("containsGraphicCaption")
-      dpd.removeFields("reuseID")
+      dpd.removeFields("reuseID") */
     }
     def clearOptionalSectionFields() {
-      sd.removeFields("reuseID")
+      sd.clearOptional()
+/*      sd.removeFields("reuseID") */
     }
     def clearOptionalParagraphFields() {
-      pd.removeFields("sectionID")
+      pd.clearOptional()
+/*      pd.removeFields("sectionID")
       pd.removeFields("headingLevel")
       pd.removeFields("heading")
-      pd.removeFields("reuseID")
+      pd.removeFields("reuseID") */
     }
     def clearOptionalSentenceFields() {
-      send.removeFields("sectionID")
+      send.clearOptional()
+/*      send.removeFields("sectionID")
       send.removeFields("headingLevel")
       send.removeFields("heading")
-      send.removeFields("reuseID")
+      send.removeFields("reuseID") */
     }
     def addAltTitle(altTitle: String): Unit = {
-      new TextSSDVFieldPair("altTitle", dd, wd, dpd, sd, pd, send).setValue(altTitle)
+      new TextSSDVFieldPair("altTitle").r(dd, wd, dpd, sd, pd, send).setValue(altTitle)
     }
-    val workIdFields = new StringNDVFieldPair("workID", wd, dpd, sd, pd, send)
-    val documentPartIdFields = new StringNDVFieldPair("partID", dpd, sd, pd, send)
-    val paragraphIDFields = new StringNDVFieldPair("paragraphID", pd, send)
+    val workIdFields = new StringNDVFieldPair("workID").r(wd, dpd, sd, pd, send)
+    val documentPartIdFields = new StringNDVFieldPair("partID").r(dpd, sd, pd, send)
+    val paragraphIDFields = new StringNDVFieldPair("paragraphID").r(pd, send)
     val sentenceIDField = new NumericDocValuesField("sentenceID", 0)
-    send.add(sentenceIDField)
+    send.addRequired(sentenceIDField)
     val contentField = new Field("content","",contentFieldType)
-    dd.add(contentField)
-    wd.add(contentField)
-    dpd.add(contentField)
-    sd.add(contentField)
-    pd.add(contentField)
-    send.add(contentField)
-    val contentTokensFields = new IntPointNDVFieldPair("contentTokens", dd, dpd, sd, pd, send)
-    val documentPartTypeFields = new StringSDVFieldPair("documentPartType", dpd, sd, pd, send)
-    val sectionIDFields = new StringNDVFieldPair("sectionID", sd)
-    val headingFields = new TextSDVFieldPair("heading",sd)
-    val headingLevelFields = new IntPointNDVFieldPair("headingLevel", sd)
+    dd.addRequired(contentField)
+    wd.addRequired(contentField)
+    dpd.addRequired(contentField)
+    sd.addRequired(contentField)
+    pd.addRequired(contentField)
+    send.addRequired(contentField)
+    val contentTokensFields = new IntPointNDVFieldPair("contentTokens").r(dd, dpd, sd, pd, send)
+    val documentPartTypeFields = new StringSDVFieldPair("documentPartType").r(dpd, sd, pd, send)
+    val sectionIDFields = new StringNDVFieldPair("sectionID").r(sd)
+    val headingFields = new TextSDVFieldPair("heading").r(sd)
+    val headingLevelFields = new IntPointNDVFieldPair("headingLevel").r(sd)
   }
 
   val termVectorFields = Seq("content", "containsGraphicOfType")
@@ -150,10 +156,10 @@ object EEBOIndexer extends OctavoIndexer {
     paragraphHeadingLevelFields.setValue(headingLevel)
     val paragraphHeadingFields = new TextSSDVFieldPair("heading")
     val content = new StringBuilder()
-    def addToDocument(pd: Document) {
-      paragraphSectionIDFields.add(pd)
-      paragraphHeadingLevelFields.add(pd)
-      paragraphHeadingFields.add(pd)
+    def addToDocument(pd: FluidDocument) {
+      paragraphSectionIDFields.o(pd)
+      paragraphHeadingLevelFields.o(pd)
+      paragraphHeadingFields.o(pd)
     }
   }
 
@@ -253,12 +259,12 @@ object EEBOIndexer extends OctavoIndexer {
           for (row <- CSVReader(file.getPath.replace(".txt", "-graphics.csv"))) {
             val gtype = if (row(1) == "") "unknown" else row(1)
             val f = new Field("containsGraphicOfType", gtype, notStoredStringFieldWithTermVectors)
-            r.dpd.add(f)
-            r.dd.add(f)
+            r.dpd.addOptional(f)
+            r.dd.addOptional(f)
             if (row(3) != "") {
               val f = new Field("containsGraphicCaption", row(3), normsOmittingStoredTextField)
-              r.dpd.add(f)
-              r.dd.add(f)
+              r.dpd.addOptional(f)
+              r.dd.addOptional(f)
             }
           }
         val headingInfos = new ArrayBuffer[Seq[SectionInfo]]
@@ -282,7 +288,7 @@ object EEBOIndexer extends OctavoIndexer {
               val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length, dcontents.size + dpcontents.size, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
               r.reusesFields.setValue(reuses.size)
               for (reuse <- reuses) {
-                val f = new StringSNDVFieldPair("reuseID", r.pd)
+                val f = new StringSNDVFieldPair("reuseID").o(r.pd)
                 f.setValue(reuse.reuseID)
               }
               piw.addDocument(r.pd)
@@ -301,7 +307,7 @@ object EEBOIndexer extends OctavoIndexer {
                 val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length + start, dcontents.size + dpcontents.size - c.length + end, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
                 r.reusesFields.setValue(reuses.size)
                 for (reuse <- reuses) {
-                  val f = new StringSNDVFieldPair("reuseID", r.send)
+                  val f = new StringSNDVFieldPair("reuseID").o(r.send)
                   f.setValue(reuse.reuseID)
                 }
                 seniw.addDocument(r.send)
@@ -334,7 +340,7 @@ object EEBOIndexer extends OctavoIndexer {
                   val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - contentS.length, dcontents.size + dpcontents.size, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
                   r.reusesFields.setValue(reuses.size)
                   for (reuse <- reuses) {
-                    val f = new StringSNDVFieldPair("reuseID", r.sd)
+                    val f = new StringSNDVFieldPair("reuseID").o(r.sd)
                     f.setValue(reuse.reuseID)
                   }
                   r.contentField.setStringValue(contentS)
@@ -372,7 +378,7 @@ object EEBOIndexer extends OctavoIndexer {
           val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length, dcontents.size + dpcontents.size, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
           r.reusesFields.setValue(reuses.size)
           for (reuse <- reuses) {
-            val f = new StringSNDVFieldPair("reuseID", r.pd)
+            val f = new StringSNDVFieldPair("reuseID").o(r.pd)
             f.setValue(reuse.reuseID)
           }
           piw.addDocument(r.pd)
@@ -391,7 +397,7 @@ object EEBOIndexer extends OctavoIndexer {
             val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - c.length + start, dcontents.size + dpcontents.size - c.length + end, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
             r.reusesFields.setValue(reuses.size)
             for (reuse <- reuses) {
-              val f = new StringSNDVFieldPair("reuseID", r.send)
+              val f = new StringSNDVFieldPair("reuseID").o(r.send)
               f.setValue(reuse.reuseID)
             }
             seniw.addDocument(r.send)
@@ -416,7 +422,7 @@ object EEBOIndexer extends OctavoIndexer {
             val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size + dpcontents.size - contentS.length, dcontents.size + dpcontents.size, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
             r.reusesFields.setValue(reuses.size)
             for (reuse <- reuses) {
-              val f = new StringSNDVFieldPair("reuseID", r.sd)
+              val f = new StringSNDVFieldPair("reuseID").o(r.sd)
               f.setValue(reuse.reuseID)
             }
           }
@@ -432,7 +438,7 @@ object EEBOIndexer extends OctavoIndexer {
           val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size, dcontents.size + dpcontents.size, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
           r.reusesFields.setValue(reuses.size)
           for (reuse <- reuses) {
-            val f = new StringSNDVFieldPair("reuseID", r.dpd)
+            val f = new StringSNDVFieldPair("reuseID").o(r.dpd)
             f.setValue(reuse.reuseID)
           }
           dpiw.addDocument(r.dpd)
@@ -450,7 +456,7 @@ object EEBOIndexer extends OctavoIndexer {
         val reuses: Seq[ReuseInterval] = documentClusters.overlap(new IntegerInterval(dcontents.size, dcontents.size + wcontents.size, false, true)).asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
         r.reusesFields.setValue(reuses.size)
         for (reuse <- reuses) {
-          val f = new StringSNDVFieldPair("reuseID", r.wd)
+          val f = new StringSNDVFieldPair("reuseID").o(r.wd)
           f.setValue(reuse.reuseID)
         }
         wiw.addDocument(r.wd)
@@ -462,7 +468,7 @@ object EEBOIndexer extends OctavoIndexer {
     val reuses: Seq[ReuseInterval] = documentClusters.asScala.toSeq.asInstanceOf[Seq[ReuseInterval]]
     r.reusesFields.setValue(reuses.size)
     for (reuse <- reuses) {
-      val f = new StringSNDVFieldPair("reuseID",r.dd)
+      val f = new StringSNDVFieldPair("reuseID").o(r.dd)
       f.setValue(reuse.reuseID)
     }
     r.contentField.setStringValue(dcontentsS)

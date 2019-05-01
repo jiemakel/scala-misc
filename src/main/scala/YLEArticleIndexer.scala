@@ -1,53 +1,21 @@
-import fi.seco.lexical.combined.CombinedLexicalAnalysisService
-import fi.seco.lexical.hfst.HFSTLexicalAnalysisService
-import scala.collection.JavaConverters._
-import fi.seco.lexical.hfst.HFSTLexicalAnalysisService.WordToResults
-import org.apache.lucene.index.IndexWriter
-import java.io.InputStreamReader
-import java.io.FileInputStream
-import java.io.File
-import org.json4s._
-import org.json4s.native.JsonParser._
-import org.json4s.JsonDSL._
-import org.json4s.native.JsonMethods.{render, pretty}
-import scala.compat.java8.FunctionConverters._
-import scala.compat.java8.StreamConverters._
-import org.apache.lucene.search.Sort
-import org.apache.lucene.search.SortField
-
-import org.rogach.scallop._
-import scala.language.postfixOps
-import scala.language.reflectiveCalls
-import org.apache.lucene.document.StringField
-import org.apache.lucene.document.Field
-import org.apache.lucene.document.Document
-import org.apache.lucene.document.IntPoint
-import org.apache.lucene.document.NumericDocValuesField
-import org.apache.lucene.document.SortedDocValuesField
-import org.apache.lucene.util.BytesRef
-import org.apache.lucene.analysis.TokenStream
-import java.lang.ThreadLocal
-import org.apache.lucene.analysis.tokenattributes.CharTermAttribute
-import org.apache.lucene.analysis.tokenattributes.OffsetAttribute
-import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
-import scala.collection.mutable.ArrayBuffer
-import org.apache.lucene.analysis.tokenattributes.PayloadAttribute
-import org.apache.lucene.util.NumericUtils
-import scala.collection.mutable.HashSet
-import org.apache.lucene.index.IndexOptions
-import scala.util.Try
-import scala.util.Success
-import scala.util.Failure
-import java.util.function.Predicate
+import java.io.{File, FileInputStream, InputStreamReader}
 import java.util.concurrent.atomic.AtomicLong
-import fi.seco.lucene.MorphologicalAnalysisTokenStream
-import fi.seco.lucene.MorphologicalAnalyzer
-import fi.seco.lucene.WordToAnalysis
-import org.joda.time.format.ISODateTimeFormat
-import org.apache.lucene.document.LongPoint
-import org.apache.lucene.document.StoredField
 import java.util.function.BiPredicate
-import org.apache.lucene.index.FieldInfo
+
+import fi.seco.lucene.{MorphologicalAnalysisTokenStream, MorphologicalAnalyzer, WordToAnalysis}
+import org.apache.lucene.document.{Field, LongPoint, SortedDocValuesField, StoredField}
+import org.apache.lucene.index.{FieldInfo, IndexWriter}
+import org.apache.lucene.search.{Sort, SortField}
+import org.apache.lucene.util.BytesRef
+import org.joda.time.format.ISODateTimeFormat
+import org.json4s.JsonDSL._
+import org.json4s._
+import org.json4s.native.JsonMethods.{pretty, render}
+import org.json4s.native.JsonParser._
+import org.rogach.scallop._
+
+import scala.collection.mutable.ArrayBuffer
+import scala.language.{postfixOps, reflectiveCalls}
 
 
 object YLEArticleIndexer extends OctavoIndexer {
@@ -69,40 +37,40 @@ object YLEArticleIndexer extends OctavoIndexer {
   private val sentences = new AtomicLong
   
   class Reuse {
-    val sd = new Document()
-    val pd = new Document()
-    val ad = new Document()
-    val urlFields = new StringSDVFieldPair("url", sd, pd, ad)
-    val articleIDFields = new StringSDVFieldPair("articleID", sd, pd, ad)
-    val publisherFields = new StringSDVFieldPair("publisher", sd, pd, ad)
+    val sd = new FluidDocument()
+    val pd = new FluidDocument()
+    val ad = new FluidDocument()
+    val urlFields = new StringSDVFieldPair("url").r(sd, pd, ad)
+    val articleIDFields = new StringSDVFieldPair("articleID").r(sd, pd, ad)
+    val publisherFields = new StringSDVFieldPair("publisher").r(sd, pd, ad)
     val timePublishedSDVField = new SortedDocValuesField("timePublished", new BytesRef())
-    sd.add(timePublishedSDVField)
-    pd.add(timePublishedSDVField)
-    ad.add(timePublishedSDVField)
+    sd.addRequired(timePublishedSDVField)
+    pd.addRequired(timePublishedSDVField)
+    ad.addRequired(timePublishedSDVField)
     val timePublishedLongPoint = new LongPoint("timePublished", 0)
-    sd.add(timePublishedLongPoint)
-    pd.add(timePublishedLongPoint)
-    ad.add(timePublishedLongPoint)
-    val coverageFields = new StringSDVFieldPair("coverage", sd, pd, ad)
-    val contentLengthFields = new IntPointNDVFieldPair("contentLength", sd, pd, ad)
-    val contentTokensFields = new IntPointNDVFieldPair("contentTokens", sd, pd, ad)
-    val leadFields = new StringSDVFieldPair("lead", sd, pd, ad)
-    val headlineFields = new StringSDVFieldPair("headline", sd, pd, ad)
+    sd.addRequired(timePublishedLongPoint)
+    pd.addRequired(timePublishedLongPoint)
+    ad.addRequired(timePublishedLongPoint)
+    val coverageFields = new StringSDVFieldPair("coverage").r(sd, pd, ad)
+    val contentLengthFields = new IntPointNDVFieldPair("contentLength").r(sd, pd, ad)
+    val contentTokensFields = new IntPointNDVFieldPair("contentTokens").r(sd, pd, ad)
+    val leadFields = new StringSDVFieldPair("lead").r(sd, pd, ad)
+    val headlineFields = new StringSDVFieldPair("headline").r(sd, pd, ad)
     val textField = new Field("text", "", contentFieldType)
-    sd.add(textField)
-    pd.add(textField)
-    ad.add(textField)
+    sd.addRequired(textField)
+    pd.addRequired(textField)
+    ad.addRequired(textField)
     val analyzedTextField = new StoredField("analyzedText", "")
-    sd.add(analyzedTextField)
-    pd.add(analyzedTextField)
-    ad.add(analyzedTextField)
-    val paragraphIDFields = new StringNDVFieldPair("paragraphID", pd, sd)
-    val sentenceIDFields = new StringNDVFieldPair("sentenceID", sd)
-    val paragraphsFields = new IntPointNDVFieldPair("paragraphs", ad)
-    val sentencesFields = new IntPointNDVFieldPair("sentences", pd, ad)
+    sd.addRequired(analyzedTextField)
+    pd.addRequired(analyzedTextField)
+    ad.addRequired(analyzedTextField)
+    val paragraphIDFields = new StringNDVFieldPair("paragraphID").r(pd, sd)
+    val sentenceIDFields = new StringNDVFieldPair("sentenceID").r(sd)
+    val paragraphsFields = new IntPointNDVFieldPair("paragraphs").r(ad)
+    val sentencesFields = new IntPointNDVFieldPair("sentences").r(pd, ad)
   }
   
-  val tld = new ThreadLocal[Reuse] {
+  val tld = new java.lang.ThreadLocal[Reuse] {
     override def initialValue() = new Reuse()
   }
   

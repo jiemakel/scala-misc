@@ -2,7 +2,6 @@ import java.io.{File, FileInputStream, InputStreamReader}
 import java.util.Locale
 import java.util.zip.GZIPInputStream
 
-import org.apache.lucene.document._
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.search.{Sort, SortField}
 import org.joda.time.format.{DateTimeFormat, ISODateTimeFormat}
@@ -16,46 +15,46 @@ import scala.language.{postfixOps, reflectiveCalls}
 object TwitterIndexer extends OctavoIndexer {
 
   class Reuse {
-    val td = new Document()
-    val idFields = new StringSDVFieldPair("id", td)
-    val timeFields = new LongPointSDVDateTimeFieldPair("created_at", ISODateTimeFormat.dateTimeNoMillis(), td)
-    val textField = new Field("text", "", contentFieldType)
-    td.add(textField)
-    val truncatedFields = new StringSDVFieldPair("truncated", td)
-    val languageFields = new StringSDVFieldPair("language",td)
-    val sourceFields = new StringSDVFieldPair("source",td)
-    val inReplyToUserIdFields = new StringSDVFieldPair("inReplyToUserId",td)
-    val inReplyToScreenNameFields = new StringSDVFieldPair("inReplyToScreenName",td)
-    val tweetType = new StringSDVFieldPair("type",td)
-    val userIdFields = new StringSDVFieldPair("userId", td)
-    val userNameFields = new TextSDVFieldPair("userName",td)
-    val userScreenNameFields = new StringSDVFieldPair("userScreenName",td)
-    val userLocationFields = new TextSDVFieldPair("userLocation",td)
-    val userDescriptionFields = new TextSDVFieldPair("userDescription",td)
-    val userFollowersCountFields = new IntPointNDVFieldPair("userFollowersCount",td)
-    val userFriendsCountFields = new IntPointNDVFieldPair("userFriendsCount",td)
-    val userListedCountFields = new IntPointNDVFieldPair("userListedCount", td)
-    val userFavouritesCountFields = new IntPointNDVFieldPair("userFavouritesCount", td)
-    val userVerifiedFields = new StringSDVFieldPair("userVerified",td)
-    val userLanguageFields = new StringSDVFieldPair("userLanguage",td)
-    val retweetIdFields = new StringSDVFieldPair("retweetId",td)
-    val retweetUserIdFields = new StringSDVFieldPair("retweetUserId",td)
-    val retweetScreenNameFields = new StringSDVFieldPair("retweetScreenName",td)
-    val quotedIdFields = new StringSDVFieldPair("quotedId",td)
-    val quotedUserIdFields = new StringSDVFieldPair("quotedUserId",td)
-    val quotedScreenNameFields = new StringSDVFieldPair("quotedScreenName",td)
-    val retweetCountFields = new IntPointNDVFieldPair("retweetCount",td)
-    val favoriteCountFields = new IntPointNDVFieldPair("favoriteCount", td)
-    val possiblySensitiveFields = new StringSDVFieldPair("possiblySensitive", td)
-    val placeId = new StringSDVFieldPair("placeId",td)
-    val placeFullName = new TextSDVFieldPair("placeFullName",td)
-    val placeType = new StringSDVFieldPair("placeType",td)
-    val country = new StringSDVFieldPair("country",td)
-    val placeCoordinates = new LatLonFieldPair("placeCoordinates", td)
+    val td = new FluidDocument
+    val idFields = new StringSDVFieldPair("id").r(td)
+    val timeFields = new LongPointSDVDateTimeFieldPair("created_at", ISODateTimeFormat.dateTimeNoMillis()).r(td)
+    val textField = new ContentField("text").r(td)
+    val truncatedFields = new StringSDVFieldPair("truncated").r(td)
+    val languageFields = new StringSDVFieldPair("language").r(td)
+    val sourceFields = new StringSDVFieldPair("source").r(td)
+    val inReplyToUserIdFields = new StringSDVFieldPair("inReplyToUserId").o(td)
+    val inReplyToScreenNameFields = new StringSDVFieldPair("inReplyToScreenName").o(td)
+    val tweetType = new StringSDVFieldPair("type").r(td)
+    val userIdFields = new StringSDVFieldPair("userId").r(td)
+    val userNameFields = new TextSDVFieldPair("userName").r(td)
+    val userScreenNameFields = new StringSDVFieldPair("userScreenName").o(td)
+    val userLocationFields = new TextSDVFieldPair("userLocation").r(td)
+    val userDescriptionFields = new TextSDVFieldPair("userDescription").r(td)
+    val userFollowersCountFields = new IntPointNDVFieldPair("userFollowersCount").r(td)
+    val userFriendsCountFields = new IntPointNDVFieldPair("userFriendsCount").r(td)
+    val userListedCountFields = new IntPointNDVFieldPair("userListedCount").r(td)
+    val userFavouritesCountFields = new IntPointNDVFieldPair("userFavouritesCount").r(td)
+    val userVerifiedFields = new StringSDVFieldPair("userVerified").r(td)
+    val userLanguageFields = new StringSDVFieldPair("userLanguage").r(td)
+    val retweetIdFields = new StringSDVFieldPair("retweetId").o(td)
+    val retweetUserIdFields = new StringSDVFieldPair("retweetUserId").o(td)
+    val retweetScreenNameFields = new StringSDVFieldPair("retweetScreenName").o(td)
+    val quotedIdFields = new StringSDVFieldPair("quotedId").o(td)
+    val quotedUserIdFields = new StringSDVFieldPair("quotedUserId").o(td)
+    val quotedScreenNameFields = new StringSDVFieldPair("quotedScreenName").o(td)
+    val retweetCountFields = new IntPointNDVFieldPair("retweetCount").r(td)
+    val favoriteCountFields = new IntPointNDVFieldPair("favoriteCount").r(td)
+    val possiblySensitiveFields = new StringSDVFieldPair("possiblySensitive").r(td)
+    val contentLengthFields = new IntPointNDVFieldPair("contentLength").r(td)
+    val contentTokensFields = new IntPointNDVFieldPair("contentTokens").r(td)
+    val placeId = new StringSDVFieldPair("placeId").o(td)
+    val placeFullName = new TextSDVFieldPair("placeFullName").o(td)
+    val placeType = new StringSDVFieldPair("placeType").o(td)
+    val country = new StringSDVFieldPair("country").o(td)
+    val placeCoordinates = new LatLonFieldPair("placeCoordinates").o(td)
+
     def clean() {
-      td.removeFields("hashtags")
-      td.removeFields("userMentionsScreenName")
-      td.removeFields("urls")
+      td.clearOptional()
     }
   }
   
@@ -85,28 +84,36 @@ object TwitterIndexer extends OctavoIndexer {
     d.idFields.setValue((t \ "id_str").asInstanceOf[JString].values)
 
     d.timeFields.setValue(isoDateTimeFormat.print(twitterDateTimeFormat.parseMillis((t \ "created_at").asInstanceOf[JString].values)))
-    d.textField.setStringValue((t \ "text").asInstanceOf[JString].values)
+    val text = (t \ "text").asInstanceOf[JString].values
+    d.textField.setValue(text)
+    getNumberOfTokens(d.textField.tokenStream)
+    getNumberOfTokens(d.textField.tokenStream)
+    getNumberOfTokens(d.textField.tokenStream)
+    d.contentLengthFields.setValue(text.length)
+    d.contentTokensFields.setValue(d.textField.numberOfTokens)
     d.truncatedFields.setValue((t \ "truncated").asInstanceOf[JBool].values.toString)
     for (v <- (t \ "entities" \ "hashtags" \ "text").asInstanceOf[JArray].arr) {
-      new StringSSDVFieldPair("hashtags", d.td).setValue(v.asInstanceOf[JString].values)
+      new StringSSDVFieldPair("hashtags").o(d.td).setValue(v.asInstanceOf[JString].values)
     }
     for (v <- (t \ "entities" \ "user_mentions").asInstanceOf[JArray].arr) {
-      new StringSSDVFieldPair("userMentionsUserId", d.td).setValue((v \ "id_str").asInstanceOf[JString].values)
-      new StringSSDVFieldPair("userMentionsScreenName", d.td).setValue((v \ "screen_name").asInstanceOf[JString].values)
+      new StringSSDVFieldPair("userMentionsUserId").o(d.td).setValue((v \ "id_str").asInstanceOf[JString].values)
+      new StringSSDVFieldPair("userMentionsScreenName").o(d.td).setValue((v \ "screen_name").asInstanceOf[JString].values)
     }
     for (v <- (t \ "entities" \ "urls" \ "expanded_url").asInstanceOf[JArray].arr) {
-      new StringSSDVFieldPair("urls", d.td).setValue(v.asInstanceOf[JString].values)
+      new StringSSDVFieldPair("urls").o(d.td).setValue(v.asInstanceOf[JString].values)
     }
 
     d.languageFields.setValue((t \ "lang").asInstanceOf[JString].values)
     d.sourceFields.setValue((t \ "source").asInstanceOf[JString].values)
     t \ "in_reply_to_user_id_str" match {
-      case JNull => d.inReplyToUserIdFields.setValue("")
-      case JString(str) => d.inReplyToUserIdFields.setValue(str)
+      case JNull =>
+      case JString(str) => d.inReplyToUserIdFields.o(d.td).setValue(str)
     }
     t \ "in_reply_to_screen_name" match {
-      case JNull => d.inReplyToScreenNameFields.setValue("")
-      case JString(str) => d.inReplyToScreenNameFields.setValue(str)
+      case JNull =>
+      case JString(str) =>
+        d.tweetType.setValue("reply")
+        d.inReplyToScreenNameFields.o(d.td).setValue(str)
     }
     val user = (t \ "user").asInstanceOf[JObject]
     d.userIdFields.setValue((user \ "id_str").asInstanceOf[JString].values)
@@ -123,33 +130,21 @@ object TwitterIndexer extends OctavoIndexer {
     d.tweetType.setValue("tweet")
     t \ "retweeted_status" match {
       case JNull | JNothing =>
-        d.retweetIdFields.setValue("")
-        d.retweetUserIdFields.setValue("")
-        d.retweetScreenNameFields.setValue("")
       case rt =>
         d.tweetType.setValue("retweet")
-        d.retweetIdFields.setValue((rt \ "id_str").asInstanceOf[JString].values)
+        d.retweetIdFields.o(d.td).setValue((rt \ "id_str").asInstanceOf[JString].values)
         val rtuser = (rt \ "user").asInstanceOf[JObject]
-        d.retweetUserIdFields.setValue((rtuser \ "id_str").asInstanceOf[JString].values)
-        d.retweetScreenNameFields.setValue((rtuser \ "screen_name").asInstanceOf[JString].values)
+        d.retweetUserIdFields.o(d.td).setValue((rtuser \ "id_str").asInstanceOf[JString].values)
+        d.retweetScreenNameFields.o(d.td).setValue((rtuser \ "screen_name").asInstanceOf[JString].values)
     }
     t \ "quoted_status" match {
       case JNull | JNothing =>
-        d.quotedIdFields.setValue("")
-        d.quotedUserIdFields.setValue("")
-        d.quotedScreenNameFields.setValue("")
       case rt =>
         d.tweetType.setValue("quoted")
-        d.quotedIdFields.setValue((rt \ "id_str").asInstanceOf[JString].values)
+        d.quotedIdFields.o(d.td).setValue((rt \ "id_str").asInstanceOf[JString].values)
         val rtuser = (rt \ "user").asInstanceOf[JObject]
-        d.quotedUserIdFields.setValue((rtuser \ "id_str").asInstanceOf[JString].values)
-        d.quotedScreenNameFields.setValue((rtuser \ "screen_name").asInstanceOf[JString].values)
-    }
-    t \ "in_reply_to_screen_name" match {
-      case JNull => d.inReplyToScreenNameFields.setValue("")
-      case JString(str) =>
-        d.tweetType.setValue("reply")
-        d.inReplyToScreenNameFields.setValue(str)
+        d.quotedUserIdFields.o(d.td).setValue((rtuser \ "id_str").asInstanceOf[JString].values)
+        d.quotedScreenNameFields.o(d.td).setValue((rtuser \ "screen_name").asInstanceOf[JString].values)
     }
     d.retweetCountFields.setValue((t \ "retweet_count").asInstanceOf[JInt].num.intValue)
     d.favoriteCountFields.setValue((t \ "favorite_count").asInstanceOf[JInt].num.intValue)
@@ -159,20 +154,15 @@ object TwitterIndexer extends OctavoIndexer {
     }
     t \ "place" match {
       case JNull =>
-        d.placeId.setValue("")
-        d.placeFullName.setValue("")
-        d.placeType.setValue("")
-        d.country.setValue("")
-        d.placeCoordinates.setValue(0,0)
       case p =>
-        d.placeId.setValue((p \ "id").asInstanceOf[JString].values)
-        d.placeFullName.setValue((p \ "full_name").asInstanceOf[JString].values)
-        d.placeType.setValue((p \ "place_type").asInstanceOf[JString].values)
-        d.country.setValue((p \ "country").asInstanceOf[JString].values)
+        d.placeId.o(d.td).setValue((p \ "id").asInstanceOf[JString].values)
+        d.placeFullName.o(d.td).setValue((p \ "full_name").asInstanceOf[JString].values)
+        d.placeType.o(d.td).setValue((p \ "place_type").asInstanceOf[JString].values)
+        d.country.o(d.td).setValue((p \ "country").asInstanceOf[JString].values)
         (p \ "bounding_box" \ "coordinates")(0) match {
           case JArray(a) =>
             val coords = a.map{ case JArray(a) => (a.head.asInstanceOf[JDouble].num.doubleValue,a(1).asInstanceOf[JDouble].num.doubleValue) }
-            d.placeCoordinates.setValue((coords.head._2+coords(1)._2)/2,(coords.head._1+coords(1)._1)/2)
+            d.placeCoordinates.o(d.td).setValue((coords.head._2+coords(1)._2)/2,(coords.head._1+coords(1)._1)/2)
           case JNothing =>
         }
     }
