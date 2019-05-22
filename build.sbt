@@ -10,8 +10,8 @@ libraryDependencies ++= Seq(
   "org.scala-lang.modules" %% "scala-java8-compat" % "0.8.0",
   "org.json4s" %% "json4s-native" % "3.5.1" ,
   "com.fasterxml" % "aalto-xml" % "1.0.0",
-  "org.apache.jena" % "jena-core" % "3.0.1" exclude("org.slf4j","slf4j-log4j12") exclude("log4j","log4j") exclude("commons-logging", "commons-logging"),
-  "org.apache.jena" % "jena-arq" % "3.0.1" exclude("org.slf4j","slf4j-log4j12") exclude("log4j","log4j") exclude("commons-logging", "commons-logging"),
+  "org.apache.jena" % "jena-core" % "3.11.0" exclude("org.slf4j","slf4j-log4j12") exclude("log4j","log4j") exclude("commons-logging", "commons-logging"),
+  "org.apache.jena" % "jena-arq" % "3.11.0" exclude("org.slf4j","slf4j-log4j12") exclude("log4j","log4j") exclude("commons-logging", "commons-logging"),
   "com.github.nscala-time" %% "nscala-time" % "2.16.0",
   "com.bizo" %% "mighty-csv" % "0.2",
   "org.scalanlp" %% "breeze" % "0.13",
@@ -27,7 +27,7 @@ libraryDependencies ++= Seq(
   "org.apache.lucene" % "lucene-analyzers-common" % "8.0.0",
   "org.apache.lucene" % "lucene-queryparser" % "8.0.0",
   "org.apache.lucene" % "lucene-highlighter" % "8.0.0",
-  "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.2",
+  "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.3",
   "com.sleepycat" % "je" % "7.5.11",
   "org.apache.commons" % "commons-math3" % "3.6.1",
   "com.google.guava" % "guava" % "21.0",
@@ -35,7 +35,7 @@ libraryDependencies ++= Seq(
   "org.rogach" %% "scallop" % "2.1.1",
   "org.jsoup" % "jsoup" % "1.10.2",
   "com.optimaize.languagedetector" % "language-detector" % "0.6" exclude("com.intellij","annotations"),
-  "org.jetbrains.xodus" % "xodus-environment" % "1.2.3" exclude("org.jetbrains","annotations")
+  "org.jetbrains.xodus" % "xodus-environment" % "1.3.0" exclude("org.jetbrains","annotations")
 )
 
 resolvers ++= Seq(
