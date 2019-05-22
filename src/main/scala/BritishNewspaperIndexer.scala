@@ -3,7 +3,11 @@ import java.text.BreakIterator
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
-import org.apache.lucene.document.{Document, Field, NumericDocValuesField}
+import jetbrains.exodus.bindings.{IntegerBinding, StringBinding}
+import jetbrains.exodus.env._
+import jetbrains.exodus.util.LightOutputStream
+import jetbrains.exodus.{ArrayByteIterable, CompoundByteIterable}
+import org.apache.lucene.document.{Field, NumericDocValuesField}
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.search.{Sort, SortField}
 import org.rogach.scallop._
@@ -33,25 +37,30 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     val articleContents = new StringBuilder()
     
     val collectionIDFields = new StringSDVFieldPair("collectionID").r(sd, pd, ad, id) // given as parameter
-    
-    val issueIDFields = new StringSDVFieldPair("issueID").r(sd, pd, ad, id) // <issue ID="N0176185" FAID="BBCN0001" COLID="C00000" contentType="Newspaper">
+
+    var issueIDEntry: ArrayByteIterable = _
+    val offsetData = new LightOutputStream()
+    val offsetDataBytes = new Array[Int](4)
+    val issueIDFields = new StringSDVFieldPair("issueID").r(sd, pd, ad, id) // psmID, was <issue ID="N0176185" FAID="BBCN0001" COLID="C00000" contentType="Newspaper">
     val newspaperIDFields = new StringSDVFieldPair("newspaperID").r(sd, pd, ad, id) // <newspaperID>
     val articleIDFields = new StringSDVFieldPair("articleID").r(sd, pd, ad) // <id>WO2_B0897WEJOSAPO_1724_11_28-0001-001</id>
     val paragraphIDFields = new StringNDVFieldPair("paragraphID").r(sd, pd)
     val sentenceIDField = new NumericDocValuesField("sentenceID", 0)
     sd.addRequired(sentenceIDField)
-    
-    val languageFields = new StringSDVFieldPair("language").r(sd, pd, ad, id) // <language ocr="English" primary="Y">English</language>
-    val dayOfWeekFields = new StringSDVFieldPair("dayOfWeek").r(sd, pd, ad, id) // <dw>Saturday</dw>
-    val issueNumberFields = new StringSDVFieldPair("issueNumber").r(sd, pd, ad, id) //<is>317</is>
+
     val dateStartFields = new IntPointNDVFieldPair("dateStart").r(sd, pd, ad, id) // <searchableDateStart>17851129</searchableDateStart>
     val dateEndFields = new IntPointNDVFieldPair("dateEnd").r(sd, pd, ad, id) // <searchableDateEnd>17851129</searchableDateEnd>
-    val authorFields = new TextSDVFieldPair("author").r(sd, pd, ad) // <au_composed>Tom Whipple</au_composed>
-    val sectionFields = new StringSDVFieldPair("section").r(sd, pd, ad) // <sc>A</sc>
+    val languageFields = new StringSDVFieldPair("language").o(sd, pd, ad) // <language ocr="English" primary="Y">English</language>
+    // val issueLanguageFields = new StringSSDVFieldPair("language").o(id)
+    val dayOfWeekFields = new StringSDVFieldPair("dayOfWeek").o(sd, pd, ad, id) // <dw>Saturday</dw>
+    val issueNumberFields = new StringSDVFieldPair("issueNumber").o(sd, pd, ad, id) //<is>317</is>
 
     val ocrConfidenceFields = new IntPointNDVFieldPair("ocrConfidence").r(sd, pd, ad, id)
     val lengthFields = new IntPointNDVFieldPair("length").r(sd, pd, ad, id)
     val tokensFields = new IntPointNDVFieldPair("tokens").r(sd, pd, ad, id)
+
+    val startOffsetFields = new IntPointNDVFieldPair("startOffset").r(sd, pd, ad)
+    val endOffsetFields = new IntPointNDVFieldPair("endOffset").r(sd, pd, ad)
 
     var pagesInArticle = 0
     var paragraphsInArticle = 0
@@ -70,33 +79,35 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     val articlePagesFields = new IntPointNDVFieldPair("pages").r(ad)
     val issuePagesFields = new IntPointNDVFieldPair("pages").r(id)
     
-    val textField = new Field("text", "", contentFieldType)
-    sd.addRequired(textField)
-    pd.addRequired(textField)
-    ad.addRequired(textField)
-    id.addRequired(textField)
-    
-    val supplementTitleFields = new TextSDVFieldPair("supplementTitle").r(sd, pd, ad)
-    
-    val titleFields = new TextSDVFieldPair("title").r(sd, pd, ad) // <ti>The Ducal Shopkeepers and Petty Hucksters</ti>
+    val textField = new ContentField("text").r(sd,pd,ad,id)
+
+    val supplementTitleFields = new TextSDVFieldPair("supplementTitle").o(sd, pd, ad)
+
+    val sectionFields = new StringSDVFieldPair("section").o(sd, pd, ad) // <sc>A</sc>
+
+    val authorFields = new TextSDVFieldPair("author").o(sd, pd, ad) // <au_composed>Tom Whipple</au_composed>
+    val titleFields = new TextSDVFieldPair("title").o(sd, pd, ad) // <ti>The Ducal Shopkeepers and Petty Hucksters</ti>
     
     val subtitles = new StringBuilder()
-    val subtitlesFields = new TextSDVFieldPair("subtitles").r(sd, pd, ad) //   <ta>Sketch of the week</ta> <ta>Slurs and hyperbole vied with tosh to make the headlines, says Tom Whipple</ta>
+    val subtitlesFields = new TextSDVFieldPair("subtitles").o(sd, pd, ad) //   <ta>Sketch of the week</ta> <ta>Slurs and hyperbole vied with tosh to make the headlines, says Tom Whipple</ta>
     
-    val articleTypeFields = new StringSDVFieldPair("articleType").r(sd, pd, ad) // <ct>Arts and entertainment</ct>
+    val articleTypeFields = new StringSDVFieldPair("articleType").o(sd, pd, ad) // <ct>Arts and entertainment</ct>
+
     def clearOptionalIssueFields() {
       sentencesInIssue = 0
       paragraphsInIssue = 0
       articlesInIssue = 0
       illustrationsInIssue = 0
       issueContents.clear()
-      dayOfWeekFields.setValue("")
-      issueNumberFields.setValue("")
+      id.clearOptional()
       dateStartFields.setValue(0)
       dateEndFields.setValue(Int.MaxValue)
+/*
+      dayOfWeekFields.setValue("")
+      issueNumberFields.setValue("")
       languageFields.setValue("")
-      id.clearOptional()
-/*      id.removeFields("containsGraphicOfType")
+
+      id.removeFields("containsGraphicOfType")
       id.removeFields("containsGraphicCaption") */
     }
     def clearOptionalArticleFields() {
@@ -105,15 +116,19 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       paragraphsInArticle = 0
       illustrationsInArticle = 0
       articleContents.clear()
+      subtitles.clear()
+      ad.clearOptional()
+      pd.clearOptional()
+      sd.clearOptional()
+/*
       articleTypeFields.setValue("")
       titleFields.setValue("")
       authorFields.setValue("")
       sectionFields.setValue("")
       supplementTitleFields.setValue("")
-      subtitles.clear()
       subtitlesFields.setValue("")
-      ad.clearOptional()
-/*      ad.removeFields("containsGraphicOfType")
+
+      ad.removeFields("containsGraphicOfType")
       ad.removeFields("containsGraphicCaption") */
     }
   }
@@ -136,8 +151,8 @@ object BritishNewspaperIndexer extends OctavoIndexer {
           content.append(er.entity)
           content.append(']')
       }
-      case EvComment(comment) if (comment == " unknown entity apos; ") => content.append('\'')
-      case EvComment(comment) if (comment.startsWith(" unknown entity")) =>
+      case EvComment(comment) if comment == " unknown entity apos; " => content.append('\'')
+      case EvComment(comment) if comment.startsWith(" unknown entity") =>
         val entity = content.substring(16, content.length - 2)
         logger.warn("Encountered unknown entity "+entity)
         content.append('[')
@@ -155,13 +170,13 @@ object BritishNewspaperIndexer extends OctavoIndexer {
   }
   
   class State {
-    val content = new StringBuilder()
+    var content = new ArrayBuffer[ArrayBuffer[Word]]()
     var currentLine: ArrayBuffer[Word] = new ArrayBuffer //midx,startx,endx,starty,endy,content  
     var lastLine: ArrayBuffer[Word] = _
-    def testParagraphBreakAtEndOfLine(guessParagraphs: Boolean): Option[String] = {
-      var ret: Option[String] = None
+    def testParagraphBreakAtEndOfLine(guessParagraphs: Boolean): Option[Seq[Seq[Word]]] = {
+      var ret: Option[Seq[Seq[Word]]] = None
       if (lastLine != null) { // we have two lines, check for a paragraph change between them.
-        content.append(lastLine.map(_.word).mkString(" "))
+        content.append(lastLine)
         if (guessParagraphs) {
           val (lastSumEndY, _) = lastLine.foldLeft((0,0))((t,v) => (t._1 + v.endY, t._2 + (v.endY - v.startY)))
           //val lastAvgHeight = lastSumHeight / lastLine.length
@@ -177,8 +192,8 @@ object BritishNewspaperIndexer extends OctavoIndexer {
           val (currentSumWidth, currentSumChars) = currentLine.foldLeft((0,0))((t,v) => (t._1 + (v.endX - v.startX), t._2 + v.word.length))
           
           if (lastSumChars == 0 || currentSumChars == 0) {
-            logger.warn("Encountered a line without content when comparing lastLine:"+lastLine+", currentLinw:"+currentLine+". Cannot determine if there should be a paragraph break")
-            content.append('\n')
+            logger.warn("Encountered a line without content when comparing lastLine:"+lastLine+", currentLine:"+currentLine+". Cannot determine if there should be a paragraph break")
+            // content.append('\n')
           } else {
             val lastAvgCharWidth = lastSumWidth / lastSumChars
             val currentAvgCharWidth = currentSumWidth / currentSumChars
@@ -190,11 +205,11 @@ object BritishNewspaperIndexer extends OctavoIndexer {
                 (currentStartX > lastStartX + 1.5 * math.min(lastAvgCharWidth, currentAvgCharWidth)) || // indentation
                 (lastStartX > currentStartX + 2 * math.min(lastAvgCharWidth, currentAvgCharWidth)) // catch edge cases
             ) {
-              ret = Some(content.toString)
-              content.clear()
-            } else content.append('\n')
+              ret = Some(content)
+              content = new ArrayBuffer[ArrayBuffer[Word]]()
+            } // else content.append('\n')
           }
-        } else content.append('\n')
+        } // else content.append('\n')
       }
       lastLine = currentLine
       currentLine = new ArrayBuffer
@@ -202,7 +217,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     }
   }
   
-  private def readNextWordPossiblyEmittingAParagraph(attrs: MetaData, state: State, guessParagraphs: Boolean)(implicit xml: XMLEventReader): Option[String] = {
+  private def readNextWordPossiblyEmittingAParagraph(attrs: MetaData, state: State, guessParagraphs: Boolean)(implicit xml: XMLEventReader): Option[Seq[Seq[Word]]] = {
     val word = readContents
     val posa = attrs("pos").head.text.split(",")
     val curStartX = posa(0).toInt
@@ -211,7 +226,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     val curStartY = posa(1).toInt
     val curEndY = posa(3).toInt
     //val curHeight = curEndY - curStartY
-    var ret: Option[String] = None 
+    var ret: Option[Seq[Seq[Word]]] = None
     if (state.currentLine.nonEmpty) {
       val pos = Searching.search(state.currentLine).search(Word(curMidX,-1,-1,-1,-1,"")).insertionPoint - 1
       val Word(_,_,_,_, lastEndY, _) = state.currentLine(if (pos == -1) 0 else pos)
@@ -222,36 +237,74 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     ret
   }
   
-  private def processParagraph(paragraph: String, d: Reuse): Unit = {
-    d.sbi.setText(paragraph)
+  private def processParagraph(paragraph: Seq[Seq[Word]], d: Reuse): Unit = {
+    //val t = ie.beginExclusiveTransaction()
+    val issueStartOffset = d.issueContents.length
+    var offset = issueStartOffset
+    val offsetEntry = IntegerBinding.intToCompressedEntry(d.issueContents.length)
+    ics synchronized {
+      for (line <- paragraph) {
+        for (word <- line) {
+          d.offsetData.clear()
+          IntegerBinding.writeCompressed(d.offsetData,word.startX,d.offsetDataBytes)
+          IntegerBinding.writeCompressed(d.offsetData,word.startY,d.offsetDataBytes)
+          IntegerBinding.writeCompressed(d.offsetData,word.endX - word.startX,d.offsetDataBytes)
+          IntegerBinding.writeCompressed(d.offsetData,word.endY - word.startY,d.offsetDataBytes)
+          val k = new CompoundByteIterable(Array(d.issueIDEntry,IntegerBinding.intToCompressedEntry(offset)))
+          val v = d.offsetData.asArrayByteIterable()
+          ics.add(t,k,v)
+          storedOffsets += 1
+          if ((storedOffsets & 1048575) == 0)
+            t.flush()
+          d.articleContents.append(word.word)
+          d.articleContents.append(' ')
+          d.issueContents.append(word.word)
+          d.issueContents.append(' ')
+          offset += word.word.length + 1
+        }
+        if (line.nonEmpty) {
+          d.articleContents.setCharAt(d.articleContents.length - 1, '\n')
+          d.issueContents.setCharAt(d.articleContents.length - 1, '\n')
+        }
+      }
+    }
+    //t.commit()
+    d.articleContents.append('\n')
+    d.issueContents.append('\n')
+    val ptext = paragraph.map(_.map(_.word).mkString(" ")).mkString("\n")
+    d.sbi.setText(ptext)
     var start = d.sbi.first()
     var end = d.sbi.next()
     var csentences = 0
     while (end != BreakIterator.DONE) {
-      val sentence = paragraph.substring(start,end)
-      d.sentenceIDField.setLongValue(sentences.incrementAndGet)
-      d.textField.setStringValue(sentence)
-      d.lengthFields.setValue(sentence.length)
-      d.tokensFields.setValue(getNumberOfTokens(sentence))
-      if (siw != null) siw.addDocument(d.sd)
+      val sentence = ptext.substring(start,end)
+      if (siw != null) {
+        d.sentenceIDField.setLongValue(sentences.incrementAndGet)
+        d.textField.setValue(sentence)
+        d.lengthFields.setValue(sentence.length)
+        d.tokensFields.setValue(d.textField.numberOfTokens)
+        d.startOffsetFields.setValue(issueStartOffset + start)
+        d.endOffsetFields.setValue(issueStartOffset + end)
+        siw.addDocument(d.sd)
+      }
       start = end
       end = d.sbi.next()
       csentences += 1
     }
-    d.sentencesFields.setValue(csentences)
     d.sentencesInIssue += csentences
     d.sentencesInArticle += csentences
-    d.articleContents.append(paragraph)
-    d.articleContents.append("\n\n")
-    d.issueContents.append(paragraph)
-    d.issueContents.append("\n\n")
-    d.paragraphIDFields.setValue(paragraphs.getAndIncrement)
-    d.textField.setStringValue(paragraph)
-    d.lengthFields.setValue(paragraph.length)
-    d.tokensFields.setValue(getNumberOfTokens(paragraph))
     d.paragraphsInArticle += 1
     d.paragraphsInIssue += 1
-    piw.addDocument(d.pd)
+    if (piw != null) {
+      d.sentencesFields.setValue(csentences)
+      d.paragraphIDFields.setValue(paragraphs.getAndIncrement)
+      d.startOffsetFields.setValue(issueStartOffset)
+      d.endOffsetFields.setValue(issueStartOffset + ptext.length)
+      d.textField.setValue(ptext)
+      d.lengthFields.setValue(ptext.length)
+      d.tokensFields.setValue(d.textField.numberOfTokens)
+      piw.addDocument(d.pd)
+    }
   }
   
   private def getXMLEventReaderWithCorrectEncoding(file: File): XMLEventReader = {
@@ -295,10 +348,16 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       var issueConfidence = 0
       var articleConfidence = 0
       var articleConfidenceCount = 0
+      var articleStartOffset = 0
       var break = false
       // read metadatainfo first. If it doesn't exist, we have a broken issue and the whole thing gets skipped
       while (xml.hasNext && !break) xml.next match {
-        case EvElemStart(_, "issue", attrs, _) => d.issueIDFields.setValue(attrs("ID").head.text)
+/*        case EvElemStart(_, "issue", attrs, _) =>
+          d.issueIDFields.setValue(attrs("ID").head.text) */
+        case EvElemStart(_,"PSMID",_,_) =>
+          val psmID = readContents
+          d.issueIDFields.setValue(psmID)
+          d.issueIDEntry = StringBinding.stringToEntry(psmID)
         case EvElemStart(_, "newspaperID", _, _) => d.newspaperIDFields.setValue(readContents)
         case EvElemStart(_, "ocr", _, _) =>
           val confidence = readContents
@@ -315,11 +374,15 @@ object BritishNewspaperIndexer extends OctavoIndexer {
           d.dateEndFields.setValue(edate)
         case EvElemStart(_, "dw", _, _) => d.dayOfWeekFields.setValue(readContents)
         case EvElemStart(_, "is", _, _) => d.issueNumberFields.setValue(readContents)
-        case EvElemStart(_, "language", _, _) => d.languageFields.setValue(readContents)
+        case EvElemStart(_, "language", _, _) => new StringSSDVFieldPair("language").o(d.id).setValue(readContents)
         case EvElemEnd(_,"metadatainfo") => break = true
+        case _ =>
       }
       while (xml.hasNext) xml.next match {
-        case EvElemStart(_, "ocrLanguage", _, _) => d.languageFields.setValue(readContents)
+        case EvElemStart(_, "ocrLanguage", _, _) =>
+          val lang = readContents
+          new StringSSDVFieldPair("language").o(d.id).setValue(lang)
+          d.languageFields.setValue(lang)
         case EvElemStart(_, "pc", _, _) => d.issuePagesFields.setValue(readContents.toInt)
         case EvElemStart(_, "ocr", _, _) =>
           val confidence = readContents
@@ -329,6 +392,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
           d.ocrConfidenceFields.setValue(confidenceAsInt)
         case EvElemStart(_, "article", _, _) =>
           d.clearOptionalArticleFields()
+          articleStartOffset = d.issueContents.length
           articleConfidence = 0
           articleConfidenceCount = 0
         case EvElemStart(_, "id", _, _) => d.articleIDFields.setValue(readContents)
@@ -357,18 +421,22 @@ object BritishNewspaperIndexer extends OctavoIndexer {
             d.id.addOptional(f)
             d.ad.addOptional(f)
           }
-        case EvElemStart(_, "pi", _, _) => d.pagesInArticle += 1
+        case EvElemStart(_, "pi", _, _) =>
+          new StringSSDVFieldPair("pageID").o(d.ad,d.sd,d.pd).setValue(readContents)
+          d.pagesInArticle += 1
         case EvElemEnd(_, "article") =>
           val article = d.articleContents.toString
-          d.ocrConfidenceFields.setValue(articleConfidence/articleConfidenceCount)
-          d.textField.setStringValue(article)
+          d.ocrConfidenceFields.setValue(if (articleConfidenceCount==0) 0 else articleConfidence/articleConfidenceCount)
+          d.textField.setValue(article)
           d.lengthFields.setValue(article.length)
-          d.tokensFields.setValue(getNumberOfTokens(article))
+          d.tokensFields.setValue(d.textField.numberOfTokens)
           d.paragraphsFields.setValue(d.paragraphsInArticle)
           d.articlePagesFields.setValue(d.pagesInArticle)
           d.subtitlesFields.setValue(d.subtitles.toString)
           d.illustrationsFields.setValue(d.illustrationsInArticle)
           d.sentencesFields.setValue(d.sentencesInArticle)
+          d.startOffsetFields.setValue(articleStartOffset)
+          d.endOffsetFields.setValue(articleStartOffset + article.length)
           aiw.addDocument(d.ad)
           d.articlesInIssue += 1
         case EvElemStart(_, "ct", _, _) => d.articleTypeFields.setValue(readContents)
@@ -382,9 +450,9 @@ object BritishNewspaperIndexer extends OctavoIndexer {
               processParagraph(paragraph, d)
             case None =>
           }
-          if (state.lastLine != null) state.content.append(state.lastLine.map(_.word).mkString(" "))
+          if (state.lastLine != null) state.content.append(state.lastLine)
           if (state.content.nonEmpty)
-            processParagraph(state.content.toString, d)
+            processParagraph(state.content, d)
           state.content.clear()
           state.lastLine = null
           state.currentLine.clear
@@ -393,9 +461,9 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       val issue = d.issueContents.toString
       if (issue.nonEmpty) {
         d.ocrConfidenceFields.setValue(issueConfidence)
-        d.textField.setStringValue(issue)
+        d.textField.setValue(issue)
         d.lengthFields.setValue(issue.length)
-        d.tokensFields.setValue(getNumberOfTokens(issue))
+        d.tokensFields.setValue(d.textField.numberOfTokens)
         d.paragraphsFields.setValue(d.paragraphsInIssue)
         d.illustrationsFields.setValue(d.illustrationsInIssue)
         d.sentencesFields.setValue(d.sentencesInIssue)
@@ -422,7 +490,12 @@ object BritishNewspaperIndexer extends OctavoIndexer {
 
   var startYear: Option[Int] = None
   var endYear: Option[Int] = None
-  
+
+  var ie: Environment = _
+  var ics: Store = _
+  var storedOffsets = 0l
+  var t: Transaction = _
+
   def main(args: Array[String]): Unit = {
     val opts = new AOctavoOpts(args) {
       val spostings = opt[String](default = Some("blocktree"))
@@ -430,40 +503,60 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       val ipostings = opt[String](default = Some("blocktree"))
       val apostings = opt[String](default = Some("blocktree"))
       val noSentenceIndex= opt[Boolean]()
+      val noParagraphIndex = opt[Boolean]()
       val startYear = opt[String]()
       val endYear = opt[String]()
+      val noClear = opt[Boolean]()
+      val noMerge = opt[Boolean]()
       verify()
     }
-    startYear = opts.startYear.toOption.map(v => (v+"0000").toInt)
-    endYear = opts.endYear.toOption.map(v => (v+"9999").toInt)
+    var divisor = 5 // 4
+    if (opts.noSentenceIndex()) divisor -= 1
+    if (opts.noParagraphIndex()) divisor -= 1
     if (!opts.onlyMerge()) {
-      if (!opts.noSentenceIndex()) siw = iw(opts.index()+"/sindex",ss,opts.indexMemoryMb() / 4)
-      piw = iw(opts.index()+"/pindex",ps,opts.indexMemoryMb() / 4)
-      aiw = iw(opts.index()+"/aindex",as,opts.indexMemoryMb() / 4)
-      iiw = iw(opts.index()+"/iindex",is,opts.indexMemoryMb() / 4)
+      ie = Environments.newInstance(opts.index()+"/offsetdata", new EnvironmentConfig().setLogFileSize(Int.MaxValue+1l).setMemoryUsage(1073741824l))
+      if (!opts.noClear()) ie.clear()
+      t = ie.beginExclusiveTransaction()
+      ics = ie.openStore("offsetdata", StoreConfig.WITHOUT_DUPLICATES_WITH_PREFIXING, t)
+      t.commit()
+      t = ie.beginExclusiveTransaction()
+      startYear = opts.startYear.toOption.map(v => (v+"0000").toInt)
+      endYear = opts.endYear.toOption.map(v => (v+"9999").toInt)
+      if (!opts.noSentenceIndex()) siw = iw(opts.index()+"/sindex",ss,opts.indexMemoryMb() / divisor, !opts.noClear())
+      if (!opts.noParagraphIndex()) piw = iw(opts.index()+"/pindex",ps,opts.indexMemoryMb() / divisor, !opts.noClear())
+      aiw = iw(opts.index()+"/aindex",as,opts.indexMemoryMb() / divisor, !opts.noClear())
+      iiw = iw(opts.index()+"/iindex",is,opts.indexMemoryMb() / divisor, !opts.noClear())
+      /* val t = ie.beginExclusiveTransaction()
+      opts.directories().foreach(p => {
+        val parts = p.split(':')
+        getFileTree(new File(parts(0))).filter(_.getName.endsWith(".xml")).foreach(f => addTask(f.getPath, () => index(parts(1),f)))
+      })
+      t.commit() */
       feedAndProcessFedTasksInParallel(() =>
         opts.directories().foreach(p => {
           val parts = p.split(':')
           getFileTree(new File(parts(0))).filter(_.getName.endsWith(".xml")).foreach(f => addTask(f.getPath, () => index(parts(1),f)))
         })
       )
+      t.commit()
+      ie.close()
     }
     waitForTasks(
       runSequenceInOtherThread(
         () => if (siw != null) close(siw),
-        () => if (siw != null) merge(opts.index()+"/sindex", ss,opts.indexMemoryMb() / 4, toCodec(opts.spostings(), postingsFormats))
+        () => if (siw != null && !opts.noMerge()) merge(opts.index()+"/sindex", ss,opts.indexMemoryMb() / divisor, toCodec(opts.spostings(), postingsFormats))
       ),
       runSequenceInOtherThread(
-        () => close(piw), 
-        () => merge(opts.index()+"/pindex", ps,opts.indexMemoryMb() / 4, toCodec(opts.ppostings(), postingsFormats))
+        () => if (piw != null) close(piw),
+        () => if (piw != null && !opts.noMerge()) merge(opts.index()+"/pindex", ps,opts.indexMemoryMb() / divisor, toCodec(opts.ppostings(), postingsFormats))
       ),
       runSequenceInOtherThread(
         () => close(aiw), 
-        () => merge(opts.index()+"/aindex", as,opts.indexMemoryMb() / 4, toCodec(opts.apostings(), postingsFormats))
+        () => if (!opts.noMerge()) merge(opts.index()+"/aindex", as,opts.indexMemoryMb() / divisor, toCodec(opts.apostings(), postingsFormats))
       ),
       runSequenceInOtherThread(
         () => close(iiw), 
-        () => merge(opts.index()+"/iindex", is,opts.indexMemoryMb() / 4, toCodec(opts.ipostings(), postingsFormats))
+        () => if (!opts.noMerge()) merge(opts.index()+"/iindex", is,opts.indexMemoryMb() / divisor, toCodec(opts.ipostings(), postingsFormats))
       )
     )
   }

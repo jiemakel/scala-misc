@@ -75,8 +75,13 @@ class OctavoIndexer extends ParallelProcessor {
       }
       this
     }
+    var odocs: Seq[FluidDocument] = Seq.empty
     def o(docs: FluidDocument*): this.type = {
-      for (d<-docs) {
+      if (docs.nonEmpty) {
+        if (odocs.nonEmpty) throw new IllegalArgumentException("Setting optional documents when already set!")
+        odocs = docs
+      }
+      for (d<-odocs) {
         d.addOptional(indexField)
         d.addOptional(storedField)
       }
@@ -105,8 +110,6 @@ class OctavoIndexer extends ParallelProcessor {
     }
   }
 
-
-
   val normsOmittingNotStoredTextField = new FieldType(TextField.TYPE_NOT_STORED)
   normsOmittingNotStoredTextField.setOmitNorms(true)
   
@@ -117,6 +120,7 @@ class OctavoIndexer extends ParallelProcessor {
       tokenStream.fill(analyzer.tokenStream(field,v))
       indexField.setTokenStream(tokenStream)
       storedField.setBytesValue(new BytesRef(v))
+      o()
     }
   }
   
@@ -124,13 +128,18 @@ class OctavoIndexer extends ParallelProcessor {
     def setValue(v: String) {
       indexField.setStringValue(v)
       storedField.setBytesValue(new BytesRef(v))
+      o()
     }
   }
 
   class StringSSDVFieldPair(field: String) extends FieldPair(new Field(field, "", StringField.TYPE_NOT_STORED), new SortedSetDocValuesField(field, new BytesRef())) {
-    def setValue(v: String) {
-      indexField.setStringValue(v)
+    def setValue(v: String): Unit = {
+      setValue(v,v)
+    }
+    def setValue(i: String, v: String): Unit = {
+      indexField.setStringValue(i)
       storedField.setBytesValue(new BytesRef(v))
+      o()
     }
   }
 
@@ -138,6 +147,7 @@ class OctavoIndexer extends ParallelProcessor {
     def setValue(v: String) {
       indexField.setStringValue(v)
       storedField.setBytesValue(new BytesRef(v))
+      o()
     }
   }
 
@@ -145,6 +155,7 @@ class OctavoIndexer extends ParallelProcessor {
     def setValue(v: Long) {
       indexField.setStringValue(""+v)
       storedField.setLongValue(v)
+      o()
     }
   }
   
@@ -152,6 +163,7 @@ class OctavoIndexer extends ParallelProcessor {
     def setValue(v: Long) {
       indexField.setStringValue(""+v)
       storedField.setLongValue(v)
+      o()
     }
   }
 
@@ -159,6 +171,7 @@ class OctavoIndexer extends ParallelProcessor {
     def setValue(lat: Double, lon: Double) {
       indexField.setLocationValue(lat, lon)
       storedField.setLocationValue(lat, lon)
+      o()
     }
   }
 
@@ -166,6 +179,7 @@ class OctavoIndexer extends ParallelProcessor {
     def setValue(v: Float) {
       indexField.setFloatValue(v)
       storedField.setFloatValue(v)
+      o()
     }
   }
 
@@ -174,6 +188,7 @@ class OctavoIndexer extends ParallelProcessor {
     def setValue(v: Double) {
       indexField.setDoubleValue(v)
       storedField.setDoubleValue(v)
+      o()
     }
   }
   
@@ -181,6 +196,7 @@ class OctavoIndexer extends ParallelProcessor {
     def setValue(v: Int) {
       indexField.setIntValue(v)
       storedField.setLongValue(v)
+      o()
     }
   }
 
@@ -188,6 +204,7 @@ class OctavoIndexer extends ParallelProcessor {
     def setValue(v: Int, sv: String) {
       indexField.setIntValue(v)
       storedField.setBytesValue(new BytesRef(sv))
+      o()
     }
   }
 
@@ -195,6 +212,7 @@ class OctavoIndexer extends ParallelProcessor {
     def setValue(v: Int) {
       indexField.setIntValue(v)
       storedField.setLongValue(v)
+      o()
     }
   }
 
@@ -202,6 +220,7 @@ class OctavoIndexer extends ParallelProcessor {
     def setValue(v: Long) {
       indexField.setLongValue(v)
       storedField.setLongValue(v)
+      o()
     }
   }
 
@@ -209,6 +228,7 @@ class OctavoIndexer extends ParallelProcessor {
     def setValue(v: String) {
       indexField.setLongValue(df.parseMillis(v))
       storedField.setBytesValue(new BytesRef(v))
+      o()
     }
   }
 
@@ -216,6 +236,7 @@ class OctavoIndexer extends ParallelProcessor {
     def setValue(v: String) {
       indexField.setLongValue(df.parseMillis(v))
       storedField.setBytesValue(new BytesRef(v))
+      o()
     }
   }
 
@@ -223,6 +244,7 @@ class OctavoIndexer extends ParallelProcessor {
     def setValue(v: Long) {
       indexField.setLongValue(v)
       storedField.setLongValue(v)
+      o()
     }
   }
 
@@ -241,10 +263,10 @@ class OctavoIndexer extends ParallelProcessor {
     iwc
   }
   
-  def iw(path: String, sort: Sort, bufferSizeInMB: Double): IndexWriter = {
+  def iw(path: String, sort: Sort, bufferSizeInMB: Double, clear: Boolean = true): IndexWriter = {
     logger.info("Creating IndexWriter "+path+" with a memory buffer of "+bufferSizeInMB+"MB")
     val d = new MMapDirectory(FileSystems.getDefault.getPath(path))
-    d.listAll().foreach(d.deleteFile)
+    if (clear) d.listAll().foreach(d.deleteFile)
     new IndexWriter(d, iwc(sort, bufferSizeInMB))
   }
   
