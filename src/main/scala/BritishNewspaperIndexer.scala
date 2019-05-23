@@ -510,7 +510,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       val noMerge = opt[Boolean]()
       verify()
     }
-    var divisor = 5 // 4
+    var divisor = 4
     if (opts.noSentenceIndex()) divisor -= 1
     if (opts.noParagraphIndex()) divisor -= 1
     if (!opts.onlyMerge()) {
