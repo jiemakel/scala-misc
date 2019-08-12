@@ -17,7 +17,7 @@ import scala.util.{Failure, Success, Try}
 import scala.xml.parsing.XhtmlEntities
 import scala.xml.pull._
 
-object DetectColumnsInALTO extends LazyLogging {
+object METSALTOMaterialityExtractor extends LazyLogging {
 
   def decodeEntity(entity: String): String = {
     XhtmlEntities.entMap.get(entity) match {
@@ -71,15 +71,13 @@ object DetectColumnsInALTO extends LazyLogging {
   var pw9: PrintWriter = _
   var pw10: PrintWriter = _
   var pw11: PrintWriter = _
+  var pw12: PrintWriter = _
 
   private val treeBuilder = IntervalTreeBuilder.newBuilder()
     .usePredefinedType(IntervalType.INTEGER)
     .collectIntervals(_ => new ListIntervalCollection())
 
-  private def tob(b: Boolean): Char = b match {
-    case true => '1'
-    case false => '0'
-  }
+  private def tob(b: Boolean): Char = if (b) '1' else '0'
 
   def process(altoFile: File): Future[Unit] = Future {
     val s = Source.fromFile(altoFile, "UTF-8")
@@ -279,7 +277,6 @@ object DetectColumnsInALTO extends LazyLogging {
     var issn = "?"
     var binding = "?"
     var date = "?"
-    var page = 1
     while (xml.hasNext) xml.next match {
       case EvElemStart(_, "dmdSec",attrs,_) if attrs("ID").head.text.startsWith("MODSMD_ISSUE") =>
         var break = false
@@ -310,12 +307,47 @@ object DetectColumnsInALTO extends LazyLogging {
           case _ =>
         }
         imgsizes.put(imgId,(xs*pmultiplier,ys*pmultiplier))
-      case EvElemStart(_, "file",attrs,_) if attrs("ID").head.text.startsWith("IMG") =>
-        val dims = imgsizes(attrs("ID").head.text)
-        pw3.synchronized {
-          pw3.println(binding + "," + page + "," + dims._1 + "," + dims._2)
+      case EvElemStart(_, "structMap",sattrs,_) if sattrs("TYPE").head.text == "PHYSICAL" =>
+        var break = false
+        var curImage = ""
+        var curALTO = ""
+
+        while (xml.hasNext && !break) xml.next match {
+          case EvElemStart(_,"area",attrs,_) =>
+            val fileID = attrs("FILEID").head.text
+            if (fileID.startsWith("IMG")) curImage = fileID
+            else curALTO = fileID
+          case EvElemEnd(_,"par") =>
+            val dims = imgsizes(curImage)
+            val page: Int = Try(Integer.parseInt(curALTO.substring(4))).getOrElse(0)
+            pw3.synchronized {
+              pw3.println(binding + "," + page + "," + dims._1 + "," + dims._2)
+            }
+          case EvElemEnd(_,"structMap") => break = true
+          case _ =>
         }
-        page += 1
+      case EvElemStart(_,"structMap", attrs, _) if attrs("TYPE").head.text=="LOGICAL" =>
+        // process the logical structure hierarchically
+        var hierarchy = Seq.empty[String]
+        val pageTypes = new mutable.HashMap[Int,mutable.HashSet[String]]
+        while (xml.hasNext) xml.next match {
+          case EvElemStart(_,"div", sattrs, _) =>
+            val divType =  sattrs("TYPE").head.text.toLowerCase
+            hierarchy = hierarchy :+ divType
+          case EvElemEnd(_,"div") =>
+            hierarchy = hierarchy.dropRight(1)
+          case EvElemStart(_,"area",sattrs,_) =>
+            val page = Try(Integer.parseInt(sattrs("FILEID").head.text.substring(4))).getOrElse(0)
+            pageTypes.getOrElseUpdate(page, new mutable.HashSet[String]) += hierarchy.mkString("_")
+          case _ =>
+        }
+        pw12.synchronized {
+          for (
+            (page,types) <- pageTypes;
+            pageType <- types
+          )
+            pw12.println(binding + "," + page + "," + pageType)
+        }
       case _ =>
     }
     pw10.synchronized {
@@ -355,11 +387,22 @@ object DetectColumnsInALTO extends LazyLogging {
     pw10.println("issueId,ISSN,date")
     pw11 = new PrintWriter(new FileWriter(prefix+"npcolumns-2.csv"))
     pw11.println("issueId,ISSN,columnwidth,words,chars,area")
+    pw12 = new PrintWriter(new FileWriter(prefix+"nppagetypes.csv"))
+    pw12.println("issueId,page,type")
     val toProcess: Seq[File] = for (
         dir<-args.dropRight(1);
         fd=new File(dir);
         _ = if (!fd.exists()) logger.warn(dir+" doesn't exist!")
     ) yield fd
+    val f2 = Future.sequence(toProcess.toStream.flatMap(fd => {
+      getFileTree(fd)
+        .filter(_.getName.endsWith("mets.xml"))
+        .map(metsFile => processMETS(metsFile).map[Try[Unit]](Success(_)).recover{
+          case cause =>
+            logger.error("An error has occured processing "+metsFile+": " + getStackTraceAsString(cause))
+            Failure(new Exception("An error has occured processing "+metsFile, cause))
+        })
+    }))
     val f = Future.sequence(toProcess.toStream.flatMap(fd => {
       getFileTree(fd)
         .filter(altoFile => altoFile.getName.endsWith(".xml") && !altoFile.getName.endsWith("metadata.xml") && !altoFile.getName.endsWith("mets.xml"))
@@ -367,15 +410,6 @@ object DetectColumnsInALTO extends LazyLogging {
           case cause =>
             logger.error("An error has occured processing "+altoFile+": " + getStackTraceAsString(cause))
             Failure(new Exception("An error has occured processing "+altoFile, cause))
-        })
-    }))
-    val f2 = Future.sequence(toProcess.toStream.flatMap(fd => {
-      getFileTree(fd)
-        .filter(_.getName == "mets.xml")
-        .map(metsFile => processMETS(metsFile).map[Try[Unit]](Success(_)).recover{
-            case cause =>
-              logger.error("An error has occured processing "+metsFile+": " + getStackTraceAsString(cause))
-              Failure(new Exception("An error has occured processing "+metsFile, cause))
         })
     }))
     var results = Await.result(f, Duration.Inf)
@@ -395,5 +429,6 @@ object DetectColumnsInALTO extends LazyLogging {
     pw3.close()
     pw10.close()
     pw11.close()
+    pw12.close()
   }
 }
