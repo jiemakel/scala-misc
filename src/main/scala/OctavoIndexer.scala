@@ -5,7 +5,7 @@ import fi.seco.lucene.{Lucene80PerFieldPostingsFormatOrdTermVectorsCodec, OrdExp
 import org.apache.lucene.analysis.Analyzer.TokenStreamComponents
 import org.apache.lucene.analysis._
 import org.apache.lucene.analysis.core.WhitespaceTokenizer
-import org.apache.lucene.analysis.miscellaneous.{HyphenatedWordsFilter, LengthFilter}
+import org.apache.lucene.analysis.miscellaneous.{ASCIIFoldingFilter, HyphenatedWordsFilter, LengthFilter}
 import org.apache.lucene.analysis.pattern.PatternReplaceFilter
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
 import org.apache.lucene.codecs.Codec
@@ -27,6 +27,18 @@ class OctavoIndexer extends ParallelProcessor {
       val src = new WhitespaceTokenizer()
       var tok: TokenFilter = new HyphenatedWordsFilter(src)
       tok = new PatternReplaceFilter(tok,Pattern.compile("^\\p{Punct}*(.*?)\\p{Punct}*$"),"$1", false)
+      tok = new LowerCaseFilter(tok)
+      tok = new LengthFilter(tok, 1, Int.MaxValue)
+      new TokenStreamComponents(src,tok)
+    }
+  }
+
+  val normalisedAnalyzer = new Analyzer() {
+    override def createComponents(fieldName: String) = {
+      val src = new WhitespaceTokenizer()
+      var tok: TokenFilter = new HyphenatedWordsFilter(src)
+      tok = new PatternReplaceFilter(tok,Pattern.compile("^\\p{Punct}*(.*?)\\p{Punct}*$"),"$1", false)
+      tok = new ASCIIFoldingFilter(tok)
       tok = new LowerCaseFilter(tok)
       tok = new LengthFilter(tok, 1, Int.MaxValue)
       new TokenStreamComponents(src,tok)
@@ -89,14 +101,14 @@ class OctavoIndexer extends ParallelProcessor {
     }
   }
 
-  class ContentField(field: String) {
+  class ContentField(field: String, fanalyzer: Analyzer = analyzer) {
     val f = new Field(field, "", contentFieldType)
-    val tokenStream = new ReusableCachedTokenStream(analyzer.tokenStream(field,""))
+    val tokenStream = new ReusableCachedTokenStream(fanalyzer.tokenStream(field,""))
     f.setTokenStream(tokenStream)
     def numberOfTokens: Int = OctavoIndexer.this.getNumberOfTokens(tokenStream)
     def setValue(v: String) {
       f.setStringValue(v)
-      tokenStream.fill(analyzer.tokenStream(field,v))
+      tokenStream.fill(fanalyzer.tokenStream(field,v))
     }
     def r(docs: FluidDocument*): this.type = {
       for (d<-docs)

@@ -15,7 +15,7 @@ import scala.language.{postfixOps, reflectiveCalls}
 import scala.xml.parsing.XhtmlEntities
 import scala.xml.pull._
 
-object SKVRIndexer extends OctavoIndexer {
+object SKVRTextIndexer extends OctavoIndexer {
 
   private def readContents(implicit xml: XMLEventReader): String = {
     var break = false
@@ -50,9 +50,7 @@ object SKVRIndexer extends OctavoIndexer {
     val regionFields = new StringSDVFieldPair("region").r(dd, send)
     val placeFields = new StringSDVFieldPair("place").r(dd, send)
     val yearFields = new IntPointNDVFieldPair("year").r(dd, send)
-    val contentField = new Field("content","",contentFieldType)
-    dd.addRequired(contentField)
-    send.addRequired(contentField)
+    val contentField = new ContentField("content",normalisedAnalyzer).r(dd,send)
     val lineIDField = new NumericDocValuesField("lineID", 0)
     send.addRequired(lineIDField)
     val contentLengthFields = new IntPointNDVFieldPair("contentLength").r(dd, send)
@@ -101,7 +99,7 @@ object SKVRIndexer extends OctavoIndexer {
     val dcontents = new StringBuilder
     for (line <- fl.getLines) {
       r.lineIDField.setLongValue(sentences.incrementAndGet)
-      r.contentField.setStringValue(line)
+      r.contentField.setValue(line)
       r.contentLengthFields.setValue(line.length)
       r.contentTokensFields.setValue(getNumberOfTokens(line))
       seniw.addDocument(r.send)
@@ -110,7 +108,7 @@ object SKVRIndexer extends OctavoIndexer {
     }
     fl.close()
     val dcontentsS = dcontents.toString
-    r.contentField.setStringValue(dcontentsS)
+    r.contentField.setValue(dcontentsS)
     r.contentLengthFields.setValue(dcontentsS.length)
     r.contentTokensFields.setValue(getNumberOfTokens(dcontentsS))
     diw.addDocument(r.dd)
