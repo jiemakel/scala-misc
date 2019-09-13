@@ -1,36 +1,24 @@
-import fi.seco.lexical.combined.CombinedLexicalAnalysisService
-import org.rogach.scallop.ScallopConf
-import java.io.File
-import scala.compat.java8.FunctionConverters._
-import scala.compat.java8.StreamConverters._
-import scala.collection.JavaConverters._
-import scala.xml.pull.XMLEventReader
-import scala.io.Source
-import scala.xml.pull.EvElemStart
-import scala.xml.pull.EvElemEnd
-import scala.xml.MetaData
-import scala.xml.pull.EvText
-import scala.xml.pull.EvEntityRef
-import scala.xml.pull.EvComment
-import scala.xml.parsing.XhtmlEntities
-import java.util.Locale
-import fi.seco.lexical.LanguageRecognizer
-import scala.util.Try
-import com.typesafe.scalalogging.LazyLogging
-import com.optimaize.langdetect.profiles.LanguageProfileReader
-import com.optimaize.langdetect.ngram.NgramExtractors
-import com.optimaize.langdetect.LanguageDetectorBuilder
-import com.optimaize.langdetect.text.CommonTextObjectFactories
-import java.util.Collections
-import org.json4s._
-import org.json4s.JsonDSL._
+import java.io.{File, PrintWriter}
+import java.util.{Collections, Locale}
 
+import au.com.bytecode.opencsv.CSVParser
+import com.bizo.mighty.csv.{CSVReader, CSVReaderSettings}
+import com.optimaize.langdetect.LanguageDetectorBuilder
+import com.optimaize.langdetect.ngram.NgramExtractors
+import com.optimaize.langdetect.profiles.LanguageProfileReader
+import com.optimaize.langdetect.text.CommonTextObjectFactories
+import fi.seco.lexical.LanguageRecognizer
+import fi.seco.lexical.combined.CombinedLexicalAnalysisService
 import fi.seco.lexical.hfst.HFSTLexicalAnalysisService
-import java.io.PrintWriter
-import scala.util.Success
-import scala.util.Failure
-import com.bizo.mighty.csv.CSVReader
+import org.json4s.JsonDSL._
+import org.json4s._
 import org.jsoup.Jsoup
+import org.rogach.scallop.ScallopConf
+
+import scala.collection.JavaConverters._
+import scala.compat.java8.StreamConverters._
+import scala.util.{Failure, Success, Try}
+import scala.xml.MetaData
 
 
 object HSArticleAnalyzer extends ParallelProcessor {
@@ -119,7 +107,7 @@ object HSArticleAnalyzer extends ParallelProcessor {
     createHashDirectories(dest)
     feedAndProcessFedTasksInParallel(() =>
       opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.forEach(file => Try({
-        val wr = CSVReader(file.getPath)
+        val wr = CSVReader(file.getPath)(CSVReaderSettings.Standard.copy(escapechar =  CSVParser.NULL_CHARACTER))
         // articleId, nodeId, nodeTitle, startDate, modifiedDate, title, byLine, ingress, body
         for (
           r <- wr;

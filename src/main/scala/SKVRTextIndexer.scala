@@ -2,7 +2,8 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 
 import com.bizo.mighty.csv.CSVReader
-import org.apache.lucene.document.{Field, NumericDocValuesField, SortedDocValuesField}
+import fi.hsci.lucene.NormalisationFilter
+import org.apache.lucene.document.{NumericDocValuesField, SortedDocValuesField}
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.search.{Sort, SortField}
 import org.apache.lucene.util.BytesRef
@@ -50,7 +51,7 @@ object SKVRTextIndexer extends OctavoIndexer {
     val regionFields = new StringSDVFieldPair("region").r(dd, send)
     val placeFields = new StringSDVFieldPair("place").r(dd, send)
     val yearFields = new IntPointNDVFieldPair("year").r(dd, send)
-    val contentField = new ContentField("content",normalisedAnalyzer).r(dd,send)
+    val contentField = new ContentField("content",NormalisationFilter.wrapAnalyser(analyzer, true)).r(dd,send)
     val lineIDField = new NumericDocValuesField("lineID", 0)
     send.addRequired(lineIDField)
     val contentLengthFields = new IntPointNDVFieldPair("contentLength").r(dd, send)

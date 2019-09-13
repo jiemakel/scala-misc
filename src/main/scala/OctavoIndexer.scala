@@ -22,28 +22,24 @@ import scala.language.postfixOps
 
 class OctavoIndexer extends ParallelProcessor {
 
-  val analyzer = new Analyzer() {
-    override def createComponents(fieldName: String) = {
-      val src = new WhitespaceTokenizer()
-      var tok: TokenFilter = new HyphenatedWordsFilter(src)
-      tok = new PatternReplaceFilter(tok,Pattern.compile("^\\p{Punct}*(.*?)\\p{Punct}*$"),"$1", false)
-      tok = new LowerCaseFilter(tok)
-      tok = new LengthFilter(tok, 1, Int.MaxValue)
-      new TokenStreamComponents(src,tok)
-    }
+  def wrapTokenStream(src: TokenStream): TokenStream = {
+    var tok: TokenFilter = new HyphenatedWordsFilter(src)
+    tok = new PatternReplaceFilter(tok,Pattern.compile("^\\p{Punct}*(.*?)\\p{Punct}*$"),"$1", false)
+    tok = new LowerCaseFilter(tok)
+    new LengthFilter(tok, 1, Int.MaxValue)
   }
 
-  val normalisedAnalyzer = new Analyzer() {
+  def createAnalyser(tokeniser: (String) => Tokenizer, filters: ((String, TokenStream) => TokenStream)*): Analyzer = new Analyzer() {
     override def createComponents(fieldName: String) = {
-      val src = new WhitespaceTokenizer()
-      var tok: TokenFilter = new HyphenatedWordsFilter(src)
-      tok = new PatternReplaceFilter(tok,Pattern.compile("^\\p{Punct}*(.*?)\\p{Punct}*$"),"$1", false)
-      tok = new ASCIIFoldingFilter(tok)
-      tok = new LowerCaseFilter(tok)
-      tok = new LengthFilter(tok, 1, Int.MaxValue)
-      new TokenStreamComponents(src,tok)
+      val t = tokeniser(fieldName)
+      new TokenStreamComponents(t,normalize(fieldName,t))
     }
+
+    override def normalize(fieldName: String, src: TokenStream): TokenStream =
+      filters.foldLeft(src)((in,f) => f(fieldName,in))
   }
+
+  val analyzer = createAnalyser((_) => new WhitespaceTokenizer(), (_,ts) => wrapTokenStream(ts))
 
   def lsplit[A](str: List[A],pos: List[Int]): List[List[A]] = {
     val (rest, result) = pos.foldRight((str, List[List[A]]())) {

@@ -3,8 +3,9 @@ import java.util.concurrent.{ArrayBlockingQueue, ForkJoinPool}
 
 import com.typesafe.scalalogging.LazyLogging
 
-import scala.concurrent.{Await, ExecutionContext, Future, Promise}
+import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, ExecutionContext, Future, Promise}
 import scala.util.{Failure, Success, Try}
 
 
@@ -49,7 +50,7 @@ class ParallelProcessor extends LazyLogging {
         taskFunction()
       } catch {
         case cause: Exception =>
-          logger.error("An error has occured processing source "+id+": " + getStackTraceAsString(cause))
+          logger.error("An error has occured processing source "+id,cause)
           throw new Exception("An error has occured processing source "+id, cause)       
       }
     }(indexingTaskExecutionContext))
@@ -61,6 +62,7 @@ class ParallelProcessor extends LazyLogging {
     implicit val iec = ExecutionContext.Implicits.global 
     val all = Promise[Unit]()
     val poison = Future(())
+    val failures = new ArrayBuffer[Throwable]
     val sf = Future {
       taskFeeder()
       logger.info("All sources successfully fed, producing a total of "+tasks+" tasks.")
@@ -68,7 +70,7 @@ class ParallelProcessor extends LazyLogging {
     }
     sf.onComplete { 
       case Failure(t) => 
-        logger.error("Feeding ended in an error:" + t.getMessage+": " + getStackTraceAsString(t))
+        logger.error("Feeding ended in an error:" + t.getMessage,t)
         processingQueue.put(poison)
       case Success(_) =>
     }
@@ -76,7 +78,9 @@ class ParallelProcessor extends LazyLogging {
     while (f ne poison) {
       Await.ready(f, Duration.Inf)
       f.onComplete { 
-        case Failure(t) => if (!all.isCompleted) all.tryFailure(t)
+        case Failure(t) =>
+          failures synchronized { failures += t }
+          if (!all.isCompleted) all.tryFailure(t)
         case Success(_) =>
       }
       f = processingQueue.take()
@@ -84,7 +88,12 @@ class ParallelProcessor extends LazyLogging {
     if (!all.isCompleted) all.trySuccess(Unit)
     all.future.onComplete {
       case Success(_) => logger.info("Successfully processed all sources.")
-      case Failure(t) => logger.error("Processing of at least one source resulted in an error:" + t.getMessage+": " + getStackTraceAsString(t))
+      case Failure(t) =>
+        logger.error(f"Processing of ${failures.size}%,d sources resulted in errors." )
+        //logger.error("Processing of at least one source resulted in an error:" + t.getMessage,t)
+        logger.error(f"Processing of ${failures.size}%,d sources resulted in errors." )
+        for (failure <- failures) logger.error("Error:",failure)
+        logger.error(f"Processing of ${failures.size}%,d sources resulted in errors." )
     }
     indexingTaskExecutionContext.shutdown()
   }

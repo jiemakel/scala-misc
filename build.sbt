@@ -7,6 +7,8 @@ scalaVersion := "2.12.8"
 libraryDependencies ++= Seq(
   "com.typesafe.play" %% "play-json" % "2.6.0-M6",
   "fi.seco" %% "lucene-morphologicalanalyzer" % "1.2.1" exclude("commons-logging", "commons-logging"),
+  "fi.seco" % "lexicalanalysis-resources-fi-complete" % "1.5.16",
+  "fi.hsci" %% "lucene-normalisinganalyzer" % "1.0.0",
   "org.scala-lang.modules" %% "scala-java8-compat" % "0.8.0",
   "org.json4s" %% "json4s-native" % "3.5.1" ,
   "com.fasterxml" % "aalto-xml" % "1.0.0",
@@ -27,7 +29,7 @@ libraryDependencies ++= Seq(
   "org.apache.lucene" % "lucene-analyzers-common" % "8.0.0",
   "org.apache.lucene" % "lucene-queryparser" % "8.0.0",
   "org.apache.lucene" % "lucene-highlighter" % "8.0.0",
-  "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.3",
+  "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.5",
   "com.sleepycat" % "je" % "7.5.11",
   "org.apache.commons" % "commons-math3" % "3.6.1",
   "com.google.guava" % "guava" % "21.0",
@@ -50,6 +52,7 @@ fork in run := true
 assemblyMergeStrategy in assembly := {
   case "checkstyle/checkstyle.xml" => MergeStrategy.first
   case "is2/util/DB.class" => MergeStrategy.first
+  case "fi/seco/lexical/hfst/resources.lst" => MergeStrategy.filterDistinctLines
   case x =>
     val oldStrategy = (assemblyMergeStrategy in assembly).value
     oldStrategy(x)

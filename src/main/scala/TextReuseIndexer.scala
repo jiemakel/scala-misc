@@ -3,14 +3,14 @@ import java.nio.ByteBuffer
 import java.util.zip.GZIPInputStream
 
 import com.sleepycat.je._
-import org.apache.lucene.document.{Document, Field}
+import org.apache.lucene.document.Field
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.search.{Sort, SortField}
+import org.apache.lucene.store.ByteArrayDataOutput
 import org.json4s.native.JsonParser._
 import org.rogach.scallop._
 
 import scala.collection.mutable.ArrayBuffer
-import scala.io.Source
 import scala.language.{postfixOps, reflectiveCalls}
 
 object TextReuseIndexer extends OctavoIndexer {
@@ -23,11 +23,11 @@ object TextReuseIndexer extends OctavoIndexer {
     val btckeya = new Array[Byte](java.lang.Long.BYTES)
     val btckbb = ByteBuffer.wrap(btckeya)
     val dbtckey = new DatabaseEntry(btckeya)
-    val btcvala = new Array[Byte](java.lang.Integer.BYTES*2+java.lang.Long.BYTES)
-    val btcvbb = ByteBuffer.wrap(btcvala)
-    val dbtcval = new DatabaseEntry(btcvala)
+    var btcvala = new Array[Byte](0)
+    val btcvaldo = new ByteArrayDataOutput(btcvala)
+    val dbtcval = new DatabaseEntry(null)
     val d = new FluidDocument()
-    val fragmentIDFields = new StringNDVFieldPair("fragmentID").r(d)
+    val fragmentIDFields = new StringSDVFieldPair("fragmentID").r(d)
     val avgLengthFields = new IntPointNDVFieldPair("avgLength").r(d)
     val countFields = new IntPointNDVFieldPair("count").r(d)
     val documentIDFields = new StringSDVFieldPair("documentID").r(d)
@@ -47,9 +47,11 @@ object TextReuseIndexer extends OctavoIndexer {
   
   private def index(file: File): Unit = parse(new InputStreamReader(new GZIPInputStream(new FileInputStream(file))), (p: Parser) => {
     logger.info("Processing "+file+".")
-    val path = file.getParentFile.getName
     var token = p.nextToken
-    val fragments = new collection.mutable.HashMap[Long,Fragment]
+    val fragments = new collection.mutable.HashMap[String,Fragment]
+    var indexOffset = 0
+    var startIndex = 0
+    var endIndex = 0
     while (token != End) {
       token match {
         case FieldStart(field) if field.startsWith("cluster_") =>
@@ -61,15 +63,28 @@ object TextReuseIndexer extends OctavoIndexer {
                 while (token != CloseArr) {
                   token match {
                     case OpenObj => cm = new Match()
-                    case FieldStart("end_index") => cm.endIndex = p.nextToken.asInstanceOf[IntVal].value.toInt
-                    case FieldStart("start_index") => cm.startIndex = p.nextToken.asInstanceOf[IntVal].value.toInt
-                    case FieldStart("book_id") => cm.documentID = p.nextToken.asInstanceOf[StringVal].value
+                    case FieldStart("doc_id") =>
+                      var path = p.nextToken.asInstanceOf[StringVal].value
+                      path = path.drop(path.lastIndexOf('/')+1)
+                      val split = path.indexOf(".txt__")
+                      cm.documentID = path.take(split).replaceAllLiterally(".headed","")
+                      path = path.drop(split+6)
+                      indexOffset = path.take(path.indexOf('_')).toInt
+                    case FieldStart("original_indices") =>
+                      p.nextToken
+                      startIndex = p.nextToken.asInstanceOf[IntVal].value.toInt
+                      endIndex = p.nextToken.asInstanceOf[IntVal].value.toInt
+                      p.nextToken
+                    case FieldStart("encoded_indices") =>
+                      p.nextToken
+                      p.nextToken
+                      p.nextToken
+                      p.nextToken
                     case FieldStart("text") => cm.text = p.nextToken.asInstanceOf[StringVal].value
                     case CloseObj =>
-                      var (prefix, ofragmentId) = if (field.startsWith("cluster_e_")) ("2",field.substring(10)) else ("1",field.substring(8))
-                      val transformedFragmentSubId = fragmentDisambiguationDB.getOrElse((field,cm.documentID,cm.startIndex,cm.endIndex),0)
-                      prefix = prefix + (if (transformedFragmentSubId<10) "0" else "")+transformedFragmentSubId
-                      val fragmentId = (prefix+ofragmentId).toLong
+                      val fragmentId = field.substring(8)
+                      cm.startIndex = indexOffset+startIndex
+                      cm.endIndex = indexOffset+endIndex
                       fragments.getOrElseUpdate(fragmentId, new Fragment(fragmentId)).matches += cm
                     case _ => 
                   }
@@ -79,27 +94,26 @@ object TextReuseIndexer extends OctavoIndexer {
             }
             token = p.nextToken
           }
-
           val r = tld.get
           for (fragment <- fragments.values) {
             fragment.matches.foreach(cm => {
-              var ldid = (if (cm.documentID.head == 'A') "10" + cm.documentID.tail
-              else if (cm.documentID.head == 'B') "11" + cm.documentID.tail else "2" + cm.documentID).toLong // "0").toLong
-              /* if (ldid == 0) {
-                ldid = ("2" + cm.documentID).toLong
-                r.kbb.putLong(0, cm.documentID.toLong)
-                r.kbb.putInt(java.lang.Long.BYTES, cluster.id)
-                r.kbb.putInt(java.lang.Long.BYTES + java.lang.Integer.BYTES, cm.startIndex)
-                if (db.get(null, r.dkey, r.dval, LockMode.DEFAULT) == OperationStatus.SUCCESS) {
-                  val vbb = ByteBuffer.wrap(r.dval.getData)
-                  cm.startIndex = vbb.getInt
-                  cm.endIndex = vbb.getInt
-                } else logger.warn("Did not find cluster mapping info for cluster " + cm.documentID + "/" + cm.startIndex + "/" + cm.endIndex)
-              } */
+              var did = cm.documentID
+              val indexOffset = if (did.contains("_at_")) did.drop(did.indexOf("_at_")+4).takeWhile(_ != '_').toInt else 0
+              did = did.takeWhile(_ != '_')
+              val ldid = (if (did.head == 'A') "10" + did.tail // EEBO1,EEBO2,ECCO
+              else if (did.head == 'B') "11" + did.tail else "2" + did).toLong
               r.btckbb.putLong(0, ldid)
-              r.btcvbb.putInt(0, cm.startIndex)
-              r.btcvbb.putInt(java.lang.Integer.BYTES, cm.endIndex)
-              r.btcvbb.putLong(2 * java.lang.Integer.BYTES, fragment.id)
+              val fragmentIdBytes = fragment.id.getBytes("UTF-8")
+              val alen = fragmentIdBytes.length + 2 * java.lang.Integer.BYTES
+              if (r.btcvala.length < alen) {
+                r.btcvala = new Array[Byte](alen)
+                r.dbtcval.setData(r.btcvala)
+              }
+              r.btcvaldo.reset(r.btcvala)
+              r.btcvaldo.writeInt(indexOffset + cm.startIndex)
+              r.btcvaldo.writeInt(indexOffset + cm.endIndex)
+              r.btcvaldo.writeBytes(fragmentIdBytes,fragmentIdBytes.length)
+              r.dbtcval.setSize(alen)
               bookToFragmentDb.put(null, r.dbtckey, r.dbtcval)
             })
             index(fragment)
@@ -136,49 +150,20 @@ object TextReuseIndexer extends OctavoIndexer {
     var text: String = _
   }
   
-  class Fragment(val id: Long) {
+  class Fragment(val id: String) {
     var matches: ArrayBuffer[Match] = new ArrayBuffer()
   }
   
-  val cs = new Sort(new SortField("fragmentID",SortField.Type.INT))
+  val cs = new Sort(new SortField("fragmentID",SortField.Type.STRING))
 
   var bookToFragmentDb: Database = _
-  var db: Database = _
-
-  var fragmentDisambiguationDB = new collection.mutable.HashMap[(String,String,Int,Int),Int]
-
-  def buildDisambiguationDB(file: String): Unit = {
-    val lines = Source.fromFile(file).getLines()
-    lines.next()
-    for (line <- lines) {
-      val oldFragmentIdEnd = line.indexOf(',')
-      val oldFragmentId = line.substring(0, oldFragmentIdEnd)
-      val documentIdEnd = line.indexOf(',', oldFragmentIdEnd+1)
-      val documentId = line.substring(oldFragmentIdEnd+1,documentIdEnd)
-      val newFragmentIdEnd = line.indexOf(',', documentIdEnd+1)
-      val newFragmentId = line.substring(documentIdEnd+1,newFragmentIdEnd)
-      val startIndexEnd = line.indexOf(',', newFragmentIdEnd+1)
-      val startIndex = line.substring(newFragmentIdEnd+1,startIndexEnd).toInt
-      val endIndex = line.substring(startIndexEnd+1).toInt
-      fragmentDisambiguationDB.put((oldFragmentId,documentId,startIndex,endIndex), newFragmentId.substring(newFragmentId.lastIndexOf('_')+1).toInt)
-    }
-    logger.info("Build fragment disambiguation database with "+fragmentDisambiguationDB.size+" elements.")
-  }
 
   def main(args: Array[String]): Unit = {
     val opts = new AOctavoOpts(args) {
       val postings = opt[String](default = Some("blocktree"))
-      val mappingsDb = opt[String](required = true)
-      val fragmentDisambiguationDb = opt[String](required = true)
       val bookToFragmentDb = opt[String](required = true)
       verify()
     }
-    buildDisambiguationDB(opts.fragmentDisambiguationDb())
-    val envDir = new File(opts.mappingsDb())
-    envDir.mkdirs()
-    val env = new Environment(envDir,new EnvironmentConfig().setAllowCreate(false).setTransactional(false).setSharedCache(true))
-    env.setMutableConfig(env.getMutableConfig.setCacheSize(opts.indexMemoryMb()*1024*1024/2))
-    db = env.openDatabase(null, "sampleDatabase", new DatabaseConfig().setAllowCreate(false).setTransactional(false))
     val btcenvDir = new File(opts.bookToFragmentDb())
     btcenvDir.mkdirs()
     for (file <- btcenvDir.listFiles) file.delete()
@@ -191,8 +176,6 @@ object TextReuseIndexer extends OctavoIndexer {
      )
     bookToFragmentDb.close()
     btcenv.close()
-    db.close()
-    env.close()
     close(diw)
     merge(opts.index()+"/dindex", cs, opts.indexMemoryMb(), toCodec(opts.postings(), termVectorFields))
   }

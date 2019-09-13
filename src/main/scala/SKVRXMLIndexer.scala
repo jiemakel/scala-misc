@@ -1,8 +1,16 @@
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
+import java.util.regex.Pattern
 
 import com.bizo.mighty.csv.CSVReader
-import org.apache.lucene.document.{Field, NumericDocValuesField, SortedDocValuesField}
+import fi.hsci.lucene.NormalisationFilter
+import org.apache.lucene.analysis.{FilteringTokenFilter, LowerCaseFilter}
+import org.apache.lucene.analysis.core.WhitespaceTokenizer
+import org.apache.lucene.analysis.miscellaneous.LengthFilter
+import org.apache.lucene.analysis.pattern.PatternReplaceFilter
+import org.apache.lucene.analysis.tokenattributes.{CharTermAttribute, OffsetAttribute}
+import org.apache.lucene.analysis.util.{CharTokenizer, UnicodeProps}
+import org.apache.lucene.document.{NumericDocValuesField, SortedDocValuesField}
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.search.{Sort, SortField}
 import org.apache.lucene.util.BytesRef
@@ -17,20 +25,33 @@ import scala.xml.pull._
 
 object SKVRXMLIndexer extends OctavoIndexer {
 
-  private def readContents(implicit xml: XMLEventReader): String = {
+  private def readContents(elem: String)(implicit xml: XMLEventReader): String = {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
-      case EvElemStart(_,_,_,_) => return null
       case EvText(text) => content.append(text)
       case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
         case Some(chr) => content.append(chr)
         case _ => content.append(er.entity)
       }
       case EvComment(_) =>
-      case EvElemEnd(_,_) => break = true
+      case EvElemStart(_,"I",_,_) => content.append('@')
+      case EvElemEnd(_,"I") => content.append('@')
+      case EvElemStart(_,"H",_,_) => content.append('$')
+      case EvElemEnd(_,"H") => content.append('$')
+      case EvElemStart(_,"SUP",_,_) => content.append('^')
+      case EvElemEnd(_,"SUP") => content.append('^')
+      case EvElemStart(_,"KA",_,_) => content.append('°')
+      case EvElemEnd(_,"KA") => content.append('°')
+      case EvElemStart(_,"SMALLCAPS",_,_) => content.append('¨')
+      case EvElemEnd(_,"SMALLCAPS") => content.append('¨')
+      case EvElemStart(_,"SUB",_,_) => content.append('ˇ')
+      case EvElemEnd(_,"SUB") => content.append('ˇ')
+      case EvElemStart(_,"FR",_,_) => content.append('€')
+      case EvElemEnd(_,"FR") => content.append('€')
+      case EvElemEnd(_,elem) => break = true
+      case EvElemStart(_,nelem,_,_) => logger.warn("Encountered unknown element "+nelem)
     }
-    content.toString.replaceFirst("^[0-9]* ","").replaceAll("#[0-9]*","").replaceAllLiterally("[","").replaceAllLiterally("]","")
     content.toString
   }
 
@@ -51,9 +72,28 @@ object SKVRXMLIndexer extends OctavoIndexer {
     val regionFields = new StringSDVFieldPair("region").r(dd, send)
     val placeFields = new StringSDVFieldPair("place").r(dd, send)
     val yearFields = new IntPointNDVFieldPair("year").r(dd, send)
-    val contentField = new Field("content", "", contentFieldType)
-    dd.addRequired(contentField)
-    send.addRequired(contentField)
+    val contentField = new ContentField("content",createAnalyser((_) => new CharTokenizer() {
+      override def isTokenChar(c: Int): Boolean = !UnicodeProps.WHITESPACE.get(c) && c != '_'
+    },
+      (_,ins) => new FilteringTokenFilter(ins) {
+        val oattr = addAttribute(classOf[OffsetAttribute])
+        val cattr = addAttribute(classOf[CharTermAttribute])
+        override def accept(): Boolean = {
+          val s = cattr.toString
+          !(oattr.startOffset == 0 && "^[0-9]*$".r.findFirstIn(s).isDefined) && "^#[0-9]*$".r.findFirstIn(s).isEmpty
+        }
+      },
+      (_,ins) => new PatternReplaceFilter(ins,Pattern.compile("^\\p{Punct}*(.*?)\\p{Punct}*$"),"$1", false),
+      (_,ins) => new PatternReplaceFilter(ins,Pattern.compile("#[0-9]*$"),"",false),
+      (_,ins) => NormalisationFilter.tokenTransformer(ins,(content: String) => content.filter {
+        case ']' | '[' | '@' | '$' | '^' | '°' | '¨' | 'ˇ' | '€' | '*' | '\'' => false
+        case _ => true
+      }),
+      (_,ins) => new LowerCaseFilter(ins),
+      (_,ins) => new NormalisationFilter(ins,true),
+      (_,ins) => new LengthFilter(ins, 1, Int.MaxValue)
+    )).r(dd,send)
+    val notesFields = new TextSDVFieldPair("notes").r(dd, send)
     val lineIDField = new NumericDocValuesField("lineID", 0)
     send.addRequired(lineIDField)
     val contentLengthFields = new IntPointNDVFieldPair("contentLength").r(dd, send)
@@ -72,16 +112,6 @@ object SKVRXMLIndexer extends OctavoIndexer {
 
   val termVectorFields = Seq("content")
 
-  private def trimSpace(value: String): String = {
-    if (value == null) return null
-    var len = value.length
-    var st = 0
-    while (st < len && (value(st) == ' ' || value(st) == '\n')) st += 1
-    while (st < len && (value(len - 1) == ' ' || value(len - 1) == '\n')) len -= 1
-    if ((st > 0) || (len < value.length)) value.substring(st, len)
-    else value
-  }
-
   private def index(file: File): Unit = {
     logger.info("Processing: " + file)
     val s = Source.fromFile(file, "UTF-8")
@@ -98,7 +128,8 @@ object SKVRXMLIndexer extends OctavoIndexer {
         val placeId = iattrs("p").head.text.toInt
         val collectorId = iattrs("k").head.text.toInt
         while (xml.hasNext && !break) xml.next match {
-          case EvElemStart(_, "V", _, _) => verses.append(readContents)
+          case EvElemStart(_, "V", _, _) => verses.append(readContents("V"))
+          case EvElemStart(_, "REFS", _, _) => r.notesFields.setValue(readContents("REFS"))
           case EvElemEnd(_, "ITEM") => break = true
           case _ =>
         }
@@ -117,7 +148,7 @@ object SKVRXMLIndexer extends OctavoIndexer {
         val dcontents = new StringBuilder
         for (line <- verses) {
           r.lineIDField.setLongValue(sentences.incrementAndGet)
-          r.contentField.setStringValue(line)
+          r.contentField.setValue(line)
           r.contentLengthFields.setValue(line.length)
           r.contentTokensFields.setValue(getNumberOfTokens(line))
           seniw.addDocument(r.send)
@@ -125,7 +156,7 @@ object SKVRXMLIndexer extends OctavoIndexer {
           dcontents.append('\n')
         }
         val dcontentsS = dcontents.toString
-        r.contentField.setStringValue(dcontentsS)
+        r.contentField.setValue(dcontentsS)
         r.contentLengthFields.setValue(dcontentsS.length)
         r.contentTokensFields.setValue(getNumberOfTokens(dcontentsS))
         diw.addDocument(r.dd)
@@ -166,7 +197,7 @@ object SKVRXMLIndexer extends OctavoIndexer {
     seniw = iw(opts.index() + "/senindex", sens, opts.indexMemoryMb() / 2)
     feedAndProcessFedTasksInParallel(() => {
       opts.directories().toStream.flatMap(p => getFileTree(new File(p)))
-        .filter(_.getName.endsWith(".txt")).foreach(file => addTask(file.getName, () => index(file)))
+        .filter(f => f.getName.endsWith(".xml") && "tyyppiluettelo.xml" != f.getName).foreach(file => addTask(file.getName, () => index(file)))
     })
     waitForTasks(
       runSequenceInOtherThread(

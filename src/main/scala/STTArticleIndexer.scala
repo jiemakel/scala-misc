@@ -1,19 +1,19 @@
 import java.io.{File, FileInputStream, InputStreamReader}
 import java.util.concurrent.atomic.AtomicLong
-import java.util.function.BiPredicate
+import java.util.function.{BiPredicate, LongFunction}
 
-import au.com.bytecode.opencsv.CSVParser
-import com.bizo.mighty.csv.{CSVReader, CSVReaderSettings}
+import com.bizo.mighty.csv.CSVReader
+import com.koloboke.collect.map.hash.HashLongObjMaps
 import fi.seco.lucene.{MorphologicalAnalysisTokenStream, MorphologicalAnalyzer, WordToAnalysis}
-import org.apache.lucene.document.{Field, LongPoint, SortedDocValuesField, StoredField}
+import org.apache.lucene.document.{Field, StoredField}
 import org.apache.lucene.index.{FieldInfo, IndexWriter}
 import org.apache.lucene.search.{Sort, SortField}
 import org.apache.lucene.util.BytesRef
 import org.joda.time.format.ISODateTimeFormat
-import org.json4s.{DefaultFormats, JArray, JValue}
 import org.json4s.JsonDSL._
 import org.json4s.native.JsonMethods.{pretty, render}
 import org.json4s.native.JsonParser._
+import org.json4s.{DefaultFormats, JArray}
 import org.rogach.scallop._
 
 import scala.collection.mutable.ArrayBuffer
@@ -21,7 +21,7 @@ import scala.language.postfixOps
 import scala.util.Try
 
 
-object HSArticleIndexer extends OctavoIndexer {
+object STTArticleIndexer extends OctavoIndexer {
   
   indexingCodec.termVectorFilter = new BiPredicate[FieldInfo,BytesRef]() {
     override def test(f: FieldInfo, b: BytesRef) = b.bytes(b.offset + 1) == 'L'
@@ -30,32 +30,30 @@ object HSArticleIndexer extends OctavoIndexer {
   /*finalCodec.termVectorFilter = new Predicate[BytesRef]() {
     override def test(b: BytesRef) = b.bytes(b.offset + 1) == 'L'
   }*/
-  // articleId, nodeId, nodeTitle, startDate, modifiedDate, title, byLine, ingress, body
-  case class Article(id: Long, publisher: String, timePublished: String, headline: String, writer: String, lead: String, analyzedText: List[JValue])
-  
+
   private val paragraphs = new AtomicLong
   private val sentences = new AtomicLong
-  
   class Reuse {
     val sd = new FluidDocument()
     val pd = new FluidDocument()
     val ad = new FluidDocument()
-    val urlFields = new StringSDVFieldPair("url").r(sd, pd, ad)
+    //val urlFields = new StringSDVFieldPair("url").r(sd, pd, ad)
     val articleIDFields = new StringNDVFieldPair("articleID").r(sd, pd, ad)
     val publisherFields = new StringSDVFieldPair("publisher").r(sd, pd, ad)
-    val writerFields = new StringSDVFieldPair("writer").r(sd, pd, ad)
-    val timePublishedSDVField = new SortedDocValuesField("timePublished", new BytesRef())
-    sd.addRequired(timePublishedSDVField)
-    pd.addRequired(timePublishedSDVField)
-    ad.addRequired(timePublishedSDVField)
-    val timePublishedLongPoint = new LongPoint("timePublished", 0)
-    sd.addRequired(timePublishedLongPoint)
-    pd.addRequired(timePublishedLongPoint)
-    ad.addRequired(timePublishedLongPoint)
+    val timePublishedFields = new LongPointSDVDateTimeFieldPair("timePublished",ISODateTimeFormat.dateTimeNoMillis).r(sd,pd,ad)
+    val timeModifiedFields = new LongPointSDVDateTimeFieldPair("timeModified",ISODateTimeFormat.dateTimeNoMillis).r(sd,pd,ad)
+
     val contentLengthFields = new IntPointNDVFieldPair("contentLength").r(sd, pd, ad)
     val contentTokensFields = new IntPointNDVFieldPair("contentTokens").r(sd, pd, ad)
-    val leadFields = new StringSDVFieldPair("lead").r(sd, pd, ad)
-    val headlineFields = new StringSDVFieldPair("headline").r(sd, pd, ad)
+    //val leadFields = new StringSDVFieldPair("lead").r(sd, pd, ad)
+    val headlineFields = new TextSDVFieldPair("headline").r(sd, pd, ad)
+    val creditlineFields = new TextSDVFieldPair("creditline").o(sd, pd, ad)
+    val bylineFields = new TextSDVFieldPair("byline").o(sd, pd, ad)
+    val versionFields = new StringSDVFieldPair("version").r(sd,pd,ad)
+    val urgencyFields = new IntPointNDVFieldPair("urgency").r(sd,pd,ad)
+    val genreFields = new StringSDVFieldPair("genre").r(sd,pd,ad)
+    //mw.write(Seq("id","version","urgency","department","genre","timePublished","timeModified","headline","creditline","byline"))
+
     val textField = new Field("text", "", contentFieldType)
     sd.addRequired(textField)
     pd.addRequired(textField)
@@ -75,46 +73,59 @@ object HSArticleIndexer extends OctavoIndexer {
   }
   
   implicit val formats = DefaultFormats
-  
+
   private def index(file: File): Unit = {
-    val wr = CSVReader(file.getPath)(CSVReaderSettings.Standard.copy(escapechar =  CSVParser.NULL_CHARACTER))
+    val wr = CSVReader(file.getPath)
     logger.info("Processing "+file)
-    // articleId, nodeId, nodeTitle, startDate, modifiedDate, title, byLine, ingress, body
+    wr.next()
     for (r <- wr) {
-      val id = Try(r(0).toLong).getOrElse(-1l)
-      val analysisFile1 = new File(analyses+"/"+Math.abs(r(0).hashCode()%10)+"/"+Math.abs(r(0).hashCode()%100/10)+"/"+r(0)+".analysis.json")
-      val analysisFile2 = new File(analyses+"/"+r(0)+".analysis.json")
-      val analysisFile = if (analysisFile1.exists) analysisFile1 else analysisFile2
-      if (id != -1l && analysisFile.exists) {
-        val analyzedText = parse(new InputStreamReader(new FileInputStream(analysisFile))).asInstanceOf[JArray].children
-        addTask(""+id, () => index(new Article(id, r(2), r(3).replaceAllLiterally(" ","T"), r(5), r(6), r(7), analyzedText)))
-      }    
+      val id = Try(r(0).toLong).getOrElse(-1L)
+      val fname = id+".xml"
+      val analysisFile = new File(analyses+"/"+Math.abs(fname.hashCode()%10)+"/"+Math.abs(fname.hashCode()%100/10)+"/"+fname+".analysis.json")
+      if (analysisFile.exists)
+        addTask(""+id, () => index(id,r, analysisFile))
+      else logger.error(analysisFile+" not found")
     }
   }
  
-  private def index(article: Article): Unit = {
+  private def index(id: Long, r: Seq[String], analysisFile: File): Unit = {
+    val analyzedText = parse(new InputStreamReader(new FileInputStream(analysisFile))).asInstanceOf[JArray].children
     val d = tld.get
-    d.articleIDFields.setValue(article.id)
-    d.urlFields.setValue("http://www.hs.fi/"+article.publisher.toLowerCase+"/art-"+article.id+".html")
-    d.publisherFields.setValue(article.publisher)
-    d.writerFields.setValue(article.writer)
-    d.timePublishedSDVField.setBytesValue(new BytesRef(article.timePublished))
-    d.timePublishedLongPoint.setLongValue(ISODateTimeFormat.dateTimeNoMillis.parseMillis(article.timePublished))
-    d.headlineFields.setValue(article.headline)
-    d.leadFields.setValue(article.lead)
-    d.paragraphsFields.setValue(article.analyzedText.length)
+    d.ad.clearOptional()
+    d.pd.clearOptional()
+    d.sd.clearOptional()
+    //mw.write(Seq("id","version","urgency","department","genre","timePublished","timeModified","headline","creditline","byline"))
+    d.articleIDFields.setValue(id)
+    d.versionFields.setValue(r(1))
+    d.urgencyFields.setValue(r(2).toInt)
+    d.publisherFields.setValue(r(3))
+    d.genreFields.setValue(r(4))
+    if (r(5).nonEmpty)
+      d.timePublishedFields.setValue(r(5)+'Z')
+    else d.timePublishedFields.setValue("0000-00-00T00:00Z")
+    if (r(6).nonEmpty)
+      d.timeModifiedFields.setValue(r(6)+'Z')
+    else d.timeModifiedFields.setValue("0000-00-00T00:00Z")
+    d.headlineFields.setValue(r(7)) // 7
+    for (s <- Option(subjects.get(id)).getOrElse(Seq.empty))
+      new StringSSDVFieldPair("subject").o(d.sd,d.pd,d.ad).setValue(s)
+    if (r(8).nonEmpty)
+      d.creditlineFields.setValue(r(8))
+    if (r(9).nonEmpty)
+      d.bylineFields.setValue(r(9))
+    d.paragraphsFields.setValue(analyzedText.length)
     val textTokens = new ArrayBuffer[Iterable[(Int, String, Iterable[(Float,Iterable[Iterable[String]])])]]
     var text = ""
     var textOffset = 0
     var sentenceCount = 0
-    for (paragraphAnalysis <- article.analyzedText) {
+    for (paragraphAnalysis <- analyzedText) {
       val unwrappedAnalysis = paragraphAnalysis.asInstanceOf[JArray].children.map(_.extract[WordToAnalysis])
       val sentenceStartIndices = unwrappedAnalysis.zipWithIndex.filter(_._1.analysis.head.globalTags.exists(_.contains("FIRST_IN_SENTENCE"))).map(_._2)
       d.paragraphIDFields.setValue(paragraphs.getAndIncrement)
       val sentenceAnalyses = lsplit(paragraphAnalysis.asInstanceOf[JArray].children,sentenceStartIndices)
       val unwrappedSentenceAnalyses = lsplit(unwrappedAnalysis,sentenceStartIndices)
       var paragraphSentenceCount = 0
-      for ((sentenceAnalysis,unwrappedSentenceAnalysis) <- sentenceAnalyses.zip(unwrappedSentenceAnalyses).filter(_._2.exists(!_.analysis(0).globalTags.contains("WHITESPACE")))) {
+      for ((sentenceAnalysis,unwrappedSentenceAnalysis) <- sentenceAnalyses.zip(unwrappedSentenceAnalyses).filter(_._2.exists(!_.analysis.head.globalTags.contains("WHITESPACE")))) {
         paragraphSentenceCount += 1
         d.sentenceIDFields.setValue(sentences.getAndIncrement)
         val tokens = MorphologicalAnalyzer.scalaAnalysisToTokenStream(unwrappedSentenceAnalysis)
@@ -149,9 +160,10 @@ object HSArticleIndexer extends OctavoIndexer {
       val flattenedTokens = textTokens.flatten
       d.contentTokensFields.setValue(flattenedTokens.length)
       d.textField.setTokenStream(new MorphologicalAnalysisTokenStream(flattenedTokens))
-      d.analyzedTextField.setStringValue(pretty(render(article.analyzedText)))
+      d.analyzedTextField.setStringValue(pretty(render(analyzedText)))
       aiw.addDocument(d.ad)
     }
+    logger.info("Successfully processed "+id)
   }
   
   var aiw: IndexWriter = null.asInstanceOf[IndexWriter]
@@ -160,6 +172,7 @@ object HSArticleIndexer extends OctavoIndexer {
   
   class HSOpts(arguments: Seq[String]) extends AOctavoOpts(arguments) {
     val analyses = opt[String](required = true)
+    val subjects = opt[String](required = true)
     val apostings = opt[String](default = Some("fst"))
     val ppostings = opt[String](default = Some("fst"))
     val spostings = opt[String](default = Some("fst"))
@@ -170,10 +183,17 @@ object HSArticleIndexer extends OctavoIndexer {
   val ps = new Sort(new SortField("articleID",SortField.Type.LONG), new SortField("paragraphID", SortField.Type.LONG))
   val ss = new Sort(new SortField("articleID",SortField.Type.LONG), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG))
   
-  var analyses: String = null
+  var analyses: String = _
+
+  var subjects = HashLongObjMaps.newUpdatableMap[ArrayBuffer[String]]()
   
   def main(args: Array[String]): Unit = {
     val opts = new HSOpts(args)
+    opts.subjects()
+    for (r<-CSVReader(opts.subjects()))
+      subjects.computeIfAbsent(r.head.toLong,new LongFunction[ArrayBuffer[String]] {
+        override def apply(value: Long) = new ArrayBuffer[String]
+      }) += r.last
     if (!opts.onlyMerge()) {
       analyses = opts.analyses()
       aiw = iw(opts.index()+"/aindex",as, opts.indexMemoryMb() / 3)
