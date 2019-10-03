@@ -4,12 +4,8 @@ import java.util.regex.Pattern
 
 import com.bizo.mighty.csv.CSVReader
 import fi.hsci.lucene.NormalisationFilter
-import org.apache.lucene.analysis.{FilteringTokenFilter, LowerCaseFilter}
-import org.apache.lucene.analysis.core.WhitespaceTokenizer
-import org.apache.lucene.analysis.miscellaneous.LengthFilter
-import org.apache.lucene.analysis.pattern.PatternReplaceFilter
-import org.apache.lucene.analysis.tokenattributes.{CharTermAttribute, OffsetAttribute}
-import org.apache.lucene.analysis.util.{CharTokenizer, UnicodeProps}
+import org.apache.lucene.analysis.LowerCaseFilter
+import org.apache.lucene.analysis.pattern.{PatternReplaceFilter, PatternTokenizer}
 import org.apache.lucene.document.{NumericDocValuesField, SortedDocValuesField}
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.search.{Sort, SortField}
@@ -72,28 +68,16 @@ object SKVRXMLIndexer extends OctavoIndexer {
     val regionFields = new StringSDVFieldPair("region").r(dd, send)
     val placeFields = new StringSDVFieldPair("place").r(dd, send)
     val yearFields = new IntPointNDVFieldPair("year").r(dd, send)
-    val contentField = new ContentField("content",createAnalyser((_) => new CharTokenizer() {
-      override def isTokenChar(c: Int): Boolean = !UnicodeProps.WHITESPACE.get(c) && c != '_'
-    },
-      (_,ins) => new FilteringTokenFilter(ins) {
-        val oattr = addAttribute(classOf[OffsetAttribute])
-        val cattr = addAttribute(classOf[CharTermAttribute])
-        override def accept(): Boolean = {
-          val s = cattr.toString
-          !(oattr.startOffset == 0 && "^[0-9]*$".r.findFirstIn(s).isDefined) && "^#[0-9]*$".r.findFirstIn(s).isEmpty
-        }
-      },
-      (_,ins) => new PatternReplaceFilter(ins,Pattern.compile("^\\p{Punct}*(.*?)\\p{Punct}*$"),"$1", false),
-      (_,ins) => new PatternReplaceFilter(ins,Pattern.compile("#[0-9]*$"),"",false),
-      (_,ins) => NormalisationFilter.tokenTransformer(ins,(content: String) => content.filter {
-        case ']' | '[' | '@' | '$' | '^' | '°' | '¨' | 'ˇ' | '€' | '*' | '\'' => false
-        case _ => true
-      }),
+    val contentField = new ContentField("content",createAnalyser((_) => new PatternTokenizer(Pattern.compile(
+      "(#[0-9]*|\\[[\\p{Punct}\\p{InGeneral_Punctuation}°$€¨ˇ&&[^#\\[\\]']]*\\]|[\\p{Punct}\\p{InGeneral_Punctuation}°$€¨ˇ&&[^\\[\\]']])*" + // #footnotes or any punctuation (at the end of the previous word)
+        "((^|\\n)[0-9]+[\\p{Z}_\\n]*|[\\p{Z}_\\n]+|$)" + // either numbers + whitespace at the start of a line, or just whitespace, or the end of the line (to clean punctuation at the end of the line)
+        "(\\[[\\p{Punct}\\p{InGeneral_Punctuation}°$€¨ˇ&&[^#\\[\\]']]*\\]|[\\p{Punct}\\p{InGeneral_Punctuation}°$€¨ˇ&&[^#\\[\\]']])*" // any punctuation at the beginning of the starting word
+    ),-1),
+      (_,ins) => new PatternReplaceFilter(ins,Pattern.compile("[\\[\\]']"),"",true),
       (_,ins) => new LowerCaseFilter(ins),
-      (_,ins) => new NormalisationFilter(ins,true),
-      (_,ins) => new LengthFilter(ins, 1, Int.MaxValue)
+      (_,ins) => new NormalisationFilter(ins,true)
     )).r(dd,send)
-    val notesFields = new TextSDVFieldPair("notes").r(dd, send)
+    val notesFields = new TextSDVFieldPair("notes").o(dd, send)
     val lineIDField = new NumericDocValuesField("lineID", 0)
     send.addRequired(lineIDField)
     val contentLengthFields = new IntPointNDVFieldPair("contentLength").r(dd, send)
@@ -121,6 +105,7 @@ object SKVRXMLIndexer extends OctavoIndexer {
     val c = new StringBuilder()
     while (xml.hasNext) xml.next match {
       case EvElemStart(_, "ITEM", iattrs, _) =>
+        r.clearMultiDocumentFields()
         verses.clear()
         var break = false
         val id = iattrs("nro").head.text
@@ -133,7 +118,6 @@ object SKVRXMLIndexer extends OctavoIndexer {
           case EvElemEnd(_, "ITEM") => break = true
           case _ =>
         }
-        r.clearMultiDocumentFields()
         r.skvrIDFields.setValue(id)
         val (region, place) = places(placeId)
         r.yearFields.setValue(year)

@@ -170,7 +170,7 @@ object HSArticleIndexer extends OctavoIndexer {
   val ps = new Sort(new SortField("articleID",SortField.Type.LONG), new SortField("paragraphID", SortField.Type.LONG))
   val ss = new Sort(new SortField("articleID",SortField.Type.LONG), new SortField("paragraphID", SortField.Type.LONG), new SortField("sentenceID", SortField.Type.LONG))
   
-  var analyses: String = null
+  var analyses: String = _
   
   def main(args: Array[String]): Unit = {
     val opts = new HSOpts(args)
