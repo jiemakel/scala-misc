@@ -1,7 +1,6 @@
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 
-import com.bizo.mighty.csv.CSVReader
 import fi.hsci.lucene.NormalisationFilter
 import org.apache.lucene.document.{NumericDocValuesField, SortedDocValuesField}
 import org.apache.lucene.index.IndexWriter
@@ -14,7 +13,9 @@ import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
 import scala.language.{postfixOps, reflectiveCalls}
 import scala.xml.parsing.XhtmlEntities
-import scala.xml.pull._
+import XMLEventReaderSupport._
+import com.github.tototoshi.csv.CSVReader
+import javax.xml.stream.XMLEventReader
 
 object SKVRTextIndexer extends OctavoIndexer {
 
@@ -22,7 +23,7 @@ object SKVRTextIndexer extends OctavoIndexer {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
-      case EvElemStart(_,_,_,_) => return null
+      case EvElemStart(_,_,_) => return null
       case EvText(text) => content.append(text)
       case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
         case Some(chr) => content.append(chr)
@@ -138,15 +139,15 @@ object SKVRTextIndexer extends OctavoIndexer {
       val themePoemsCsv = opt[String](required = true)
       verify()
     }
-    for (row <- CSVReader(opts.metadataCsv()))
+    for (row <- CSVReader.open(opts.metadataCsv()))
       metadata.put(row(0),(row(1).toInt,row(2).toInt,row(3).toInt))
-    for (row <- CSVReader(opts.placeCsv()))
+    for (row <- CSVReader.open(opts.placeCsv()))
       places.put(row(0).toInt,(row(1),row(2)))
-    for (row <- CSVReader(opts.collectorCsv()))
+    for (row <- CSVReader.open(opts.collectorCsv()))
       collectors.put(row(0).toInt,row(1))
-    for (row <- CSVReader(opts.themeCsv()))
+    for (row <- CSVReader.open(opts.themeCsv()))
       themes.put(row(0).toInt,row(1))
-    for (row <- CSVReader(opts.themePoemsCsv()))
+    for (row <- CSVReader.open(opts.themePoemsCsv()))
       poemThemes.getOrElseUpdate(row(3), new ArrayBuffer[Int]) += row(0).toInt
     diw = iw(opts.index()+"/dindex", ds, opts.indexMemoryMb()/2)
     seniw = iw(opts.index()+"/senindex", sens, opts.indexMemoryMb()/2)

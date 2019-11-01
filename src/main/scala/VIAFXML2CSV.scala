@@ -1,49 +1,19 @@
-import com.bizo.mighty.csv.CSVReader
-import java.net.URLEncoder
-import org.apache.jena.riot.RDFFormat
-import org.apache.jena.riot.RDFDataMgr
-import java.io.FileOutputStream
-import com.bizo.mighty.csv.CSVDictReader
-import com.bizo.mighty.csv.CSVReaderSettings
-import scala.io.Source
-import scala.xml.pull.XMLEventReader
-import scala.xml.pull.EvElemStart
-import scala.xml.pull.EvText
-import scala.xml.pull.EvElemEnd
-import scala.xml.MetaData
-import scala.collection.mutable.HashMap
-import scala.collection.mutable.HashSet
-import java.io.PrintWriter
-import java.io.File
-import javax.imageio.ImageIO
-import scala.concurrent.Future
-import scala.concurrent.Await
-import scala.concurrent.duration._
-import scala.xml.pull.EvEntityRef
-import scala.xml.parsing.XhtmlEntities
-import scala.collection.mutable.Buffer
-import scala.collection.mutable.ArrayBuffer
-import com.typesafe.scalalogging.LazyLogging
 
-import scala.xml.Elem
-import scala.xml.factory.XMLLoader
-import javax.xml.parsers.SAXParser
 import java.io.FileInputStream
-import java.io.InputStreamReader
-import java.io.BufferedReader
-import java.io.FileReader
-import scala.io.BufferedSource
-import scala.xml.pull.EvComment
-import java.io.PushbackInputStream
+import java.util.concurrent.{ArrayBlockingQueue, ThreadPoolExecutor, TimeUnit}
 import java.util.zip.GZIPInputStream
-import com.bizo.mighty.csv.CSVWriter
-import scala.concurrent.Promise
-import scala.concurrent.ExecutionContext
-import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.ArrayBlockingQueue
-import java.util.concurrent.TimeUnit
 
+import XMLEventReaderSupport._
+import com.github.tototoshi.csv.CSVWriter
+import com.typesafe.scalalogging.LazyLogging
+import javax.xml.stream.XMLEventReader
+
+import scala.collection.mutable.{HashMap, HashSet}
 import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.duration._
+import scala.io.Source
+import scala.util.{Failure, Success}
 
 object VIAFXML2CSV extends LazyLogging {
   
@@ -65,10 +35,10 @@ object VIAFXML2CSV extends LazyLogging {
   def readAggregate(endTag: String, values: HashMap[String,String])(implicit xml: XMLEventReader): Unit = {
     var break = false
     while (xml.hasNext && !break) xml.next match {
-      case EvElemStart(_,"data",attrs,_) =>
+      case EvElemStart(_,"data",attrs) =>
         xml.next
         val value = readContents
-        values.put(value,if (attrs("count") != null) attrs("count")(0).text else "1")
+        values.put(value,if (attrs("count") != null) attrs("count") else "1")
       case EvElemEnd(_,endTag) => break = true       
       case _ => 
     }
@@ -78,13 +48,13 @@ object VIAFXML2CSV extends LazyLogging {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
-      case EvElemStart(_,"subfield",attrs,_) if (attrs("code") != null) => attrs("code")(0).text match {
+      case EvElemStart(_,"subfield",attrs) if (attrs("code") != null) => attrs("code") match {
         case "e" | "9" => 
         case _ => 
           content.append(readContents)
           content.append(" ")
       }
-      case EvElemStart(_,"subfield",_,_) =>
+      case EvElemStart(_,"subfield",_) =>
         content.append(readContents)
         content.append(" ")
       case EvElemEnd(_,endTag) => break = true       
@@ -98,7 +68,7 @@ object VIAFXML2CSV extends LazyLogging {
   }
 
   def process(record: String)(implicit output: CSVWriter): Future[Unit] = Future {
-    implicit val xml = new XMLEventReader(Source.fromString(record.substring(record.indexOf("\t")+1)))
+    implicit val xml = getXMLEventReader(record.substring(record.indexOf("\t")+1))
     var id: String = null
     var nameType: String = ""
     val prefLabels: HashSet[String] = new HashSet[String]()
@@ -112,27 +82,27 @@ object VIAFXML2CSV extends LazyLogging {
     val countries: HashMap[String,String] = new HashMap[String,String]()
     val relatorCodes: HashMap[String,String] = new HashMap[String,String]()
     while (xml.hasNext) xml.next match {
-      case EvElemStart(_,"viafID",_,_) => id = readContents
-      case EvElemStart(_,"nameType",_,_) => nameType = readContents
-      case EvElemStart(_,"mainHeadings",_,_) =>
+      case EvElemStart(_,"viafID",_) => id = readContents
+      case EvElemStart(_,"nameType",_) => nameType = readContents
+      case EvElemStart(_,"mainHeadings",_) =>
         var break = false
         while (xml.hasNext && !break) xml.next match {
-          case EvElemStart(_,"text",_,_) => prefLabels.add(readContents)
+          case EvElemStart(_,"text",_) => prefLabels.add(readContents)
           case EvElemEnd(_,"mainHeadings") => break = true       
           case _ => 
         }
-      case EvElemStart(_,"gender",_,_) => gender = readContents
-      case EvElemStart(_,"birthDate",_,_) => birthDate = readContents
-      case EvElemStart(_,"deathDate",_,_) => deathDate = readContents
-      case EvElemStart(_,"dateType",_,_) => dateType = readContents
-      case EvElemStart(_,"x400",_,_) => readAlternate("x400").foreach(altLabels.add(_)) 
-      case EvElemStart(_,"x500",_,_) => readAlternate("x500").foreach(relLabels.add(_))
-      case EvElemStart(_,"nationalityOfEntity",_,_) => readAggregate("nationalityOfEntity", nationalities)  
-      case EvElemStart(_,"countries",_,_) => readAggregate("countries", countries)
-      case EvElemStart(_,"RelatorCodes",_,_) => readAggregate("RelatorCodes", relatorCodes)
+      case EvElemStart(_,"gender",_) => gender = readContents
+      case EvElemStart(_,"birthDate",_) => birthDate = readContents
+      case EvElemStart(_,"deathDate",_) => deathDate = readContents
+      case EvElemStart(_,"dateType",_) => dateType = readContents
+      case EvElemStart(_,"x400",_) => readAlternate("x400").foreach(altLabels.add(_))
+      case EvElemStart(_,"x500",_) => readAlternate("x500").foreach(relLabels.add(_))
+      case EvElemStart(_,"nationalityOfEntity",_) => readAggregate("nationalityOfEntity", nationalities)
+      case EvElemStart(_,"countries",_) => readAggregate("countries", countries)
+      case EvElemStart(_,"RelatorCodes",_) => readAggregate("RelatorCodes", relatorCodes)
       case _ => 
     }
-    output.synchronized { output.write(Seq(id,nameType,birthDate,deathDate,dateType,gender,countries.map(p => p._1+":"+p._2).mkString(";"),nationalities.map(p => p._1+":"+p._2).mkString(";"),relatorCodes.map(p => p._1+":"+p._2).mkString(";"),prefLabels.map(_.replace(";","\\;")).mkString(";"),altLabels.map(_.replace(";","\\;")).mkString(";"),relLabels.map(_.replace(";","\\;")).mkString(";"))) }
+    output.synchronized { output.writeRow(Seq(id,nameType,birthDate,deathDate,dateType,gender,countries.toSeq.map(p => p._1+":"+p._2).mkString(";"),nationalities.toSeq.map(p => p._1+":"+p._2).mkString(";"),relatorCodes.toSeq.map(p => p._1+":"+p._2).mkString(";"),prefLabels.map(_.replace(";","\\;")).mkString(";"),altLabels.map(_.replace(";","\\;")).mkString(";"),relLabels.map(_.replace(";","\\;")).mkString(";"))) }
   }
   
   val numWorkers = sys.runtime.availableProcessors
@@ -153,11 +123,13 @@ object VIAFXML2CSV extends LazyLogging {
 
   def main(args: Array[String]): Unit = {
     val s = Source.fromInputStream(new GZIPInputStream(new FileInputStream("viaf.xml.gz")), "UTF-8")
-    implicit val output: CSVWriter = CSVWriter("output.csv")    
-    output.write(Seq("id","nameType","birthDate","deathDate","dateType","gender","countries","nationalities","relatorCodes","prefLabels","altLabels","relLabels"))
+    implicit val output: CSVWriter = CSVWriter.open("output.csv")
+    output.writeRow(Seq("id","nameType","birthDate","deathDate","dateType","gender","countries","nationalities","relatorCodes","prefLabels","altLabels","relLabels"))
     val f = Future.sequence(for (record <- s.getLines) yield process(record))
-    f.onFailure { case t => logger.error("Processing of at least one linr resulted in an error:" + t.getMessage+": " + t.printStackTrace) }
-    f.onSuccess { case _ => logger.info("Successfully processed all lines.") }
+    f.onComplete {
+      case Failure(t) => logger.error("Processing of at least one linr resulted in an error:" + t.getMessage + ": " + t.printStackTrace)
+      case Success(_) => logger.info("Successfully processed all lines.")
+    }
     Await.result(f, Duration.Inf)
     output.close()
   }

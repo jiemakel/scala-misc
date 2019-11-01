@@ -3,7 +3,7 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.function.BiPredicate
 
 import au.com.bytecode.opencsv.CSVParser
-import com.bizo.mighty.csv.{CSVReader, CSVReaderSettings}
+import com.github.tototoshi.csv.{CSVReader, DefaultCSVFormat}
 import fi.seco.lucene.{MorphologicalAnalysisTokenStream, MorphologicalAnalyzer, WordToAnalysis}
 import org.apache.lucene.document.{Field, LongPoint, SortedDocValuesField, StoredField}
 import org.apache.lucene.index.{FieldInfo, IndexWriter}
@@ -77,15 +77,15 @@ object HSArticleIndexer extends OctavoIndexer {
   implicit val formats = DefaultFormats
   
   private def index(file: File): Unit = {
-    val wr = CSVReader(file.getPath)(CSVReaderSettings.Standard.copy(escapechar =  CSVParser.NULL_CHARACTER))
+    val wr = CSVReader.open(file.getPath)(new DefaultCSVFormat{override val escapeChar =  CSVParser.NULL_CHARACTER})
     logger.info("Processing "+file)
     // articleId, nodeId, nodeTitle, startDate, modifiedDate, title, byLine, ingress, body
     for (r <- wr) {
-      val id = Try(r(0).toLong).getOrElse(-1l)
+      val id = Try(r(0).toLong).getOrElse(-1L)
       val analysisFile1 = new File(analyses+"/"+Math.abs(r(0).hashCode()%10)+"/"+Math.abs(r(0).hashCode()%100/10)+"/"+r(0)+".analysis.json")
       val analysisFile2 = new File(analyses+"/"+r(0)+".analysis.json")
       val analysisFile = if (analysisFile1.exists) analysisFile1 else analysisFile2
-      if (id != -1l && analysisFile.exists) {
+      if (id != -1L && analysisFile.exists) {
         val analyzedText = parse(new InputStreamReader(new FileInputStream(analysisFile))).asInstanceOf[JArray].children
         addTask(""+id, () => index(new Article(id, r(2), r(3).replaceAllLiterally(" ","T"), r(5), r(6), r(7), analyzedText)))
       }    

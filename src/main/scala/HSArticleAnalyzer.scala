@@ -2,7 +2,7 @@ import java.io.{File, PrintWriter}
 import java.util.{Collections, Locale}
 
 import au.com.bytecode.opencsv.CSVParser
-import com.bizo.mighty.csv.{CSVReader, CSVReaderSettings}
+import com.github.tototoshi.csv.{CSVReader, DefaultCSVFormat}
 import com.optimaize.langdetect.LanguageDetectorBuilder
 import com.optimaize.langdetect.ngram.NgramExtractors
 import com.optimaize.langdetect.profiles.LanguageProfileReader
@@ -106,16 +106,16 @@ object HSArticleAnalyzer extends ParallelProcessor {
     val dest = opts.dest()
     createHashDirectories(dest)
     feedAndProcessFedTasksInParallel(() =>
-      opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.forEach(file => Try({
-        val wr = CSVReader(file.getPath)(CSVReaderSettings.Standard.copy(escapechar =  CSVParser.NULL_CHARACTER))
+      opts.directories().toIndexedSeq.flatMap(n => getFileTree(new File(n))).parStream.forEach(file => Try({
+        val wr = CSVReader.open(file.getPath)(new DefaultCSVFormat{override val escapeChar =  CSVParser.NULL_CHARACTER})
         // articleId, nodeId, nodeTitle, startDate, modifiedDate, title, byLine, ingress, body
-        for (
-          r <- wr;
-          outputFile = new File(dest+"/"+Math.abs(r(0).hashCode()%10)+"/"+Math.abs(r(0).hashCode()%100/10)+"/"+r(0)+".analysis.json")
-        ) if (!outputFile.exists) {
-          if (r.length>=9)
-            addTask(file+":"+r(0), () => analyze(outputFile, r(8)))
-          else logger.warn(r.toSeq+" is not 9 columns.")
+        for (r <- wr) {
+          val outputFile = new File(dest + "/" + Math.abs(r(0).hashCode() % 10) + "/" + Math.abs(r(0).hashCode() % 100 / 10) + "/" + r(0) + ".analysis.json")
+          if (!outputFile.exists) {
+            if (r.length >= 9)
+              addTask(file + ":" + r(0), () => analyze(outputFile, r(8)))
+            else logger.warn(r.toSeq + " is not 9 columns.")
+          }
         }
       }) match {
             case Success(_) => 

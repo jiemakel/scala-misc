@@ -2,11 +2,10 @@ import java.text.BreakIterator
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
-import com.bizo.mighty.csv.{CSVReader, Row}
+import com.github.tototoshi.csv.CSVReader
 import org.apache.lucene.document.NumericDocValuesField
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.search.{Sort, SortField}
-import org.joda.time.format.{DateTimeFormat, ISODateTimeFormat}
 import org.rogach.scallop._
 
 import scala.collection.mutable
@@ -47,9 +46,6 @@ object ToEIndexer extends OctavoIndexer {
     override def initialValue() = new Reuse()
   }
   
-  private val twitterDateTimeFormat = DateTimeFormat.forPattern( "EE MMM dd HH:mm:ss Z yyyy" ).withLocale(Locale.US)
-  private val isoDateTimeFormat = ISODateTimeFormat.dateTimeNoMillis()
- 
   private def index(speechId: String, speech: String): Unit = {
     val r = tld.get
     val m = speechMetadata(speechId)
@@ -106,8 +102,8 @@ object ToEIndexer extends OctavoIndexer {
   var agendaItems: Map[String, String] = _
   var institutions: Map[String, (String, String)] = _
   var politicalFunctions: Map[String, (String, String)] = _
-  var speakers: Map[String, Row] = _
-  var speechMetadata: Map[String, Row] = _
+  var speakers: Map[String, Seq[String]] = _
+  var speechMetadata: Map[String, Seq[String]] = _
   val spokenAs: mutable.HashMap[String, ArrayBuffer[String]] = new mutable.HashMap[String,ArrayBuffer[String]]
 
   def main(args: Array[String]): Unit = {
@@ -116,30 +112,30 @@ object ToEIndexer extends OctavoIndexer {
       val senpostings = opt[String](default = Some("fst"))
       verify()
     }
-    var r = CSVReader(opts.directories().head+"/agendaItems.csv")
-    r.next()
-    agendaItems = r.map(r => r(0)->r(1)).toMap
-    r = CSVReader(opts.directories().head+"/institutions.csv")
-    r.next()
-    institutions = r.map(r => r(0)->(r(1),r(2))).toMap
-    r = CSVReader(opts.directories().head+"/politicalFunctions.csv")
-    r.next()
-    politicalFunctions = r.map(r => r(0)->(r(1),r(2).charAt(36).toUpper + r(2).substring(37))).toMap
-    r = CSVReader(opts.directories().head+"/speakers.csv")
-    var fields = r.next()
-    speakers = r.map(r => r(0)->r).toMap
-    r = CSVReader(opts.directories().head+"/spokenAs.csv")
-    r.next()
+    var r = CSVReader.open(opts.directories().head+"/agendaItems.csv")
+    r.readNext()
+    agendaItems = r.iterator.map(r => r(0)->r(1)).toMap
+    r = CSVReader.open(opts.directories().head+"/institutions.csv")
+    r.readNext()
+    institutions = r.iterator.map(r => r(0)->(r(1),r(2))).toMap
+    r = CSVReader.open(opts.directories().head+"/politicalFunctions.csv")
+    r.readNext()
+    politicalFunctions = r.iterator.map(r => r(0)->(r(1),r(2).charAt(36).toUpper + r(2).substring(37))).toMap
+    r = CSVReader.open(opts.directories().head+"/speakers.csv")
+    r.readNext()
+    speakers = r.iterator.map(r => r(0)->r).toMap
+    r = CSVReader.open(opts.directories().head+"/spokenAs.csv")
+    r.readNext()
     for (row <- r) spokenAs.getOrElseUpdate(row(0),new ArrayBuffer[String]) += row(1)
-    r = CSVReader(opts.directories().head+"/speechMetadata.csv")
-    r.next()
-    speechMetadata = r.map(r => r(0)->r).toMap
+    r = CSVReader.open(opts.directories().head+"/speechMetadata.csv")
+    r.readNext()
+    speechMetadata = r.iterator.map(r => r(0)->r).toMap
     if (!opts.onlyMerge()) {
       siw = iw(opts.index()+"/sindex",ts,opts.indexMemoryMb() / 2)
       seniw = iw(opts.index()+"/senindex",ts,opts.indexMemoryMb() / 2)
       feedAndProcessFedTasksInParallel(() => {
-        r = CSVReader(opts.directories().head + "/English-speeches.csv")
-        r.next()
+        r = CSVReader.open(opts.directories().head + "/English-speeches.csv")
+        r.readNext()
         for (row <- r)
           addTask(row(0), () => index(row(0),row(1)))
       })

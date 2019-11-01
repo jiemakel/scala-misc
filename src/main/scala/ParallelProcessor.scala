@@ -85,7 +85,7 @@ class ParallelProcessor extends LazyLogging {
       }
       f = processingQueue.take()
     }
-    if (!all.isCompleted) all.trySuccess(Unit)
+    if (!all.isCompleted) all.trySuccess(())
     all.future.onComplete {
       case Success(_) => logger.info("Successfully processed all sources.")
       case Failure(t) =>

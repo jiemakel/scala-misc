@@ -1,7 +1,7 @@
-import java.io.{File, PrintWriter}
+import java.io.{File, FileInputStream, PrintWriter}
 import java.util.{Collections, Locale}
 
-import com.bizo.mighty.csv.{CSVReaderSettings, CSVWriter, CSVWriterSettings}
+import ECCOXML2Text.attrsToString
 import com.optimaize.langdetect.LanguageDetectorBuilder
 import com.optimaize.langdetect.ngram.NgramExtractors
 import com.optimaize.langdetect.profiles.LanguageProfileReader
@@ -9,6 +9,7 @@ import com.optimaize.langdetect.text.CommonTextObjectFactories
 import fi.seco.lexical.LanguageRecognizer
 import fi.seco.lexical.combined.CombinedLexicalAnalysisService
 import fi.seco.lexical.hfst.HFSTLexicalAnalysisService
+import javax.xml.stream.XMLEventReader
 import org.json4s.{JArray, JField, JObject}
 import org.json4s.JsonDSL._
 import org.json4s.{CustomSerializer, Extraction, NoTypeHints}
@@ -21,7 +22,8 @@ import scala.io.Source
 import scala.util.Try
 import scala.xml.MetaData
 import scala.xml.parsing.XhtmlEntities
-import scala.xml.pull._
+import XMLEventReaderSupport._
+import com.github.tototoshi.csv.CSVWriter
 
 
 object STTArticleAnalyzer extends ParallelProcessor {
@@ -32,14 +34,6 @@ object STTArticleAnalyzer extends ParallelProcessor {
     val dest = opt[String](required = true)
     val directories = trailArg[List[String]]()
     verify()
-  }
-  
-  /** helper function to turn XML attrs back into text */
-  def attrsToString(attrs:MetaData) = {
-    attrs.length match {
-      case 0 => ""
-      case _ => attrs.map( (m:MetaData) => " " + m.key + "='" + m.value +"'" ).reduceLeft(_+_)
-    }
   }
   
   object LanguageDetector {
@@ -94,7 +88,7 @@ object STTArticleAnalyzer extends ParallelProcessor {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
-      case EvElemStart(_,_,_,_) =>
+      case EvElemStart(_,_,_) =>
       case EvText(text) => content.append(text)
       case er: EvEntityRef => content.append(decodeEntity(er.entity))
       case EvComment(comment) if comment == " unknown entity apos; " => content.append('\'')
@@ -109,7 +103,8 @@ object STTArticleAnalyzer extends ParallelProcessor {
   }
   
   def analyze(file: File, outputFile: File): Unit = {
-    implicit val xml = new XMLEventReader(Source.fromFile(file, "UTF-8"))
+    val fis = new FileInputStream(file)
+    implicit val xml = getXMLEventReader(fis, "UTF-8")
     val id = file.getName.substring(0,file.getName.indexOf('.'))
     var version = ""
     var timePublished = ""
@@ -122,38 +117,38 @@ object STTArticleAnalyzer extends ParallelProcessor {
     var genre = ""
     val subjects = new ArrayBuffer[String]
     while (xml.hasNext) xml.next match {
-      case EvElemStart(_,"contentCreated",_,_) =>
+      case EvElemStart(_,"contentCreated",_) =>
         val c = readContents("contentCreated")
         if (c.nonEmpty) timePublished = c
-      case EvElemStart(_,"firstCreated",_,_) =>
+      case EvElemStart(_,"firstCreated",_) =>
         val c = readContents("firstCreated")
         if (c.nonEmpty) timePublished = c
-      case EvElemStart(_,"contentModified",_,_) =>
+      case EvElemStart(_,"contentModified",_) =>
         val c = readContents("contentModified")
         if (c.nonEmpty) timeModified = c
-      case EvElemStart(_,"versionCreated",_,_) =>
+      case EvElemStart(_,"versionCreated",_) =>
         val c = readContents("versionCreated")
         if (c.nonEmpty) timeModified = c
-      case EvElemStart(_,"urgency",_,_) => urgency=readContents("urgency")
-      case EvElemStart(_,"located",_,_) =>
-      case EvElemStart(_,"headline",_,_) => headline=readContents("headline")
-      case EvElemStart(_,"creditline",_,_) => creditline=readContents("creditline")
-      case EvElemStart(_,"by",_,_) => byline = readContents("by")
-      case EvElemStart(_,"subject",attrs,_) =>
-        val qcode = attrs("qcode").head.text
+      case EvElemStart(_,"urgency",_) => urgency=readContents("urgency")
+      case EvElemStart(_,"located",_) =>
+      case EvElemStart(_,"headline",_) => headline=readContents("headline")
+      case EvElemStart(_,"creditline",_) => creditline=readContents("creditline")
+      case EvElemStart(_,"by",_) => byline = readContents("by")
+      case EvElemStart(_,"subject",attrs) =>
+        val qcode = attrs("qcode")
         if (qcode.startsWith("sttdepartment:")) department = readContents("subject")
         else subjects += readContents("subject")
-      case EvElemStart(_,"genre",attrs,_) =>
-        val qcode = attrs("qcode").head.text
+      case EvElemStart(_,"genre",attrs) =>
+        val qcode = attrs("qcode")
         if (qcode.startsWith("sttversion:"))
           version = readContents("genre")
         else genre = readContents("genre")
-      case EvElemStart(_,"body",_,_) =>
+      case EvElemStart(_,"body",_) =>
         var break = false
         val content = new StringBuilder
         content.append("<body>")
         while (xml.hasNext && !break) xml.next match {
-          case EvElemStart(_, elem, attrs, _) => content.append("<" + elem + attrsToString(attrs) + ">")
+          case EvElemStart(_, elem, attrs) => content.append("<" + elem + attrsToString(attrs) + ">")
           case EvElemEnd(_,"body") => break = true
           case EvText(text) => 
             content.append(text)
@@ -168,25 +163,25 @@ object STTArticleAnalyzer extends ParallelProcessor {
           case EvComment(_) =>
         }
         content.append("</body>")
-        val contentXML = new XMLEventReader(Source.fromString(aRegex.replaceAllIn(content.toString,"<a$1>$2</a>")))
+        val contentXML = getXMLEventReader(aRegex.replaceAllIn(content.toString,"<a$1>$2</a>"))
         val stringContent = new StringBuilder
         contentXML.next // body
         var inOrderedList = false
         while (contentXML.hasNext) contentXML.next match {
-          case EvElemStart(_, "h1",_,_) => stringContent.append("\n # ") 
-          case EvElemStart(_, "h2",_,_) => stringContent.append("\n ## ")
-          case EvElemStart(_, "h3",_,_) => stringContent.append("\n ## ")
-          case EvElemStart(_, "h4",_,_) => stringContent.append("\n ## ")
-          case EvElemStart(_, "Company",_,_) =>
-          case EvElemStart(_, "Person",_,_) =>
-          case EvElemStart(_, "p",_,_) => stringContent.append("\n")
-          case EvElemStart(_, "ul",_,_) =>
+          case EvElemStart(_, "h1",_) => stringContent.append("\n # ")
+          case EvElemStart(_, "h2",_) => stringContent.append("\n ## ")
+          case EvElemStart(_, "h3",_) => stringContent.append("\n ## ")
+          case EvElemStart(_, "h4",_) => stringContent.append("\n ## ")
+          case EvElemStart(_, "Company",_) =>
+          case EvElemStart(_, "Person",_) =>
+          case EvElemStart(_, "p",_) => stringContent.append("\n")
+          case EvElemStart(_, "ul",_) =>
             inOrderedList = false
             stringContent.append('\n')
-          case EvElemStart(_, "ol",_,_) =>
+          case EvElemStart(_, "ol",_) =>
             inOrderedList = true
           case EvElemEnd(_, "li") => stringContent.append('\n')
-          case EvElemStart(_, "li",_,_) =>
+          case EvElemStart(_, "li",_) =>
             stringContent.append(if (inOrderedList) "1." else "* ")
           case EvText(text) => stringContent.append(text)
           case er: EvEntityRef => 
@@ -201,8 +196,8 @@ object STTArticleAnalyzer extends ParallelProcessor {
         else {
           val lang = getBestLang(contentS)
           if (!lang.contains("sv") && !lang.contains("en")) {
-            for (subject <- subjects) sw.synchronized { sw.write(Seq(id,subject)) }
-            mw.synchronized { mw.write(Seq(id,version,urgency,department,genre,timePublished,timeModified,headline,creditline,byline)) }
+            for (subject <- subjects) sw.synchronized { sw.writeRow(Seq(id,subject)) }
+            mw.synchronized { mw.writeRow(Seq(id,version,urgency,department,genre,timePublished,timeModified,headline,creditline,byline)) }
             if (!lang.contains("fi")) logger.info("language of " + file + " detected as " + lang)
             if (!outputFile.exists) {
               val paragraphs = contentS.split("\\s*\n\n\\s*")
@@ -215,6 +210,7 @@ object STTArticleAnalyzer extends ParallelProcessor {
         }
       case _ =>
     }
+    fis.close()
     logger.info("Successfully processed "+file)
   }
 
@@ -224,9 +220,9 @@ object STTArticleAnalyzer extends ParallelProcessor {
   def main(args: Array[String]): Unit = {
     val opts = new Opts(args)
     val dest = opts.dest()
-    mw = CSVWriter(dest+"/metadata.csv")(CSVWriterSettings.Standard.copy(escapechar = CSVReaderSettings.Standard.escapechar))
-    mw.write(Seq("id","version","urgency","department","genre","timePublished","timeModified","headline","creditline","byline"))
-    sw = CSVWriter(dest+"/subjects.csv")
+    mw = CSVWriter.open(dest+"/metadata.csv")
+    mw.writeRow(Seq("id","version","urgency","department","genre","timePublished","timeModified","headline","creditline","byline"))
+    sw = CSVWriter.open(dest+"/subjects.csv")
     createHashDirectories(dest)
     feedAndProcessFedTasksInParallel(() =>
       opts.directories().toArray.flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".xml")).forEach(file => {

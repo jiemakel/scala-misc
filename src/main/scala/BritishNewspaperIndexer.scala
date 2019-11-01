@@ -3,6 +3,8 @@ import java.text.BreakIterator
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
+import javax.xml.stream.{XMLEventReader, XMLInputFactory}
+import javax.xml.stream.events.{Characters, Comment, EndElement, EntityReference, StartElement}
 import jetbrains.exodus.bindings.{IntegerBinding, StringBinding}
 import jetbrains.exodus.env._
 import jetbrains.exodus.util.LightOutputStream
@@ -12,13 +14,9 @@ import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.search.{Sort, SortField}
 import org.rogach.scallop._
 
-import scala.collection.Searching
 import scala.collection.mutable.ArrayBuffer
-import scala.io.Source
 import scala.language.{postfixOps, reflectiveCalls}
-import scala.xml.MetaData
 import scala.xml.parsing.XhtmlEntities
-import scala.xml.pull._
 
 object BritishNewspaperIndexer extends OctavoIndexer {
 
@@ -141,26 +139,26 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
-      case EvElemStart(_,_,_,_) => return null
-      case EvText(text) => content.append(text)
-      case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
+      case _: StartElement => return null
+      case text: Characters => content.append(text.getData)
+      case er: EntityReference => XhtmlEntities.entMap.get(er.getName) match {
         case Some(chr) => content.append(chr)
         case _ =>
-          logger.warn("Encountered unknown entity "+er.entity)
+          logger.warn("Encountered unknown entity "+er.getName)
           content.append('[')
-          content.append(er.entity)
+          content.append(er.getName)
           content.append(']')
       }
-      case EvComment(comment) if comment == " unknown entity apos; " => content.append('\'')
-      case EvComment(comment) if comment.startsWith(" unknown entity") =>
-        val entity = content.substring(16, content.length - 2)
+      case c: Comment if c.getText == " unknown entity apos; " => content.append('\'')
+      case c: Comment if c.getText.startsWith(" unknown entity") =>
+        val entity = c.getText.substring(16, c.getText.length - 2)
         logger.warn("Encountered unknown entity "+entity)
         content.append('[')
         content.append(entity)
         content.append(']')
-      case EvComment(comment) =>
-        logger.debug("Encountered comment: "+comment)
-      case EvElemEnd(_,_) => break = true
+      case c: Comment =>
+        logger.debug("Encountered comment: "+c.getText)
+      case _: EndElement => break = true
     }
     content.toString
   }
@@ -173,8 +171,8 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     var content = new ArrayBuffer[ArrayBuffer[Word]]()
     var currentLine: ArrayBuffer[Word] = new ArrayBuffer //midx,startx,endx,starty,endy,content  
     var lastLine: ArrayBuffer[Word] = _
-    def testParagraphBreakAtEndOfLine(guessParagraphs: Boolean): Option[Seq[Seq[Word]]] = {
-      var ret: Option[Seq[Seq[Word]]] = None
+    def testParagraphBreakAtEndOfLine(guessParagraphs: Boolean): Option[Iterable[Iterable[Word]]] = {
+      var ret: Option[Iterable[Iterable[Word]]] = None
       if (lastLine != null) { // we have two lines, check for a paragraph change between them.
         content.append(lastLine)
         if (guessParagraphs) {
@@ -217,18 +215,18 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     }
   }
   
-  private def readNextWordPossiblyEmittingAParagraph(attrs: MetaData, state: State, guessParagraphs: Boolean)(implicit xml: XMLEventReader): Option[Seq[Seq[Word]]] = {
+  private def readNextWordPossiblyEmittingAParagraph(attrs: Map[String,String], state: State, guessParagraphs: Boolean)(implicit xml: XMLEventReader): Option[Iterable[Iterable[Word]]] = {
     val word = readContents
-    val posa = attrs("pos").head.text.split(",")
+    val posa = attrs("pos").split(",")
     val curStartX = posa(0).toInt
     val curEndX = posa(2).toInt
     val curMidX = (curStartX + curEndX) / 2
     val curStartY = posa(1).toInt
     val curEndY = posa(3).toInt
     //val curHeight = curEndY - curStartY
-    var ret: Option[Seq[Seq[Word]]] = None
+    var ret: Option[Iterable[Iterable[Word]]] = None
     if (state.currentLine.nonEmpty) {
-      val pos = Searching.search(state.currentLine).search(Word(curMidX,-1,-1,-1,-1,"")).insertionPoint - 1
+      val pos = state.currentLine.search(Word(curMidX,-1,-1,-1,-1,"")).insertionPoint - 1
       val Word(_,_,_,_, lastEndY, _) = state.currentLine(if (pos == -1) 0 else pos)
       if (curStartY > lastEndY || curMidX < state.currentLine.last.midX) // new line or new paragraph
         ret = state.testParagraphBreakAtEndOfLine(guessParagraphs)
@@ -237,7 +235,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     ret
   }
   
-  private def processParagraph(paragraph: Seq[Seq[Word]], d: Reuse): Unit = {
+  private def processParagraph(paragraph: Iterable[Iterable[Word]], d: Reuse): Unit = {
     //val t = ie.beginExclusiveTransaction()
     val issueStartOffset = d.issueContents.length
     var offset = issueStartOffset
@@ -306,7 +304,8 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       piw.addDocument(d.pd)
     }
   }
-  
+  import XMLEventReaderSupport._
+
   private def getXMLEventReaderWithCorrectEncoding(file: File): XMLEventReader = {
     val fis = new PushbackInputStream(new FileInputStream(file),2)
     var second = 0
@@ -334,9 +333,9 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     } while (first == '<' && (second=='?' || second=='!'))
     fis.unread(second)
     fis.unread(first)
-    new XMLEventReader(Source.fromInputStream(fis,encoding))
+    getXMLEventReader(fis,encoding)
   }
-  
+
   private def index(collectionID: String, file: File): Unit = {
     val d = tld.get
     d.clearOptionalIssueFields()
@@ -354,64 +353,64 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       while (xml.hasNext && !break) xml.next match {
 /*        case EvElemStart(_, "issue", attrs, _) =>
           d.issueIDFields.setValue(attrs("ID").head.text) */
-        case EvElemStart(_,"PSMID",_,_) =>
+        case EvElemStart(_,"PSMID",_) =>
           val psmID = readContents
           d.issueIDFields.setValue(psmID)
           d.issueIDEntry = StringBinding.stringToEntry(psmID)
-        case EvElemStart(_, "newspaperID", _, _) => d.newspaperIDFields.setValue(readContents)
-        case EvElemStart(_, "ocr", _, _) =>
+        case EvElemStart(_,"newspaperID",_) => d.newspaperIDFields.setValue(readContents)
+        case EvElemStart(_,"ocr",_) =>
           val confidence = readContents
           val confidenceAsInt = (confidence.substring(0,confidence.indexOf('.'))+confidence.substring(confidence.indexOf('.')+1,confidence.length)).toInt
           issueConfidence = confidenceAsInt
-        case EvElemStart(_, "searchableDateStart", _, _) =>
+        case EvElemStart(_,"searchableDateStart", _) =>
           val dateS = readContents
           val sdate = dateS.toInt
           edate = dateS.replace("00","99").toInt
           d.dateStartFields.setValue(sdate)
           d.dateEndFields.setValue(edate)
-        case EvElemStart(_, "searchableDateEnd", _, _) =>
+        case EvElemStart(_,"searchableDateEnd", _) =>
           edate = readContents.toInt
           d.dateEndFields.setValue(edate)
-        case EvElemStart(_, "dw", _, _) => d.dayOfWeekFields.setValue(readContents)
-        case EvElemStart(_, "is", _, _) => d.issueNumberFields.setValue(readContents)
-        case EvElemStart(_, "language", _, _) => new StringSSDVFieldPair("language").o(d.id).setValue(readContents)
+        case EvElemStart(_,"dw", _) => d.dayOfWeekFields.setValue(readContents)
+        case EvElemStart(_,"is", _) => d.issueNumberFields.setValue(readContents)
+        case EvElemStart(_,"language", _) => new StringSSDVFieldPair("language").o(d.id).setValue(readContents)
         case EvElemEnd(_,"metadatainfo") => break = true
         case _ =>
       }
       while (xml.hasNext) xml.next match {
-        case EvElemStart(_, "ocrLanguage", _, _) =>
+        case EvElemStart(_,"ocrLanguage", _) =>
           val lang = readContents
           new StringSSDVFieldPair("language").o(d.id).setValue(lang)
           d.languageFields.setValue(lang)
-        case EvElemStart(_, "pc", _, _) => d.issuePagesFields.setValue(readContents.toInt)
-        case EvElemStart(_, "ocr", _, _) =>
+        case EvElemStart(_,"pc", _) => d.issuePagesFields.setValue(readContents.toInt)
+        case EvElemStart(_,"ocr", _) =>
           val confidence = readContents
           val confidenceAsInt = (confidence.substring(0,confidence.indexOf('.'))+confidence.substring(confidence.indexOf('.')+1,confidence.length)).toInt
           articleConfidence += confidenceAsInt
           articleConfidenceCount += 1
           d.ocrConfidenceFields.setValue(confidenceAsInt)
-        case EvElemStart(_, "article", _, _) =>
+        case EvElemStart(_,"article", _) =>
           d.clearOptionalArticleFields()
           articleStartOffset = d.issueContents.length
           articleConfidence = 0
           articleConfidenceCount = 0
-        case EvElemStart(_, "id", _, _) => d.articleIDFields.setValue(readContents)
-        case EvElemStart(_, "au_composed", _, _) => d.authorFields.setValue(readContents)
-        case EvElemStart(_, "sc", _, _) => d.sectionFields.setValue(readContents)
-        case EvElemStart(_, "supptitle", _, _) => d.supplementTitleFields.setValue(readContents)
-        case EvElemStart(_, "ti", _, _) =>
+        case EvElemStart(_,"id", _) => d.articleIDFields.setValue(readContents)
+        case EvElemStart(_,"au_composed", _) => d.authorFields.setValue(readContents)
+        case EvElemStart(_,"sc", _) => d.sectionFields.setValue(readContents)
+        case EvElemStart(_,"supptitle", _) => d.supplementTitleFields.setValue(readContents)
+        case EvElemStart(_,"ti", _) =>
           val title = readContents
           d.titleFields.setValue(title)
           d.issueContents.append(title + "\n\n")
-        case EvElemStart(_, "ta", _, _) =>
+        case EvElemStart(_,"ta", _) =>
           val subtitle = readContents + "\n\n"
           d.issueContents.append(subtitle)
           d.subtitles.append(subtitle)
-        case EvElemStart(_, "il", attrs, _) =>
+        case EvElemStart(_,"il", attrs) =>
           d.illustrationsInArticle += 1
           d.illustrationsInIssue += 1
-          attrs("type").headOption.foreach(n => {
-            val f = new Field("containsGraphicOfType", n.text, notStoredStringFieldWithTermVectors)
+          attrs.get("type").foreach(n => {
+            val f = new Field("containsGraphicOfType", n, notStoredStringFieldWithTermVectors)
             d.id.addOptional(f)
             d.ad.addOptional(f)
           })
@@ -421,10 +420,10 @@ object BritishNewspaperIndexer extends OctavoIndexer {
             d.id.addOptional(f)
             d.ad.addOptional(f)
           }
-        case EvElemStart(_, "pi", _, _) =>
+        case EvElemStart(_,"pi", _) =>
           new StringSSDVFieldPair("pageID").o(d.ad,d.sd,d.pd).setValue(readContents)
           d.pagesInArticle += 1
-        case EvElemEnd(_, "article") =>
+        case EvElemEnd(_,"article") =>
           val article = d.articleContents.toString
           d.ocrConfidenceFields.setValue(if (articleConfidenceCount==0) 0 else articleConfidence/articleConfidenceCount)
           d.textField.setValue(article)
@@ -439,12 +438,12 @@ object BritishNewspaperIndexer extends OctavoIndexer {
           d.endOffsetFields.setValue(articleStartOffset + article.length)
           aiw.addDocument(d.ad)
           d.articlesInIssue += 1
-        case EvElemStart(_, "ct", _, _) => d.articleTypeFields.setValue(readContents)
-        case EvElemStart(_, "wd", attrs, _) => readNextWordPossiblyEmittingAParagraph(attrs, state, guessParagraphs = true) match {
+        case EvElemStart(_,"ct", _) => d.articleTypeFields.setValue(readContents)
+        case EvElemStart(_,"wd", attrs) => readNextWordPossiblyEmittingAParagraph(attrs, state, guessParagraphs = true) match {
           case Some(paragraph) => processParagraph(paragraph, d)
           case None =>
         }
-        case EvElemEnd(_, "p") =>
+        case EvElemEnd(_,"p") =>
           if (state.currentLine.nonEmpty) state.testParagraphBreakAtEndOfLine(true) match {
             case Some(paragraph) =>
               processParagraph(paragraph, d)

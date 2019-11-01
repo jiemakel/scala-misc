@@ -1,23 +1,21 @@
 import java.io.{File, FileInputStream, PrintWriter}
 import java.net.URL
 
+import XMLEventReaderSupport._
 import javax.imageio.ImageIO
 import org.rogach.scallop.ScallopConf
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-import scala.io.Source
-import scala.xml.MetaData
 import scala.xml.parsing.XhtmlEntities
-import scala.xml.pull._
 
 object METSALTO2Text extends ParallelProcessor {
 
   /** helper function to turn XML attrs back into text */
-  def attrsToString(attrs:MetaData) = {
-    attrs.length match {
+  def attrsToString(attrs:Map[String,String]) = {
+    attrs.size match {
       case 0 => ""
-      case _ => attrs.map( (m:MetaData) => " " + m.key + "='" + m.value +"'" ).reduceLeft(_+_)
+      case _ => attrs.toSeq.map(m => " " + m._1 + "='" + m._2 +"'").reduceLeft(_+_)
     }
   }
 
@@ -76,53 +74,53 @@ object METSALTO2Text extends ParallelProcessor {
       val iw = new PrintWriter(new File(destdirectory+"issue.txt"))
       var break = false
       for (file <- new File(directory.getPath).listFiles;if file.getName.startsWith("alto_")) {
-        val s = Source.fromFile(file,"UTF-8")
-        val xml = new XMLEventReader(s)
+        val s = new FileInputStream(file)
+        val xml = getXMLEventReader(s,"UTF-8")
         var composedBlock: Option[mutable.Buffer[String]] = None
         var page: Option[mutable.Buffer[String]] = None
         while (xml.hasNext) xml.next match {
-          case EvElemStart(_,"Page",attrs,_) =>
+          case EvElemStart(_,"Page",attrs) =>
             page = Some(new ArrayBuffer[String])
-            pageBlocks.put(attrs("ID").head.text,page.get)
-            altoBlockOrder.put(attrs("ID").head.text,0)
-          case EvElemStart(_,"ComposedBlock",attrs,_) =>
-            val composedBlockId = attrs("ID").head.text
+            pageBlocks.put(attrs("ID"),page.get)
+            altoBlockOrder.put(attrs("ID"),0)
+          case EvElemStart(_,"ComposedBlock",attrs) =>
+            val composedBlockId = attrs("ID")
             composedBlock = Some(new ArrayBuffer[String])
             page.foreach(_+=composedBlockId)
             composedBlocks.put(composedBlockId,composedBlock.get)
-            altoBlockOrder.put(composedBlockId,attrs("VPOS").head.text.toInt)
-          case EvElemStart(_,"GraphicalElement",attrs,_) =>
-            val imageBlock = attrs("ID").head.text
+            altoBlockOrder.put(composedBlockId,attrs("VPOS").toInt)
+          case EvElemStart(_,"GraphicalElement",attrs) =>
+            val imageBlock = attrs("ID")
             composedBlock.orElse(page).foreach(_+=imageBlock)
-            imageBlocks.put(imageBlock,Image(directory,file.getName.replace("alto_","").replace(".xml",""),Integer.parseInt(attrs("HPOS").head.text)*30/254,Integer.parseInt(attrs("VPOS").head.text)*300/254,Integer.parseInt(attrs("WIDTH").head.text)*300/254,Integer.parseInt(attrs("HEIGHT").head.text)*300/254))
-            altoBlockOrder.put(imageBlock,attrs("VPOS").head.text.toInt)
+            imageBlocks.put(imageBlock,Image(directory,file.getName.replace("alto_","").replace(".xml",""),Integer.parseInt(attrs("HPOS"))*30/254,Integer.parseInt(attrs("VPOS"))*300/254,Integer.parseInt(attrs("WIDTH"))*300/254,Integer.parseInt(attrs("HEIGHT"))*300/254))
+            altoBlockOrder.put(imageBlock,attrs("VPOS").toInt)
           case EvElemEnd(_,"ComposedBlock") =>
             composedBlock = None
           case EvElemEnd(_,"Page") =>
             page = None
-          case EvElemStart(_,"TextBlock",attrs,_) =>
+          case EvElemStart(_,"TextBlock",attrs) =>
             var text = ""
-            val textBlock = attrs("ID").head.text
+            val textBlock = attrs("ID")
             composedBlock.orElse(page).foreach(_+=textBlock)
             break = false
             while (xml.hasNext && !break) xml.next match {
-              case EvElemStart(_,"String",sattrs,_) if sattrs("SUBS_TYPE")!=null && sattrs("SUBS_TYPE").head.text=="HypPart1" => text+=sattrs("SUBS_CONTENT").head.text
-              case EvElemStart(_,"String",sattrs,_) if sattrs("SUBS_TYPE")!=null && sattrs("SUBS_TYPE").head.text=="HypPart2" =>
-              case EvElemStart(_,"String",sattrs,_) => text+=sattrs("CONTENT").head.text
-              case EvElemStart(_,"SP",_,_) => text+=" "
+              case EvElemStart(_,"String",sattrs) if sattrs.get("SUBS_TYPE").contains("HypPart1") => text+=sattrs("SUBS_CONTENT")
+              case EvElemStart(_,"String",sattrs) if sattrs.get("SUBS_TYPE").contains("HypPart2") =>
+              case EvElemStart(_,"String",sattrs) => text+=sattrs("CONTENT")
+              case EvElemStart(_,"SP",_) => text+=" "
               case EvElemEnd(_,"TextLine") => text+="\n"
               case EvElemEnd(_,"TextBlock") => break = true
               case _ =>
             }
             textBlocks.put(textBlock,text)
-            altoBlockOrder.put(textBlock,attrs("VPOS").head.text.toInt)
+            altoBlockOrder.put(textBlock,attrs("VPOS").toInt)
           case _ =>
         }
         s.close()
       }
       // here, we start processing the actual METS file
-      val s = Source.fromFile(metsFile,"UTF-8")
-      val xml = new XMLEventReader(s)
+      val s = new FileInputStream(metsFile)
+      val xml = getXMLEventReader(s,"UTF-8")
       var current = Level("","","",new StringBuilder(),serialize = false)
       var blocks = 0
       val blockOrder = new mutable.HashMap[String,Int]
@@ -152,18 +150,18 @@ object METSALTO2Text extends ParallelProcessor {
       val articleMetadata: mutable.HashMap[String,String] = new mutable.HashMap
       while (xml.hasNext) xml.next match {
         // first extract article metadata into a hashmap
-        case EvElemStart(_,"dmdSec", attrs, _) =>
-          val entity = attrs("ID").head.text
+        case EvElemStart(_,"dmdSec", attrs) =>
+          val entity = attrs("ID")
           break = false
           while (xml.hasNext && !break) xml.next match {
-            case EvElemStart(_,"mods",_,_) => break = true
+            case EvElemStart(_,"mods",_) => break = true
             case _ =>
           }
           break = false
           var indent = ""
           var metadata = ""
           while (xml.hasNext && !break) xml.next match {
-            case EvElemStart(_, label, sattrs, _) =>
+            case EvElemStart(_, label, sattrs) =>
               metadata+= indent + "<" + label + attrsToString(sattrs) + ">\n"
               indent += "  "
             case EvText(text) => if (text.trim!="") metadata += indent + text.trim + "\n"
@@ -177,13 +175,13 @@ object METSALTO2Text extends ParallelProcessor {
               metadata+=indent + "</"+label+">\n"
           }
           if (!metadata.trim.isEmpty) articleMetadata.put(entity,metadata)
-        case EvElemStart(_,"structMap", attrs, _) if attrs("TYPE").head.text=="LOGICAL" =>
+        case EvElemStart(_,"structMap", attrs) if attrs("TYPE")=="LOGICAL" =>
           // process the logical structure hierarchically
           val counts = new mutable.HashMap[String,Int]
           var hierarchy = Seq(current)
           while (xml.hasNext) xml.next match {
-            case EvElemStart(_,"div", sattrs, _) =>
-              val divType =  sattrs("TYPE").head.text.toLowerCase
+            case EvElemStart(_,"div", sattrs) =>
+              val divType =  sattrs("TYPE").toLowerCase
               divType match { //handle various hierarchy levels differently. First, some Markdown
                 case "title" | "headline" | "title_of_work" | "continuation_headline" =>
                   current = Level(divType,"",current.fileNamePrefix,current.content,serialize = false)
@@ -204,17 +202,17 @@ object METSALTO2Text extends ParallelProcessor {
                   val typeCount = divType match {
                     case "front" => ""
                     case "back" => ""
-                    case _ if attrs("DMDID")!=null => "_"+attrs("DMDID").head.text.replaceFirst("^[^\\d]*","")
+                    case _ if attrs("DMDID")!=null => "_"+attrs("DMDID").replaceFirst("^[^\\d]*","")
                     case _ =>
                       val n = counts.getOrElse(divType,0)+1
                       counts.put(divType,n)
                       "_"+n
                   }
-                  current = Level(divType,if (attrs("DMDID")!=null) attrs("DMDID").head.text else "",(if (current.fileNamePrefix!="") current.fileNamePrefix+"_" else "")+divType+typeCount, new StringBuilder(),serialize=true)
+                  current = Level(divType,if (attrs("DMDID")!=null) attrs("DMDID") else "",(if (current.fileNamePrefix!="") current.fileNamePrefix+"_" else "")+divType+typeCount, new StringBuilder(),serialize=true)
               }
               hierarchy = hierarchy :+ current
-            case EvElemStart(_,"area",sattrs,_) =>
-              processArea(sattrs("BEGIN").head.text)
+            case EvElemStart(_,"area",sattrs) =>
+              processArea(sattrs("BEGIN"))
             case EvElemEnd(_,"div") =>
               val hc = hierarchy.last
               hierarchy = hierarchy.dropRight(1)

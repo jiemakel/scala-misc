@@ -1,17 +1,16 @@
-import java.io.File
+import java.io.{File, FileInputStream}
 import java.text.BreakIterator
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
+import javax.xml.stream.XMLEventReader
 import org.apache.lucene.document.{Field, NumericDocValuesField}
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.search.{Sort, SortField}
 import org.rogach.scallop._
 
-import scala.io.Source
 import scala.language.{postfixOps, reflectiveCalls}
 import scala.xml.parsing.XhtmlEntities
-import scala.xml.pull._
 
 object DelpherIndexer extends OctavoIndexer {
 
@@ -77,19 +76,21 @@ object DelpherIndexer extends OctavoIndexer {
   val tld = new ThreadLocal[Reuse] {
     override def initialValue() = new Reuse()
   }
-  
+
+  import XMLEventReaderSupport._
+
   private def readContents(implicit xml: XMLEventReader): String = {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
-      case EvElemStart(_,_,_,_) => return null
+      case EvElemStart(_,_,_) => return null
       case EvText(text) => content.append(text)
-      case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
+      case EvEntityRef(entity) => XhtmlEntities.entMap.get(entity) match {
         case Some(chr) => content.append(chr)
         case _ =>
-          logger.warn("Encountered unknown entity "+er.entity)
+          logger.warn("Encountered unknown entity "+entity)
           content.append('[')
-          content.append(er.entity)
+          content.append(entity)
           content.append(']')
       }
       case EvComment(comment) if comment == " unknown entity apos; " => content.append('\'')
@@ -141,18 +142,18 @@ object DelpherIndexer extends OctavoIndexer {
   private def index(file: File): Unit = {
     implicit val d = tld.get
     d.clearOptionalIssueFields()
-    val s = Source.fromFile(file)
-    implicit var xml = new XMLEventReader(s)
+    val fis = new FileInputStream(file)
+    implicit var xml = getXMLEventReader(fis)
     try {
       var break = false
       while (xml.hasNext && !break) xml.next match {
-        case EvElemStart("didl", "Item",attrs,_) =>
-          d.issueIDFields.setValue(attrs.asAttrMap("dc:identifier"))
-        case EvElemStart("dc","title",_,_) =>
+        case EvElemStart("didl", "Item",attrs) =>
+          d.issueIDFields.setValue(attrs("dc:identifier"))
+        case EvElemStart("dc","title",_) =>
           d.newspaperFields.setValue(readContents)
-        case EvElemStart("dc","identifier",attrs,_) if attrs.asAttrMap.get("xsi:type").contains("dcx:PPN") =>
+        case EvElemStart("dc","identifier",attrs) if attrs.get("xsi:type").contains("dcx:PPN") =>
           d.newspaperIDFields.setValue(readContents)
-        case EvElemStart("dc","date",_,_) =>
+        case EvElemStart("dc","date",_) =>
           val dateS = readContents.replaceAllLiterally("-","")
           val sdate = dateS.toInt
           d.dateFields.setValue(sdate)
@@ -160,16 +161,18 @@ object DelpherIndexer extends OctavoIndexer {
         case _ =>
       }
       while (xml.hasNext) xml.next() // stupid XMLEventReader.stop() deadlocks and leaves threads hanging
-      s.close()
+      fis.close()
       for (articleFile <- file.getParentFile.listFiles.filter(_.getName.endsWith("_articletext.xml")).sortBy(_.getName)) {
         d.clearOptionalArticleFields()
         d.articleIDFields.setValue(articleFile.getName.replaceAllLiterally("_articletext.xml",""))
-        xml = new XMLEventReader(Source.fromFile(articleFile))
+        val fis = new FileInputStream(articleFile)
+        xml = getXMLEventReader(fis)
         while (xml.hasNext) xml.next match {
-          case EvElemStart(_,"title",_,_) => d.titleFields.setValue(readContents)
-          case EvElemStart(_,"p",_,_) => processParagraph(readContents)
+          case EvElemStart(_,"title",_) => d.titleFields.setValue(readContents)
+          case EvElemStart(_,"p",_) => processParagraph(readContents)
           case _ =>
         }
+        fis.close()
         val article = d.articleContents.toString
         d.textField.setStringValue(article)
         d.lengthFields.setValue(article.length)

@@ -1,41 +1,57 @@
-import java.io.File
+import java.io.{File, FileInputStream, InputStream}
 import java.nio.ByteBuffer
 import java.text.BreakIterator
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
-import com.bizo.mighty.csv.CSVReader
+import BritishNewspaperIndexer.logger
 import com.brein.time.timeintervals.collections.ListIntervalCollection
 import com.brein.time.timeintervals.indexes.IntervalTreeBuilder.IntervalType
 import com.brein.time.timeintervals.indexes.{IntervalTree, IntervalTreeBuilder}
 import com.brein.time.timeintervals.intervals.IntegerInterval
+import com.github.tototoshi.csv.CSVReader
 import com.sleepycat.je._
+import javax.xml.stream.{XMLEventReader, XMLInputFactory}
+import javax.xml.stream.events.{Characters, Comment, EndElement, EntityReference, StartElement}
 import org.apache.lucene.document.{Document, Field, NumericDocValuesField}
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.search.{Sort, SortField}
 import org.rogach.scallop._
 
-import scala.collection.JavaConverters._
+import scala.util.Try
 import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
 import scala.language.{postfixOps, reflectiveCalls}
 import scala.xml.parsing.XhtmlEntities
-import scala.xml.pull._
+import scala.jdk.CollectionConverters._
+
 
 object ECCOIndexer extends OctavoIndexer {
-  
+
   private def readContents(implicit xml: XMLEventReader): String = {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
-      case EvElemStart(_,_,_,_) => return null
-      case EvText(text) => content.append(text)
-      case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
+      case _: StartElement => return null
+      case text: Characters => content.append(text.getData)
+      case er: EntityReference => XhtmlEntities.entMap.get(er.getName) match {
         case Some(chr) => content.append(chr)
-        case _ => content.append(er.entity)
+        case _ =>
+          logger.warn("Encountered unknown entity "+er.getName)
+          content.append('[')
+          content.append(er.getName)
+          content.append(']')
       }
-      case EvComment(_) => 
-      case EvElemEnd(_,_) => break = true 
+      case c: Comment if c.getText == " unknown entity apos; " => content.append('\'')
+      case c: Comment if c.getText.startsWith(" unknown entity") =>
+        val entity = c.getText.substring(16, c.getText.length - 2)
+        logger.warn("Encountered unknown entity "+entity)
+        content.append('[')
+        content.append(entity)
+        content.append(']')
+      case c: Comment =>
+        logger.debug("Encountered comment: "+c.getText)
+      case _: EndElement => break = true
     }
     content.toString
   }
@@ -164,13 +180,17 @@ object ECCOIndexer extends OctavoIndexer {
   private val treeBuilder = IntervalTreeBuilder.newBuilder()
     .usePredefinedType(IntervalType.INTEGER)
     .collectIntervals(_ => new ListIntervalCollection())
-  
+
+  private val xmlf = XMLInputFactory.newInstance()
+
+  import XMLEventReaderSupport._
+
   private def index(id: String, file: File): Unit = {
     val filePrefix = file.getName.replace("_metadata.xml","")
     logger.info("Processing: "+file.getPath.replace("_metadata.xml","*"))
     var totalPages = 0
-    val xmls = Source.fromFile(file)
-    implicit val xml = new XMLEventReader(xmls)
+    val xmls: java.io.InputStream = new FileInputStream(file)
+    implicit val xml: XMLEventReader = xmlf.createXMLEventReader(xmls)
     val r = tld.get
     r.clearOptionalDocumentFields()
     r.collectionIDFields.setValue(id)
@@ -178,7 +198,7 @@ object ECCOIndexer extends OctavoIndexer {
     var estcID: String = null
     val documentFragments: IntervalTree = treeBuilder.build()
     while (xml.hasNext) xml.next match {
-      case EvElemStart(_,"documentID",_,_) | EvElemStart(_,"PSMID",_,_) =>
+      case EvElemStart(_,"documentID",_) =>
         documentID = trimSpace(readContents)
         r.documentIDFields.setValue(documentID)
         r.bcbb.putLong(0, documentID.toLong)
@@ -190,58 +210,59 @@ object ECCOIndexer extends OctavoIndexer {
             documentFragments.add(new ReuseInterval(vbb.getInt,vbb.getInt,vbb.getLong))
           }
         }
-      case EvElemStart(_,"ESTCID",_,_) =>
-        estcID = trimSpace(readContents)
-        r.estcIDFields.setValue(estcID)
-      case EvElemStart(_,"bibliographicID",attr,_) if attr("type").head.text == "ESTC" => // ECCO2
-        estcID = trimSpace(readContents)
-        r.estcIDFields.setValue(estcID)
-      case EvElemStart(_,"pubDate",_,_) => trimSpace(readContents) match {
-        case null => // ECCO2
-          var break = false
-          var endDateFound = false
-          var startDate: String = null
-          while (xml.hasNext && !break) {
-            xml.next match {
-              case EvElemStart(_,"pubDateStart",_,_) => trimSpace(readContents) match {
-                case any =>
-                  startDate = any
-                  r.dateStartFields.setValue(any.toInt)
+        case EvElemStart(_,"ESTCID",_) =>
+          estcID = trimSpace(readContents)
+          r.estcIDFields.setValue(estcID)
+        case EvElemStart(_,"bibliographicID",attrs) if attrs.get("type").contains("ESTC") => // ECCO2
+          estcID = trimSpace(readContents)
+          r.estcIDFields.setValue(estcID)
+        case EvElemStart(_,"pubDate",_) => trimSpace(readContents) match {
+          case null => // ECCO2
+            var break = false
+            var endDateFound = false
+            var startDate: String = null
+            while (xml.hasNext && !break) {
+              xml.next match {
+                case EvElemStart(_,"pubDateStart",_) => trimSpace(readContents) match {
+                  case any =>
+                    startDate = any
+                    r.dateStartFields.setValue(any.toInt)
+                }
+                case EvElemStart(_,"pubDateEnd",_) => trimSpace(readContents) match {
+                  case any =>
+                    endDateFound = true
+                    r.dateEndFields.setValue(any.replaceAll("00","99").toInt)
+                }
+                case EvElemEnd(_,"pubDate") => break = true
+                case _ =>
               }
-              case EvElemStart(_,"pubDateEnd",_,_) => trimSpace(readContents) match {
-                case any =>
-                  endDateFound = true
-                  r.dateEndFields.setValue(any.replaceAll("00","99").toInt)
-              }
-              case EvElemEnd(_,"pubDate") => break = true
-              case _ => 
             }
-          }
-          if (!endDateFound && startDate != null) {
-            r.dateEndFields.setValue(startDate.replaceAll("00","99").toInt)
-          }
-        case "" =>
-        case "1809" =>
-          r.dateStartFields.setValue(18090000)
-          r.dateEndFields.setValue(18099999)
-        case any => 
-          r.dateStartFields.setValue(any.toInt)
-          r.dateEndFields.setValue(any.replaceAll("01","99").toInt)
-      }
-      case EvElemStart(_,"totalPages",_,_) =>
-        val tp = trimSpace(readContents)
-        if (!tp.isEmpty) {
-          totalPages = tp.toInt
-          r.totalPagesFields.setValue(totalPages)
+            if (!endDateFound && startDate != null) {
+              r.dateEndFields.setValue(startDate.replaceAll("00","99").toInt)
+            }
+          case "" =>
+          case "1809" =>
+            r.dateStartFields.setValue(18090000)
+            r.dateEndFields.setValue(18099999)
+          case any =>
+            r.dateStartFields.setValue(any.toInt)
+            r.dateEndFields.setValue(any.replaceAll("01","99").toInt)
         }
-      case EvElemStart(_,"language",_,_) =>
-        r.languageFields.setValue(trimSpace(readContents))
-      case EvElemStart(_,"module",_,_) =>
-        r.moduleFields.setValue(trimSpace(readContents))
-      case EvElemStart(_,"fullTitle",_,_) => 
-        r.fullTitleFields.setValue(trimSpace(readContents))
+        case EvElemStart(_,"totalPages",_) =>
+          val tp = trimSpace(readContents)
+          if (!tp.isEmpty) {
+            totalPages = tp.toInt
+            r.totalPagesFields.setValue(totalPages)
+          }
+        case EvElemStart(_,"language",_) =>
+          r.languageFields.setValue(trimSpace(readContents))
+        case EvElemStart(_,"module",_) =>
+          r.moduleFields.setValue(trimSpace(readContents))
+        case EvElemStart(_,"fullTitle",_) =>
+          r.fullTitleFields.setValue(trimSpace(readContents))
       case _ => 
     }
+    xml.close()
     xmls.close()
     if (documentID==null) logger.error("No document ID for "+file)
     if (estcID==null) logger.error("No ESTC ID for "+file)
@@ -277,7 +298,7 @@ object ECCOIndexer extends OctavoIndexer {
       r.documentPartIdFields.setValue(documentparts.incrementAndGet)
       r.documentPartTypeFields.setValue(fileRegex.findFirstMatchIn(file.getName).get.group(1))
       if (new File(file.getPath.replace(".txt","-graphics.csv")).exists)
-        for (row <- CSVReader(file.getPath.replace(".txt","-graphics.csv"))) {
+        for (row <- CSVReader.open(file.getPath.replace(".txt","-graphics.csv"))) {
           val gtype = if (row(1)=="") "unknown" else row(1)
           val f = new Field("containsGraphicOfType",gtype, notStoredStringFieldWithTermVectors)
           r.dpd.addOptional(f)

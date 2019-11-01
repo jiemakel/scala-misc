@@ -1,10 +1,9 @@
-import java.io.File
+import java.io.{File, FileInputStream}
 import java.nio.ByteBuffer
 import java.text.BreakIterator
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
-import com.bizo.mighty.csv.CSVReader
 import com.brein.time.timeintervals.collections.ListIntervalCollection
 import com.brein.time.timeintervals.indexes.{IntervalTree, IntervalTreeBuilder}
 import com.brein.time.timeintervals.indexes.IntervalTreeBuilder.IntervalType
@@ -20,7 +19,9 @@ import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
 import scala.language.{postfixOps, reflectiveCalls}
 import scala.xml.parsing.XhtmlEntities
-import scala.xml.pull._
+import XMLEventReaderSupport._
+import com.github.tototoshi.csv.CSVReader
+import javax.xml.stream.XMLEventReader
 
 object EEBOIndexer extends OctavoIndexer {
 
@@ -28,11 +29,11 @@ object EEBOIndexer extends OctavoIndexer {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
-      case EvElemStart(_,_,_,_) => return null
+      case EvElemStart(_,_,_) => return null
       case EvText(text) => content.append(text)
-      case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
+      case EvEntityRef(entity) => XhtmlEntities.entMap.get(entity) match {
         case Some(chr) => content.append(chr)
-        case _ => content.append(er.entity)
+        case _ => content.append(entity)
       }
       case EvComment(_) =>
       case EvElemEnd(_,_) => break = true
@@ -185,8 +186,8 @@ object EEBOIndexer extends OctavoIndexer {
   private def index(cid: String, filePrefix: String): Unit = {
     logger.info("Processing: "+filePrefix+"*")
     val did = filePrefix.substring(filePrefix.lastIndexOf('/')+1)
-    val xmls = Source.fromFile(filePrefix+".headed.metadata.xml")
-    implicit val xml = new XMLEventReader(xmls)
+    val xmls = new FileInputStream(filePrefix+".headed.metadata.xml")
+    implicit val xml = getXMLEventReader(xmls)
     val r = tld.get
     r.clearOptionalDocumentFields()
     r.collectionIDFields.setValue(cid)
@@ -207,19 +208,19 @@ object EEBOIndexer extends OctavoIndexer {
     }
     var estcID: String = null
     while (xml.hasNext) xml.next match {
-      case EvElemStart(_,"IDNO",attr,_) if attr("TYPE").headOption.exists(_.text == "stc") =>
+      case EvElemStart(_,"IDNO",attr) if attr.get("TYPE").contains("stc") =>
         val tdocumentID = trimSpace(readContents)
         if (tdocumentID.startsWith("ESTC ")) {
           estcID = tdocumentID.substring(5)
           r.estcIDFields.setValue(estcID)
         }
-      case EvElemStart(_,"VID",_,_) =>
+      case EvElemStart(_,"VID",_) =>
         r.vidFields.setValue(trimSpace(readContents))
-      case EvElemStart(_,"LANGUSAGE",attr,_) =>
-        r.languageFields.setValue(attr("ID").head.text)
-      case EvElemStart(_,"TITLE",attr,_) if attr("TYPE") != null && attr("TYPE").head.text == "alt" =>
+      case EvElemStart(_,"LANGUSAGE",attr) =>
+        r.languageFields.setValue(attr("ID"))
+      case EvElemStart(_,"TITLE",attr) if attr("TYPE") != null && attr("TYPE") == "alt" =>
         r.addAltTitle(trimSpace(readContents))
-      case EvElemStart(_,"TITLE",attr,_) if attr("TYPE") != null && attr("TYPE").head.text == "245" =>
+      case EvElemStart(_,"TITLE",attr) if attr("TYPE") != null && attr("TYPE") == "245" =>
         r.fullTitleFields.setValue(trimSpace(readContents))
       case _ =>
     }
@@ -256,7 +257,7 @@ object EEBOIndexer extends OctavoIndexer {
         r.documentPartIdFields.setValue(documentparts.incrementAndGet)
         r.documentPartTypeFields.setValue(partType)
         if (new File(file.getPath.replace(".txt", "-graphics.csv")).exists)
-          for (row <- CSVReader(file.getPath.replace(".txt", "-graphics.csv"))) {
+          for (row <- CSVReader.open(file.getPath.replace(".txt", "-graphics.csv"))) {
             val gtype = if (row(1) == "") "unknown" else row(1)
             val f = new Field("containsGraphicOfType", gtype, notStoredStringFieldWithTermVectors)
             r.dpd.addOptional(f)

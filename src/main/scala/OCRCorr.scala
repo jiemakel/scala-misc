@@ -1,15 +1,7 @@
-import java.io.File
-import scala.collection.mutable.HashMap
-import scala.io.Source
-import scala.xml.pull.XMLEventReader
-import scala.xml.pull.EvElemStart
-import scala.collection.mutable.ArrayBuffer
-import scala.collection.mutable.Buffer
-import org.apache.commons.math3.stat.correlation.PearsonsCorrelation
-import org.apache.commons.math3.stat.correlation.SpearmansCorrelation
-import org.apache.commons.math3.stat.correlation.KendallsCorrelation
-import com.bizo.mighty.csv.CSVDictReader
-import com.bizo.mighty.csv.CSVReaderSettings
+import com.github.tototoshi.csv.{CSVReader, DefaultCSVFormat}
+import org.apache.commons.math3.stat.correlation.{KendallsCorrelation, PearsonsCorrelation, SpearmansCorrelation}
+
+import scala.collection.mutable.{ArrayBuffer, Buffer, HashMap}
 
 object OCRCorr {
   def main(args: Array[String]): Unit = {
@@ -21,8 +13,10 @@ object OCRCorr {
     val charConfidenceByYear = new HashMap[String,Buffer[Double]]
     val isWordCorrectByYear = new HashMap[String,Buffer[Double]]
     val isCharCorrectByYear = new HashMap[String,Buffer[Double]]
-    val wr = CSVDictReader("ocr_comparison_gt2.csv")(CSVReaderSettings.Standard.copy(escapechar='¤'))
-    for (r <- wr) {
+    val wr = CSVReader.open("ocr_comparison_gt2.csv")(new DefaultCSVFormat {
+      override val escapeChar='¤'
+    })
+    for (r <- wr.iteratorWithHeaders) {
       val issn = r("PAGENAME").replaceFirst("_.*","")
       val year = r("PAGENAME").replaceFirst(".*?_","").replaceFirst("-.*","")
       val isWordCorrect1 = isWordCorrectByISSN.getOrElseUpdate(issn,new ArrayBuffer[Double])

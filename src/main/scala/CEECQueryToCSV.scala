@@ -1,8 +1,9 @@
 import org.apache.jena.query.QueryExecutionFactory
-import com.bizo.mighty.csv.CSVReader
 import org.apache.jena.query.ParameterizedSparqlString
+
 import collection.JavaConverters._
-import com.bizo.mighty.csv.CSVWriter
+import com.github.tototoshi.csv.{CSVReader, CSVWriter}
+
 import scala.collection.mutable.ArrayBuffer
 
 object CEECQueryToCSV {
@@ -17,10 +18,10 @@ object CEECQueryToCSV {
 "  FILTER (REGEX(?fulltext, ?regexp,\"i\") && xsd:int(?year)>=1680)\n"+
 "}");
   def main(args: Array[String]): Unit = {
-    val r = CSVReader("fica-groupedWords-1680-.csv")
-    val wr = CSVWriter("fica-groupedWords-unclear.csv")
-    wr.write(Seq("id","offset","before","word","after","URL"))
-    for (line <- r; if line(2)=="unclear") {
+    val r = CSVReader.open("fica-groupedWords-1680-.csv")
+    val wr = CSVWriter.open("fica-groupedWords-unclear.csv")
+    wr.writeRow(Seq("id","offset","before","word","after","URL"))
+    for (line <- r) if (line(2)=="unclear") {
       pss.setLiteral("query", line(1))
       val regex = "(?i)((?:\\W|^)" + line(1).replace("[-\\/\\^$*+?.()|[\\]{}]", "\\$&") + "(?:\\W|$))"
       pss.setLiteral("regexp",regex)
@@ -55,7 +56,7 @@ object CEECQueryToCSV {
             after = parts(i)
             lastBefore = parts(i)
           }
-          wr.write(Seq(id.substring(26),""+pos, before.replace("\n"," "),line(1),after.replace("\n"," "),"http://h89.it.helsinki.fi/ceec/func/letterFunc.jsp?letterID="+id.substring(26)))
+          wr.writeRow(Seq(id.substring(26),""+pos, before.replace("\n"," "),line(1),after.replace("\n"," "),"http://h89.it.helsinki.fi/ceec/func/letterFunc.jsp?letterID="+id.substring(26)))
           pos += parts(i - 1).length + parts(i).length
         }
       }

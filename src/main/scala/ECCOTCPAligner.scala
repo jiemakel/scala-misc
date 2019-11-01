@@ -2,11 +2,12 @@ import java.io.File
 import java.nio.file.{Files, Paths}
 
 import au.com.bytecode.opencsv.CSVParser
-import com.bizo.mighty.csv._
+import com.github.tototoshi.csv.{CSVReader, CSVWriter, DefaultCSVFormat}
 import org.rogach.scallop.ScallopConf
 
 import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
+import scala.util.Using
 
 object ECCOTCPAligner extends ParallelProcessor {
 
@@ -35,12 +36,12 @@ object ECCOTCPAligner extends ParallelProcessor {
     }.filter(_._1>=0)
   }
 
-  def process(tcpp: String, galepagerows: ArrayBuffer[Row], galef: String, galew: CSVWriter,tcpid: String, galeid: String, llastline: String): String = {
+  def process(tcpp: String, galepagerows: ArrayBuffer[Seq[String]], galef: String, galew: CSVWriter,tcpid: String, galeid: String, llastline: String): String = {
     if (!Files.exists(Paths.get(tcpp + galepagerows(0)(0) + ".txt"))) {
       logger.warn(tcpp + galepagerows(0)(0) + ".txt does not exist for " + galef + "!")
       ""
     } else {
-      val tcppagelines = Seq(llastline) ++ Source.fromFile(tcpp + galepagerows(0)(0) + ".txt").getLines().toSeq
+      val tcppagelines = Seq(llastline) ++ Using(Source.fromFile(tcpp + galepagerows(0)(0) + ".txt"))(_.getLines).get
       val lastline = tcppagelines.last
       val tcppage = tcppagelines.mkString("\n")
       val galepage = galepagerows.map(_ (0)).mkString("\n")
@@ -61,7 +62,7 @@ object ECCOTCPAligner extends ParallelProcessor {
         }
         val optimalendind2 = if (optimalendindincr != -1) optimalendind + optimalendindincr else optimalendind
         val silverrow = tcppage.substring(optimalind, optimalendind).trim
-        galew.write(Seq(tcpid,galeid,galerow.head,""+(index+1)) ++ galerow.tail ++ Seq(silverrow, "" + optimalcost, "" + optimalind, "" + (optimalind != optimalind2), "" + (optimalendind != optimalendind2)))
+        galew.writeRow(Seq(tcpid,galeid,galerow.head,""+(index+1)) ++ galerow.tail ++ Seq(silverrow, "" + optimalcost, "" + optimalind, "" + (optimalind != optimalind2), "" + (optimalendind != optimalendind2)))
         galepageoffset += rowtext.length + 1
       }
       lastline
@@ -75,12 +76,15 @@ object ECCOTCPAligner extends ParallelProcessor {
     var tcpid = tcpp.substring(tcpp.lastIndexOf('/')+1)
     tcpid = tcpid.substring(0,tcpid.indexOf('_'))
     val galed = dest+"/"+galef.substring(galef.lastIndexOf('/')+1).replaceAllLiterally(".csv","-silver.csv")
-    val galew = CSVWriter(galed)(CSVWriterSettings.Standard.copy(escapechar = '\\'))
+    val galew = CSVWriter.open(galed)(new DefaultCSVFormat {
+      override val escapeChar = '\\'
+    })
     var page = "0"
-    val galepagerows = new ArrayBuffer[Row]
+    val galepagerows = new ArrayBuffer[Seq[String]]
     var lastline = ""
-    for (row <- CSVReader(galef)(CSVReaderSettings.Standard.copy(escapechar =  CSVParser.NULL_CHARACTER))) {
-      if (row.length!=6) logger.error("Bad row: "+row.toSeq)
+    for (row <- CSVReader.open(galef)(new DefaultCSVFormat {
+      override val escapeChar = CSVParser.NULL_CHARACTER })) {
+      if (row.length!=6) logger.error("Bad row: "+row)
       else {
         if (page!=row(0)) {
           if (page != "0")
@@ -105,7 +109,7 @@ object ECCOTCPAligner extends ParallelProcessor {
     val dest = opts.dest()
     new File(dest).mkdirs()
     feedAndProcessFedTasksInParallel(() => {
-      for ((tcpp,galef) <- Source.fromFile(opts.partsFile()).getLines.map(l => {
+      for ((tcpp,galef) <- Using(Source.fromFile(opts.partsFile()))(_.getLines).get.map(l => {
         val s = l.indexOf(' ')
         (l.substring(0,s),l.substring(s+1))
       })) addTask(tcpp+":"+galef,() => process(tcpp,galef,dest))

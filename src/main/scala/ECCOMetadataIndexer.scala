@@ -1,6 +1,6 @@
 import java.nio.file.FileSystems
 
-import com.bizo.mighty.csv.CSVReader
+import com.github.tototoshi.csv.CSVReader
 import org.apache.lucene.index.{DirectoryReader, DocValues, IndexWriter}
 import org.apache.lucene.store.MMapDirectory
 
@@ -38,7 +38,7 @@ object ECCOMetadataIndexer extends OctavoIndexer {
   var mseniw: IndexWriter = null.asInstanceOf[IndexWriter]
   var mpiw: IndexWriter = null.asInstanceOf[IndexWriter]
   
-  def process(path: String, metadata: Map[String, Array[String]], iw: IndexWriter): Unit = {
+  def process(path: String, metadata: Map[String, Seq[String]], iw: IndexWriter): Unit = {
     val r = new Reuse()
     val ir = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault.getPath(path))).leaves().get(0).reader
     logger.info("Going to process "+ir.maxDoc+" documents in "+path+".")
@@ -102,17 +102,17 @@ object ECCOMetadataIndexer extends OctavoIndexer {
       val hasWorkIndex = opt[Boolean]()
       verify()
     }
-    val r = CSVReader(opts.metadata())
-    val fields = r.next()
+    val r = CSVReader.open(opts.metadata())
+    val fields = r.readNext().get
     val NA = "NA"
     val TRUE = "TRUE"
     val FALSE = "FALSE"
-    val metadata = r.map(row => (row(98),row.map(_ match {
+    val metadata = r.iterator.map(row => (row(98),row.map{
       case "NA" => NA
       case "TRUE" => TRUE
       case "FALSE" => FALSE
       case any => any
-    }))).toMap
+    })).toMap
     logger.info("Metadata loaded for "+metadata.size+" ids")
     val parts = if (opts.hasWorkIndex()) 6 else 5
     mdiw = iw(opts.index()+"/mdindex", null, opts.indexMemoryMb()/parts)

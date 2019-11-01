@@ -1,43 +1,14 @@
 
-import com.bizo.mighty.csv.CSVReader
-import java.net.URLEncoder
-import org.apache.jena.riot.RDFFormat
-import org.apache.jena.riot.RDFDataMgr
-import java.io.FileOutputStream
-import com.bizo.mighty.csv.CSVDictReader
-import com.bizo.mighty.csv.CSVReaderSettings
-import scala.io.Source
-import scala.xml.pull.XMLEventReader
-import scala.xml.pull.EvElemStart
-import scala.xml.pull.EvText
-import scala.xml.pull.EvElemEnd
-import scala.xml.MetaData
-import scala.collection.mutable.HashMap
-import scala.collection.mutable.HashSet
-import java.io.PrintWriter
-import java.io.File
-import javax.imageio.ImageIO
-import scala.concurrent.Future
-import scala.concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.Await
-import scala.concurrent.duration._
-import scala.xml.pull.EvEntityRef
-import scala.xml.parsing.XhtmlEntities
-import scala.collection.mutable.Buffer
-import scala.collection.mutable.ArrayBuffer
+import java.io.{File, FileInputStream, PrintWriter, PushbackInputStream}
+
+import XMLEventReaderSupport._
 import com.typesafe.scalalogging.LazyLogging
 
-import scala.xml.Elem
-import scala.xml.factory.XMLLoader
-import javax.xml.parsers.SAXParser
-import java.io.FileInputStream
-import java.io.InputStreamReader
-import java.io.BufferedReader
-import java.io.FileReader
-import scala.io.BufferedSource
-import scala.xml.pull.EvComment
-import org.apache.jena.atlas.io.PeekInputStream
-import java.io.PushbackInputStream
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.{Await, Future}
+import scala.concurrent.duration._
+import scala.util.{Failure, Success}
+import scala.xml.MetaData
 
 object ECCOXML2PassimJSON extends LazyLogging {
   
@@ -66,7 +37,7 @@ object ECCOXML2PassimJSON extends LazyLogging {
     } while (first == '<' && (second=='?' || second=='!'))
     fis.unread(second)
     fis.unread(first)
-    val xml = new XMLEventReader(Source.fromInputStream(fis,"ISO-8859-1"))
+    val xml = getXMLEventReader(fis,"ISO-8859-1")
     val dir = file.getAbsoluteFile.getParent+"/extracted/"
     new File(dir).mkdir()
     val prefix = dir+file.getName.replaceAllLiterally(".xml","")
@@ -74,7 +45,7 @@ object ECCOXML2PassimJSON extends LazyLogging {
     val sw = new PrintWriter(new File(prefix+".json"))
     sw.append("{\"id\":\""+file.getName+"\",\"series\":\""+(if (series!="-") series else file.getName)+"\"")
     while (xml.hasNext) xml.next match {
-      case EvElemStart(_,"pubDate",_,_) =>
+      case EvElemStart(_,"pubDate",_) =>
         val date = xml.next.asInstanceOf[EvText].text
         if (date.length==8)
           sw.append(",\"date\":\""+date.substring(0,4)+"-"+date.substring(4,6)+"-"+date.substring(6)+"\"")
@@ -83,12 +54,12 @@ object ECCOXML2PassimJSON extends LazyLogging {
         else if (date.length==4)
           sw.append(",\"date\":\""+date+"-01-01\"")
         else sw.append(",\"date\":\"1970-01-01\"")
-      case EvElemStart(_,"text",_,_) =>
+      case EvElemStart(_,"text",_) =>
         sw.append(",\"text\":\"")
         while (xml.hasNext) xml.next match {
-          case EvElemStart(_,"page",attrs,_) =>
+          case EvElemStart(_,"page",_) =>
             sw.append("<pb n=\\\""+page+"\\\" />")
-          case EvElemStart(_,"sectionHeader",_,_) =>
+          case EvElemStart(_,"sectionHeader",_) =>
             //sw.append("<loc n=\\\"")
             var break2 = false
             val content = new StringBuilder()
@@ -103,8 +74,8 @@ object ECCOXML2PassimJSON extends LazyLogging {
             }
             //sw.append(content.replaceAllLiterally("\\","\\\\").replaceAllLiterally("\"","\\\""))
             //sw.append("\\\" />")
-            sw.append(content.replaceAllLiterally("\\","\\\\").replaceAllLiterally("\"","\\\"")+"\\n\\n")
-          case EvElemStart(_,"wd",_,_) =>
+            sw.append(content.toString.replaceAllLiterally("\\","\\\\").replaceAllLiterally("\"","\\\"")+"\\n\\n")
+          case EvElemStart(_,"wd",_) =>
             var break2 = false
             while (xml.hasNext && !break2) xml.next match {
               case EvText(text) => sw.append(text.replaceAllLiterally("\\","\\\\").replaceAllLiterally("\"","\\\""))
@@ -132,12 +103,16 @@ object ECCOXML2PassimJSON extends LazyLogging {
     val series = args(0)
     val f = Future.sequence(for (dir<-args.toSeq.drop(1);file <- getFileTree(new File(dir)); if (file.getName().endsWith(".xml") && !file.getName().startsWith("ECCO_tiff_manifest_") && !file.getName().endsWith("_metadata.xml"))) yield {
       val f = process(file,series)
-      f.onFailure { case t => logger.error("An error has occured processing "+file+": " + t.printStackTrace()) }
-      f.onSuccess { case _ => logger.info("Processed: "+file) }
+      f.onComplete {
+        case Failure(t) => logger.error("An error has occured processing "+file+": " + t.printStackTrace())
+        case Success(_) => logger.info("Processed: "+file)
+      }
       f.recover { case cause => throw new Exception("An error has occured processing "+file, cause) }
     })
-    f.onFailure { case t => logger.error("Processing of at least one file resulted in an error:" + t.getMessage+": " + t.printStackTrace) }
-    f.onSuccess { case _ => logger.info("Successfully processed all files.") }
+    f.onComplete {
+      case Failure(t) => logger.error("Processing of at least one file resulted in an error:" + t.getMessage+": " + t.printStackTrace)
+      case Success(_) => logger.info("Successfully processed all files.")
+    }
     Await.result(f, Duration.Inf)
   }
 }

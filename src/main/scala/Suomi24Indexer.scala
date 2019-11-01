@@ -15,7 +15,7 @@ import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
 import scala.language.{postfixOps, reflectiveCalls}
 
-case class LBWordToAnalysis(word: String, analysis: Seq[String] = null) {
+case class LBWordToAnalysis(word: String, analysis: mutable.Seq[String] = null) {
 }
 
 class LBAnalysisTokenStream(var tokens: Iterable[(Int,LBWordToAnalysis)] = null) extends TokenStream {
@@ -65,11 +65,11 @@ object Suomi24Indexer extends OctavoIndexer {
   class Reuse {
     var scontents = new ArrayBuffer[LBWordToAnalysis]
     val scontentS = new StringBuilder
-    var parcontents = new ArrayBuffer[Seq[LBWordToAnalysis]]
+    var parcontents = new ArrayBuffer[mutable.Seq[LBWordToAnalysis]]
     val parcontentS = new StringBuilder
-    var postcontents = new ArrayBuffer[Seq[Seq[LBWordToAnalysis]]]
+    var postcontents = new ArrayBuffer[mutable.Seq[mutable.Seq[LBWordToAnalysis]]]
     val postcontentS = new StringBuilder
-    val tcontents = new ArrayBuffer[Seq[Seq[Seq[LBWordToAnalysis]]]]
+    val tcontents = new ArrayBuffer[mutable.Seq[mutable.Seq[mutable.Seq[LBWordToAnalysis]]]]
     val tcontentS = new StringBuilder
 
     val td = new FluidDocument()
@@ -151,7 +151,7 @@ object Suomi24Indexer extends OctavoIndexer {
     sb.append('\n')
   }
 
-  private def indexThread(tid: Int, tinfo: String, posts: Seq[(String,Seq[String])]): Unit = {
+  private def indexThread(tid: Int, tinfo: String, posts: Iterable[(String,Iterable[String])]): Unit = {
     val r = tld.get
     r.tcontents.clear()
     r.tcontentS.clear()
@@ -169,7 +169,7 @@ object Suomi24Indexer extends OctavoIndexer {
       val postID = postsc.incrementAndGet()
       if (postID % 10000 == 0) logger.info(postID+": "+tid)
       r.postIDFields.setValue(postID)
-      r.postcontents = new ArrayBuffer[Seq[Seq[LBWordToAnalysis]]](r.postcontents.length)
+      r.postcontents = new ArrayBuffer[mutable.Seq[mutable.Seq[LBWordToAnalysis]]](r.postcontents.length)
       r.postcontentS.clear()
       appendLine(pinfo,r.postcontentS,r.tcontentS)
       r.headingFields.setValue(headingR.findFirstMatchIn(pinfo).get.group(1))
@@ -187,7 +187,7 @@ object Suomi24Indexer extends OctavoIndexer {
           r.parcontentS.clear()
           appendLine(line,r.tcontentS,r.postcontentS,r.parcontentS)
           r.paragraphIDFields.setValue(paragraphs.incrementAndGet())
-          r.parcontents = new ArrayBuffer[Seq[LBWordToAnalysis]](r.parcontents.length)
+          r.parcontents = new ArrayBuffer[mutable.Seq[LBWordToAnalysis]](r.parcontents.length)
         } else if (line.startsWith("<sentence")) {
           r.scontentS.clear()
           appendLine(line,r.tcontentS,r.postcontentS,r.parcontentS,r.scontentS)
@@ -302,7 +302,7 @@ object Suomi24Indexer extends OctavoIndexer {
     val id = file.getPath
     logger.info("Processing: "+file)
     val fl = Source.fromFile(file)
-    var cthread = new ArrayBuffer[(String,Seq[String])]
+    var cthread = new ArrayBuffer[(String,mutable.Seq[String])]
     var cpost = new ArrayBuffer[String]
     var ctid : String = null
     var ctinfo: String = null
@@ -318,7 +318,7 @@ object Suomi24Indexer extends OctavoIndexer {
           }
           ctid = ntid
           ctinfo = line
-          cthread = new ArrayBuffer[(String,Seq[String])](cthread.length)
+          cthread = new ArrayBuffer[(String,mutable.Seq[String])](cthread.length)
         }
         cpost = new ArrayBuffer[String](cpost.length)
         cthread += ((line,cpost))

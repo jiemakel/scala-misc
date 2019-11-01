@@ -1,10 +1,11 @@
-import java.io.{File, FileWriter, PrintWriter, StringWriter}
+import java.io.{File, FileInputStream, FileWriter, PrintWriter, StringWriter}
 
 import com.brein.time.timeintervals.collections.ListIntervalCollection
 import com.brein.time.timeintervals.indexes.IntervalTreeBuilder.IntervalType
 import com.brein.time.timeintervals.indexes.{IntervalTree, IntervalTreeBuilder}
 import com.brein.time.timeintervals.intervals.IntegerInterval
 import com.typesafe.scalalogging.LazyLogging
+import javax.xml.stream.XMLEventReader
 
 import scala.collection.JavaConverters._
 import scala.collection.{immutable, mutable}
@@ -15,7 +16,7 @@ import scala.concurrent.{Await, Future}
 import scala.io.Source
 import scala.util.{Failure, Success, Try}
 import scala.xml.parsing.XhtmlEntities
-import scala.xml.pull._
+import XMLEventReaderSupport._
 
 object METSALTOMaterialityExtractor extends LazyLogging {
 
@@ -32,7 +33,7 @@ object METSALTOMaterialityExtractor extends LazyLogging {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
-      case EvElemStart(_,_,_,_) => return null
+      case EvElemStart(_,_,_) => return null
       case EvText(text) => content.append(text)
       case er: EvEntityRef => content.append(decodeEntity(er.entity))
       case EvComment(comment) if comment == " unknown entity apos; " => content.append('\'')
@@ -80,8 +81,8 @@ object METSALTOMaterialityExtractor extends LazyLogging {
   private def tob(b: Boolean): Char = if (b) '1' else '0'
 
   def process(altoFile: File): Future[Unit] = Future {
-    val s = Source.fromFile(altoFile, "UTF-8")
-    implicit val xml = new XMLEventReader(s)
+    val s = new FileInputStream(altoFile)
+    implicit val xml = getXMLEventReader(s)
     val textBlocks: IntervalTree = treeBuilder.build()
     var issn: String = "?"
     var date: String = "?"
@@ -101,67 +102,67 @@ object METSALTOMaterialityExtractor extends LazyLogging {
     var curBlockWords = 0l
     var curBlockChars = 0l
     while (xml.hasNext) xml.next match {
-      case EvElemStart(_, "identifier", _, _) => issn = readContents
-      case EvElemStart(_, "bindingIdentifier", _, _) => binding = readContents
-      case EvElemStart(_, "published", _, _) => date = readContents
-      case EvElemStart(_, "preProcessingStep",_,_) =>
+      case EvElemStart(_, "identifier", _) => issn = readContents
+      case EvElemStart(_, "bindingIdentifier", _) => binding = readContents
+      case EvElemStart(_, "published", _) => date = readContents
+      case EvElemStart(_, "preProcessingStep",_) =>
         var break = false
         preSoftware = "?"
         preVersion = "?"
         while (xml.hasNext && !break) xml.next match {
-          case EvElemStart(_, "softwareName",_,_) => preSoftware = readContents
-          case EvElemStart(_, "softwareVersion",_,_) => preVersion = readContents
+          case EvElemStart(_, "softwareName",_) => preSoftware = readContents
+          case EvElemStart(_, "softwareVersion",_) => preVersion = readContents
           case EvElemEnd(_, "preProcessingStep") => break = true
           case _ =>
         }
-      case EvElemStart(_, "ocrProcessingStep",_,_) =>
+      case EvElemStart(_, "ocrProcessingStep",_) =>
         var break = false
         ocrSoftware = "?"
         ocrVersion = "?"
         while (xml.hasNext && !break) xml.next match {
-          case EvElemStart(_, "softwareName",_,_) => ocrSoftware = readContents
-          case EvElemStart(_, "softwareVersion",_,_) => ocrVersion = readContents
+          case EvElemStart(_, "softwareName",_) => ocrSoftware = readContents
+          case EvElemStart(_, "softwareVersion",_) => ocrVersion = readContents
           case EvElemEnd(_, "ocrProcessingStep") => break = true
           case _ =>
         }
-      case EvElemStart(_, "TextStyle", attrs, _) => try {
-        val id = attrs("ID").head.text
-        val size = attrs("FONTSIZE").head.text.toInt
-        val font = attrs("FONTFAMILY").head.text
-        val styles: Set[String] = Option(attrs("FONTSTYLE")).map(s => immutable.HashSet(s.head.text.split(" "):_*)).getOrElse(Set.empty[String])
+      case EvElemStart(_, "TextStyle", attrs) => try {
+        val id = attrs("ID")
+        val size = attrs("FONTSIZE").toInt
+        val font = attrs("FONTFAMILY")
+        val styles: Set[String] = Option(attrs("FONTSTYLE")).map(s => immutable.HashSet(s.split(" "):_*)).getOrElse(Set.empty[String])
         styleMap.put(id, Style(font,size,styles.contains("bold"),styles.contains("italics"),styles.contains("underline")))
       } catch {
         case e: Exception => logger.warn("Exception processing style " + attrs, e)
       }
-      case EvElemStart(_, "PrintSpace", attrs, _) => try {
-        val height = attrs("HEIGHT").head.text.toInt
-        val width = attrs("WIDTH").head.text.toInt
+      case EvElemStart(_, "PrintSpace", attrs) => try {
+        val height = attrs("HEIGHT").toInt
+        val width = attrs("WIDTH").toInt
         pw6.synchronized {
           pw6.println(binding + "," + page + "," + width + "," + height)
         }
       } catch {
         case e: Exception => logger.warn("Exception processing page attrs " + attrs, e)
       }
-      case EvElemStart(_, "Page", attrs, _) => try {
-        val height = attrs("HEIGHT").head.text.toInt
-        val width = attrs("WIDTH").head.text.toInt
+      case EvElemStart(_, "Page", attrs) => try {
+        val height = attrs("HEIGHT").toInt
+        val width = attrs("WIDTH").toInt
         pw5.synchronized {
           pw5.println(binding  + "," + page + "," + width + "," + height)
         }
       } catch {
         case e: Exception => logger.warn("Exception processing printspace attrs " + attrs, e)
       }
-      case EvElemStart(_, "TextBlock", attrs, _) => try {
-        val hpos = Integer.parseInt(attrs("HPOS").head.text)
-        val vpos = Integer.parseInt(attrs("VPOS").head.text)
-        val width = Integer.parseInt(attrs("WIDTH").head.text)
-        val height = Integer.parseInt(attrs("HEIGHT").head.text)
+      case EvElemStart(_, "TextBlock", attrs) => try {
+        val hpos = Integer.parseInt(attrs("HPOS"))
+        val vpos = Integer.parseInt(attrs("VPOS"))
+        val width = Integer.parseInt(attrs("WIDTH"))
+        val height = Integer.parseInt(attrs("HEIGHT"))
         curBlock = Block(hpos, vpos, hpos + width, vpos + height)
         curBlockWords = 0l
         curBlockChars = 0l
         bstyle = null
-        for (styles <- Option(attrs("STYLEREFS"));
-             style <- styles.head.text.split(" ")) if (styleMap.contains(style)) bstyle = styleMap(style)
+        for (styles <- attrs.get("STYLEREFS");
+             style <- styles.split(' ')) if (styleMap.contains(style)) bstyle = styleMap(style)
         if (width >= 0 && height >= 0) {
           if (bstyle != null) bstyle.area += width * height
           textBlocks.insert(curBlock)
@@ -173,32 +174,32 @@ object METSALTOMaterialityExtractor extends LazyLogging {
         pw8.synchronized {
           pw8.println(binding + "," + page + "," + curBlock.hpos1 + "," + curBlock.vpos1 + "," + curBlock.hpos2 + "," + curBlock.vpos2 + "," + curBlockWords + "," + curBlockChars)
         }
-      case EvElemStart(_, "TextLine", attrs, _) => try {
+      case EvElemStart(_, "TextLine", attrs) => try {
         lstyle = null
-        for (styles <- Option(attrs("STYLEREFS"));
-             style <- styles.head.text.split(" ")) if (styleMap.contains(style)) lstyle = styleMap(style)
+        for (styles <- attrs.get("STYLEREFS");
+             style <- styles.split(" ")) if (styleMap.contains(style)) lstyle = styleMap(style)
         if (lstyle != null) {
-          val width = Integer.parseInt(attrs("WIDTH").head.text)
-          val height = Integer.parseInt(attrs("HEIGHT").head.text)
+          val width = Integer.parseInt(attrs("WIDTH"))
+          val height = Integer.parseInt(attrs("HEIGHT"))
           lstyle.area += width * height
           if (bstyle != null) bstyle.area -= width * height
         }
       } catch {
         case e: Exception => logger.warn("Exception processing textline attrs " + attrs, e)
       }
-      case EvElemStart(_, "String", attrs, _) =>
-        val cchars = attrs("CONTENT").head.text.length
+      case EvElemStart(_, "String", attrs) =>
+        val cchars = attrs("CONTENT").length
         characters += cchars
         curBlockChars += cchars
         words += 1
         curBlockWords += 1
         sstyle = null
-        for (styles <- Option(attrs("STYLEREFS"));
-             style <- styles.head.text.split(" ")) if (styleMap.contains(style)) sstyle = styleMap(style)
+        for (styles <- attrs.get("STYLEREFS");
+             style <- styles.split(" ")) if (styleMap.contains(style)) sstyle = styleMap(style)
         val cstyle = if (sstyle != null) sstyle else if (lstyle != null) lstyle else bstyle
         if (cstyle!=null) {
-          val width = Integer.parseInt(attrs("WIDTH").head.text)
-          val height = Integer.parseInt(attrs("HEIGHT").head.text)
+          val width = Integer.parseInt(attrs("WIDTH"))
+          val height = Integer.parseInt(attrs("HEIGHT"))
           cstyle.area += width * height
           if (lstyle != null) lstyle.area -= width * height
           if (bstyle != null) bstyle.area -= width * height
@@ -271,50 +272,50 @@ object METSALTOMaterialityExtractor extends LazyLogging {
   }
 
   def processMETS(f: File): Future[Unit] = Future {
-    val s = Source.fromFile(f)
+    val s = new FileInputStream(f)
     val imgsizes = new mutable.HashMap[String,(Double,Double)]
-    implicit val xml = new XMLEventReader(s)
+    implicit val xml = getXMLEventReader(s)
     var issn = "?"
     var binding = "?"
     var date = "?"
     while (xml.hasNext) xml.next match {
-      case EvElemStart(_, "dmdSec",attrs,_) if attrs("ID").head.text.startsWith("MODSMD_ISSUE") =>
+      case EvElemStart(_, "dmdSec",attrs) if attrs("ID").startsWith("MODSMD_ISSUE") =>
         var break = false
         while (xml.hasNext && !break) xml.next match {
-          case EvElemStart(_, "identifier",attrs,_) => if (attrs("type") != null) attrs("type").head.text.toLowerCase match {
+          case EvElemStart(_, "identifier",attrs) => if (attrs("type") != null) attrs("type").toLowerCase match {
             case "issn" => issn = readContents
             case "binding" => binding = readContents
             case _ =>
           }
-          case EvElemStart(_, "dateIssued",_,_) => date = readContents
+          case EvElemStart(_, "dateIssued",_) => date = readContents
           case EvElemEnd(_, "dmdSec") => break = true
           case _ =>
         }
-      case EvElemStart(_, "amdSec",attrs,_) =>
-        val imgId = attrs("ID").head.text.replaceFirst("PARAM","")
+      case EvElemStart(_, "amdSec",attrs) =>
+        val imgId = attrs("ID").replaceFirst("PARAM","")
         var pmultiplier = -1.0
         var xs = -1
         var ys = -1
         var break = false
         while (xml.hasNext && !break) xml.next match {
-          case EvElemStart(_,"PixelSize",_,_) =>
+          case EvElemStart(_,"PixelSize",_) =>
             pmultiplier = readContents.toFloat
-          case EvElemStart(_,"ImageWidth",_,_) =>
+          case EvElemStart(_,"ImageWidth",_) =>
             xs = readContents.toInt
-          case EvElemStart(_,"ImageLength",_,_) =>
+          case EvElemStart(_,"ImageLength",_) =>
             ys = readContents.toInt
           case EvElemEnd(_, "amdSec") => break = true
           case _ =>
         }
         imgsizes.put(imgId,(xs*pmultiplier,ys*pmultiplier))
-      case EvElemStart(_, "structMap",sattrs,_) if sattrs("TYPE").head.text == "PHYSICAL" =>
+      case EvElemStart(_, "structMap",sattrs) if sattrs("TYPE") == "PHYSICAL" =>
         var break = false
         var curImage = ""
         var curALTO = ""
 
         while (xml.hasNext && !break) xml.next match {
-          case EvElemStart(_,"area",attrs,_) =>
-            val fileID = attrs("FILEID").head.text
+          case EvElemStart(_,"area",attrs) =>
+            val fileID = attrs("FILEID")
             if (fileID.startsWith("IMG")) curImage = fileID
             else curALTO = fileID
           case EvElemEnd(_,"par") =>
@@ -326,18 +327,18 @@ object METSALTOMaterialityExtractor extends LazyLogging {
           case EvElemEnd(_,"structMap") => break = true
           case _ =>
         }
-      case EvElemStart(_,"structMap", attrs, _) if attrs("TYPE").head.text=="LOGICAL" =>
+      case EvElemStart(_,"structMap", attrs) if attrs("TYPE")=="LOGICAL" =>
         // process the logical structure hierarchically
         var hierarchy = Seq.empty[String]
         val pageTypes = new mutable.HashMap[Int,mutable.HashSet[String]]
         while (xml.hasNext) xml.next match {
-          case EvElemStart(_,"div", sattrs, _) =>
-            val divType =  sattrs("TYPE").head.text.toLowerCase
+          case EvElemStart(_,"div", sattrs) =>
+            val divType =  sattrs("TYPE").toLowerCase
             hierarchy = hierarchy :+ divType
           case EvElemEnd(_,"div") =>
             hierarchy = hierarchy.dropRight(1)
-          case EvElemStart(_,"area",sattrs,_) =>
-            val page = Try(Integer.parseInt(sattrs("FILEID").head.text.substring(4))).getOrElse(0)
+          case EvElemStart(_,"area",sattrs) =>
+            val page = Try(Integer.parseInt(sattrs("FILEID").substring(4))).getOrElse(0)
             pageTypes.getOrElseUpdate(page, new mutable.HashSet[String]) += hierarchy.mkString("_")
           case _ =>
         }

@@ -1,9 +1,11 @@
-import java.io.File
+import java.io.{File, FileInputStream}
 import java.util.concurrent.atomic.AtomicLong
 import java.util.regex.Pattern
 
-import com.bizo.mighty.csv.CSVReader
+import XMLEventReaderSupport._
+import com.github.tototoshi.csv.CSVReader
 import fi.hsci.lucene.NormalisationFilter
+import javax.xml.stream.XMLEventReader
 import org.apache.lucene.analysis.LowerCaseFilter
 import org.apache.lucene.analysis.pattern.{PatternReplaceFilter, PatternTokenizer}
 import org.apache.lucene.document.{NumericDocValuesField, SortedDocValuesField}
@@ -14,10 +16,8 @@ import org.rogach.scallop._
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-import scala.io.Source
 import scala.language.{postfixOps, reflectiveCalls}
 import scala.xml.parsing.XhtmlEntities
-import scala.xml.pull._
 
 object SKVRXMLIndexer extends OctavoIndexer {
 
@@ -31,22 +31,22 @@ object SKVRXMLIndexer extends OctavoIndexer {
         case _ => content.append(er.entity)
       }
       case EvComment(_) =>
-      case EvElemStart(_,"I",_,_) => content.append('@')
+      case EvElemStart(_,"I",_) => content.append('@')
       case EvElemEnd(_,"I") => content.append('@')
-      case EvElemStart(_,"H",_,_) => content.append('$')
+      case EvElemStart(_,"H",_) => content.append('$')
       case EvElemEnd(_,"H") => content.append('$')
-      case EvElemStart(_,"SUP",_,_) => content.append('^')
+      case EvElemStart(_,"SUP",_) => content.append('^')
       case EvElemEnd(_,"SUP") => content.append('^')
-      case EvElemStart(_,"KA",_,_) => content.append('°')
+      case EvElemStart(_,"KA",_) => content.append('°')
       case EvElemEnd(_,"KA") => content.append('°')
-      case EvElemStart(_,"SMALLCAPS",_,_) => content.append('¨')
+      case EvElemStart(_,"SMALLCAPS",_) => content.append('¨')
       case EvElemEnd(_,"SMALLCAPS") => content.append('¨')
-      case EvElemStart(_,"SUB",_,_) => content.append('ˇ')
+      case EvElemStart(_,"SUB",_) => content.append('ˇ')
       case EvElemEnd(_,"SUB") => content.append('ˇ')
-      case EvElemStart(_,"FR",_,_) => content.append('€')
+      case EvElemStart(_,"FR",_) => content.append('€')
       case EvElemEnd(_,"FR") => content.append('€')
       case EvElemEnd(_,elem) => break = true
-      case EvElemStart(_,nelem,_,_) => logger.warn("Encountered unknown element "+nelem)
+      case EvElemStart(_,nelem,_) => logger.warn("Encountered unknown element "+nelem)
     }
     content.toString
   }
@@ -98,23 +98,23 @@ object SKVRXMLIndexer extends OctavoIndexer {
 
   private def index(file: File): Unit = {
     logger.info("Processing: " + file)
-    val s = Source.fromFile(file, "UTF-8")
-    implicit val xml = new XMLEventReader(s)
+    val s = new FileInputStream(file)
+    implicit val xml = getXMLEventReader(s,"UTF-8")
     val verses = new ArrayBuffer[String]
     val r = tld.get
     val c = new StringBuilder()
     while (xml.hasNext) xml.next match {
-      case EvElemStart(_, "ITEM", iattrs, _) =>
+      case EvElemStart(_, "ITEM", iattrs) =>
         r.clearMultiDocumentFields()
         verses.clear()
         var break = false
-        val id = iattrs("nro").head.text
-        val year = iattrs("y").head.text.toInt
-        val placeId = iattrs("p").head.text.toInt
-        val collectorId = iattrs("k").head.text.toInt
+        val id = iattrs("nro")
+        val year = iattrs("y").toInt
+        val placeId = iattrs("p").toInt
+        val collectorId = iattrs("k").toInt
         while (xml.hasNext && !break) xml.next match {
-          case EvElemStart(_, "V", _, _) => verses.append(readContents("V"))
-          case EvElemStart(_, "REFS", _, _) => r.notesFields.setValue(readContents("REFS"))
+          case EvElemStart(_, "V", _) => verses.append(readContents("V"))
+          case EvElemStart(_, "REFS", _) => r.notesFields.setValue(readContents("REFS"))
           case EvElemEnd(_, "ITEM") => break = true
           case _ =>
         }
@@ -169,13 +169,13 @@ object SKVRXMLIndexer extends OctavoIndexer {
       val themePoemsCsv = opt[String](required = true)
       verify()
     }
-    for (row <- CSVReader(opts.placeCsv()))
+    for (row <- CSVReader.open(opts.placeCsv()))
       places.put(row(0).toInt, (row(1), row(2)))
-    for (row <- CSVReader(opts.collectorCsv()))
+    for (row <- CSVReader.open(opts.collectorCsv()))
       collectors.put(row(0).toInt, row(1))
-    for (row <- CSVReader(opts.themeCsv()))
+    for (row <- CSVReader.open(opts.themeCsv()))
       themes.put(row(0).toInt, row(1))
-    for (row <- CSVReader(opts.themePoemsCsv()))
+    for (row <- CSVReader.open(opts.themePoemsCsv()))
       poemThemes.getOrElseUpdate(row(3), new ArrayBuffer[Int]) += row(0).toInt
     diw = iw(opts.index() + "/dindex", ds, opts.indexMemoryMb() / 2)
     seniw = iw(opts.index() + "/senindex", sens, opts.indexMemoryMb() / 2)

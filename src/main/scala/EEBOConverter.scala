@@ -1,7 +1,7 @@
-import java.io.{BufferedWriter, File, FileWriter, PrintWriter}
+import java.io.{BufferedWriter, File, FileInputStream, FileWriter, PrintWriter}
 
 import ECCOXML2Text.attrsToString
-import com.bizo.mighty.csv.CSVWriter
+import com.github.tototoshi.csv.CSVWriter
 import org.rogach.scallop.ScallopConf
 
 import scala.collection.immutable.HashSet
@@ -10,8 +10,8 @@ import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
 import scala.xml.Utility
 import scala.xml.parsing.XhtmlEntities
-import scala.xml.pull._
-
+import XMLEventReaderSupport._
+import javax.xml.stream.XMLEventReader
 
 object EEBOConverter extends ParallelProcessor {
 
@@ -108,20 +108,20 @@ object EEBOConverter extends ParallelProcessor {
       var addedNewLine = false
       xml.next match {
         case EvElemEnd(_, opts.currentElem) => break = true
-        case EvElemStart(_, elem, _, _) if ignoredElems.contains(elem) =>
+        case EvElemStart(_, elem, _) if ignoredElems.contains(elem) =>
         case EvElemEnd(_, elem) if ignoredElems.contains(elem) =>
-        case EvElemStart(_, elem, _,_) if elem.startsWith("DIV") => divLevels += currentDivLevel; currentDivLevel = elem.last.toString.toInt // TYPE, LANG, N
+        case EvElemStart(_, elem, _) if elem.startsWith("DIV") => divLevels += currentDivLevel; currentDivLevel = elem.last.toString.toInt // TYPE, LANG, N
         case EvElemEnd(_, elem) if elem.startsWith("DIV") =>
           divLevels.trimEnd(1)
           currentDivLevel = divLevels.last
           addedNewLine = true
           if (content.isEmpty || content.last != '\n') append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') append("\n")
-        case EvElemStart(_, "HEAD",_,_) => if (!opts.omitStructure) append("#" * currentDivLevel +" ")
+        case EvElemStart(_, "HEAD",_) => if (!opts.omitStructure) append("#" * currentDivLevel +" ")
         case EvElemEnd(_, "HEAD") =>
           addedNewLine = true
           if (content.isEmpty || content.last != '\n') append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') append("\n")
-        case EvElemStart(_, "ARGUMENT",_,_) => if (!opts.omitStructure) append("## ")
-        case EvElemStart(_, elem,_,_) if elem == "FRONT" || elem == "BACK" || elem == "TEXT" || elem == "BODY" =>
+        case EvElemStart(_, "ARGUMENT",_) => if (!opts.omitStructure) append("## ")
+        case EvElemStart(_, elem,_) if elem == "FRONT" || elem == "BACK" || elem == "TEXT" || elem == "BODY" =>
           val scc = clean(scontent)
           if (scc.nonEmpty) {
             val sw = new PrintWriter(new File(opts.outputFilePrefix + "_"+ dpart +"_pre"+elem.toLowerCase+".txt"))
@@ -141,7 +141,7 @@ object EEBOConverter extends ParallelProcessor {
             content.append("\n\n")
             dpart += 1
           }
-        case EvElemStart(_, "FIGDESC", _, _) => if (!opts.onlyCoreTranscription) append("〈 image: ") else {
+        case EvElemStart(_, "FIGDESC", _) => if (!opts.onlyCoreTranscription) append("〈 image: ") else {
           val cpo = opts.child("image_at_"+ content.length, opts.startOffset + content.length , "FIGDESC")
           val imagedesc = process(cpo)
           val sw = new PrintWriter(if (opts.extractsAtDocumentLevel) cpo.outputRootPrefix+"_image_at_" + (opts.startOffset+content.length) + ".txt" else cpo.outputFilePrefix + ".txt")
@@ -155,10 +155,10 @@ object EEBOConverter extends ParallelProcessor {
           }
         }
         case EvElemEnd(_, "FIGDESC") => if (!opts.onlyCoreTranscription) append(" 〉")
-        case EvElemStart(_, "HI", _, _) => if (!opts.omitEmphases) append("*")
+        case EvElemStart(_, "HI", _) => if (!opts.omitEmphases) append("*")
         case EvElemEnd(_, "HI") => if (!opts.omitEmphases) append("*")
-        case EvElemStart(_, "PB", attrs, _) => //MS="y" REF="48" N="90"
-          val pid: String = attrs("REF").headOption.map(_.text).getOrElse("-1")
+        case EvElemStart(_, "PB", attrs) => //MS="y" REF="48" N="90"
+          val pid: String = attrs.getOrElse("REF","-1")
           val pcc = clean(pt.pcontent)
           if (pcc.nonEmpty || pt.currentPage != "0") {
             val pw = new PrintWriter(new BufferedWriter(new FileWriter(new File(opts.outputRootPrefix + "_page" + pt.currentPage + (if (pid == pt.currentPage) {
@@ -178,7 +178,7 @@ object EEBOConverter extends ParallelProcessor {
           }
           pt.currentPage = pid
         case EvElemEnd(_, "PB") =>
-        case EvElemStart(_, elem, _, _) if elem == "NOTE" || elem == "HEADNOTE" || elem == "TAILNOTE" || elem == "DEL" || elem == "CORR" =>
+        case EvElemStart(_, elem, _) if elem == "NOTE" || elem == "HEADNOTE" || elem == "TAILNOTE" || elem == "DEL" || elem == "CORR" =>
           if (!opts.inlineNotes) {
             val cpo = opts.child(elem.toLowerCase+"_at_"+ content.length, opts.startOffset + content.length , elem)
             val note = process(cpo)
@@ -193,17 +193,17 @@ object EEBOConverter extends ParallelProcessor {
             }
           }
         case EvElemEnd(_, elem) if opts.inlineNotes && (elem == "NOTE" || elem == "HEADNOTE" || elem == "TAILNOTE" || elem == "DEL" || elem == "CORR") =>
-        case EvElemStart(_, "GAP", attrs, _) =>
-          val disp = attrs.get("DISP").flatMap(_.headOption).map(_.text).getOrElse("〈?〉")
-          gfw.synchronized(gfw.write(Seq(opts.outputRootPrefix,pt.currentPage,""+pt.subPage,disp)))
+        case EvElemStart(_, "GAP", attrs) =>
+          val disp = attrs.getOrElse("DISP", "〈?〉")
+          gfw.synchronized(gfw.writeRow(Seq(opts.outputRootPrefix,pt.currentPage,""+pt.subPage,disp)))
           if (!opts.onlyCoreTranscription) append(disp)
         case EvElemEnd(_, "GAP") =>
-        case EvElemStart(_, "LIST",_,_) => listDepth += 1
+        case EvElemStart(_, "LIST",_) => listDepth += 1
         case EvElemEnd(_, "LIST") =>
           listDepth -= 1
           addedNewLine = true
           if (content.isEmpty || content.last != '\n') append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') append("\n")
-        case EvElemStart(_, elem,_,_) if paragraphElems.contains(elem) =>
+        case EvElemStart(_, elem,_) if paragraphElems.contains(elem) =>
           if (elem=="TABLE") inTable = true
           addedNewLine = true
           if (content.nonEmpty) {
@@ -213,18 +213,18 @@ object EEBOConverter extends ParallelProcessor {
           if (elem=="TABLE") inTable = false
           addedNewLine = true
           if (content.isEmpty || content.last != '\n') append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') append("\n")
-        case EvElemStart(_, elem,_,_) if lineElems.contains(elem) =>
+        case EvElemStart(_, elem,_) if lineElems.contains(elem) =>
           addedNewLine = true
           if (content.nonEmpty && content.last != '\n') append("\n")
         case EvElemEnd(_, elem) if lineElems.contains(elem) =>
           addedNewLine = true
           if (content.isEmpty || content.last != '\n') append("\n")
-        case EvElemStart(_, "CELL",_,_) => if (!opts.omitStructure) append(" | ") else append(" ")
+        case EvElemStart(_, "CELL",_) => if (!opts.omitStructure) append(" | ") else append(" ")
         case EvElemEnd(_, "CELL") => if (!opts.omitStructure) append(" | ")
-        case EvElemStart(_, "ITEM",_,_) =>
+        case EvElemStart(_, "ITEM",_) =>
           /* if (lastElemEnd == "LABEL") append(": ") else */ if (!opts.omitStructure) append(" * ")
         case EvElemEnd(_, "ITEM") =>
-        case EvElemStart(_, "LABEL",_,_) => if (listDepth == 0 && !opts.omitStructure) append("#" * (currentDivLevel + 1) +" ")
+        case EvElemStart(_, "LABEL",_) => if (listDepth == 0 && !opts.omitStructure) append("#" * (currentDivLevel + 1) +" ")
         case EvElemEnd(_, "LABEL") =>
           addedNewLine = true
           if (listDepth == 0) {
@@ -253,7 +253,8 @@ object EEBOConverter extends ParallelProcessor {
 
   def index(file: File, dest: String, prefixLength: Int, inlineNotes: Boolean, omitEmphases: Boolean, omitStructure: Boolean, onlyCoreTranscription: Boolean, extractsAtDocumentLevel: Boolean, extractsAtPageLevel: Boolean, rehyphenate: Boolean): Unit = {
     val opts = new ProcessOpts(file.getAbsolutePath.replace(".xml",""),file.getAbsolutePath.replace(".xml",""), dest, prefixLength, inlineNotes, omitEmphases, omitStructure, onlyCoreTranscription, extractsAtDocumentLevel, extractsAtPageLevel, rehyphenate, 0, null)
-    implicit val xml = new XMLEventReader(Source.fromFile(file, "UTF-8"))
+    val fis = new FileInputStream(file)
+    implicit val xml = getXMLEventReader(fis, "UTF-8")
     val dcontent = new StringBuilder()
     new File(dest + file.getParentFile.getAbsolutePath.substring(prefixLength)).mkdirs()
     val pbw = new PrintWriter(new File(opts.outputFilePrefix+"_pbs.csv"))
@@ -263,11 +264,11 @@ object EEBOConverter extends ParallelProcessor {
     val metadata = new StringBuilder()
     var lastWasText = false
     while (xml.hasNext) xml.next match {
-      case EvElemStart(_, "HEADER", _, _) =>
+      case EvElemStart(_, "HEADER", _) =>
         var break = false
         while (!break) xml.next match {
           case EvElemEnd(_, "HEADER") => break = true
-          case EvElemStart(_, label, attrs, _) =>
+          case EvElemStart(_, label, attrs) =>
             metadata.append(indent + "<" + label + attrsToString(attrs) + ">\n")
             indent += "  "
           case EvText(text) => if (!text.trim.isEmpty) {
@@ -288,7 +289,7 @@ object EEBOConverter extends ParallelProcessor {
         val sw = new PrintWriter(new File(opts.outputFilePrefix+".metadata.xml"))
         sw.append(metadata)
         sw.close()
-      case EvElemStart(_, "TEXT",_,_) =>
+      case EvElemStart(_, "TEXT",_) =>
         val copts = opts.child(text+"_text", dcontent.length, "TEXT")
         val content = process(copts)
         if (content.nonEmpty) {
@@ -316,6 +317,7 @@ object EEBOConverter extends ParallelProcessor {
       pt.pcontent.clear()
     }
     pbw.close()
+    fis.close()
     logger.info("Successfully processed "+file)
   }
 
@@ -345,7 +347,7 @@ object EEBOConverter extends ParallelProcessor {
     new File(dest).mkdirs()
     val lr = "<!ENTITY (.*?) \"(.*?)\"".r
     val lr2 = "&#h(.*?);".r
-    gfw = CSVWriter(dest+"/gaps.csv")
+    gfw = CSVWriter.open(dest+"/gaps.csv")
     for (line <- Source.fromInputStream(getClass.getResourceAsStream("Eebochar-xml-all-view.ent")).getLines; m <- lr.findFirstMatchIn(line)) {
       val entity = m.group(1)
       val replacement = lr2.replaceAllIn(m.group(2), m => Integer.valueOf(m.group(1), 16).toChar.toString)

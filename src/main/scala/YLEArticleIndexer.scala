@@ -31,7 +31,7 @@ object YLEArticleIndexer extends OctavoIndexer {
     override def test(b: BytesRef) = b.bytes(b.offset + 1) == 'L'
   }*/
   
-  case class Article(id: String, url: String, publisher: String, timePublished: String, coverage: String, headline: String, lead: String, analyzedText: List[JValue])
+  case class Article(id: String, url: String, publisher: String, timePublished: String, coverage: Option[String], headline: Option[String], lead: Option[String], firstKeyword: Option[String], analyzedText: List[JValue])
   
   private val paragraphs = new AtomicLong
   private val sentences = new AtomicLong
@@ -51,11 +51,12 @@ object YLEArticleIndexer extends OctavoIndexer {
     sd.addRequired(timePublishedLongPoint)
     pd.addRequired(timePublishedLongPoint)
     ad.addRequired(timePublishedLongPoint)
-    val coverageFields = new StringSDVFieldPair("coverage").r(sd, pd, ad)
+    val coverageFields = new StringSDVFieldPair("coverage").o(sd, pd, ad)
     val contentLengthFields = new IntPointNDVFieldPair("contentLength").r(sd, pd, ad)
     val contentTokensFields = new IntPointNDVFieldPair("contentTokens").r(sd, pd, ad)
-    val leadFields = new StringSDVFieldPair("lead").r(sd, pd, ad)
-    val headlineFields = new StringSDVFieldPair("headline").r(sd, pd, ad)
+    val leadFields = new StringSDVFieldPair("lead").o(sd, pd, ad)
+    val firstKeywordFields = new StringSDVFieldPair("firstKeyword").o(sd, pd, ad)
+    val headlineFields = new StringSDVFieldPair("headline").o(sd, pd, ad)
     val textField = new Field("text", "", contentFieldType)
     sd.addRequired(textField)
     pd.addRequired(textField)
@@ -68,6 +69,11 @@ object YLEArticleIndexer extends OctavoIndexer {
     val sentenceIDFields = new StringNDVFieldPair("sentenceID").r(sd)
     val paragraphsFields = new IntPointNDVFieldPair("paragraphs").r(ad)
     val sentencesFields = new IntPointNDVFieldPair("sentences").r(pd, ad)
+    def clearOptionalArticleFields(): Unit = {
+      ad.clearOptional()
+      sd.clearOptional()
+      pd.clearOptional()
+    }
   }
   
   val tld = new java.lang.ThreadLocal[Reuse] {
@@ -80,15 +86,35 @@ object YLEArticleIndexer extends OctavoIndexer {
     parse(new InputStreamReader(new FileInputStream(file)), (p: Parser) => {
       val obj = ObjParser.parseObject(p)
       val analyzedText = (obj \\ "analyzedText")
-      val paragraphs = if (analyzedText.isInstanceOf[JObject]) analyzedText.asInstanceOf[JObject].children else if (analyzedText.isInstanceOf[JArray]) List(analyzedText.asInstanceOf[JArray]) else List.empty
+      val paragraphs = analyzedText match {
+        case jObject: JObject => jObject.children
+        case array: JArray => List(array)
+        case _ => List.empty
+      }
       val article = new Article(
           (obj \ "id").asInstanceOf[JString].values,
           (obj \ "url" \ "full").asInstanceOf[JString].values,
           (obj \ "publisher" \ "name").asInstanceOf[JString].values,
           (obj \ "datePublished").asInstanceOf[JString].values,
-          if ((obj \ "coverage").isInstanceOf[JString]) (obj \ "coverage").asInstanceOf[JString].values else "",
-          if ((obj \ "headline" \ "full").isInstanceOf[JString]) (obj \ "headline" \ "full").asInstanceOf[JString].values else "",
-          if ((obj \ "lead").isInstanceOf[JString]) (obj \ "lead").asInstanceOf[JString].values else "",
+          (obj \ "coverage") match {
+            case string2: JString => Some(string2.values)
+            case _ => None
+          },
+          (obj \ "headline" \ "full") match {
+            case string1: JString => Some(string1.values)
+            case _ => None
+          },
+          (obj \ "lead") match {
+            case string: JString => Some(string.values)
+            case _ => None
+          },
+          (obj \ "subjects") match {
+            case arr: JArray => arr(0) \ "title" \ "fi" match {
+              case s: JString => Some(s.values)
+              case _ => None
+            }
+            case _ => None
+          },
           paragraphs
         )
       index(article)
@@ -98,14 +124,16 @@ object YLEArticleIndexer extends OctavoIndexer {
  
   private def index(article: Article): Unit = {
     val d = tld.get
+    d.clearOptionalArticleFields()
     d.articleIDFields.setValue(article.id)
     d.urlFields.setValue(article.url)
     d.publisherFields.setValue(article.publisher)
     d.timePublishedSDVField.setBytesValue(new BytesRef(article.timePublished))
     d.timePublishedLongPoint.setLongValue(ISODateTimeFormat.dateTimeNoMillis.parseMillis(article.timePublished))
-    d.coverageFields.setValue(article.coverage)
-    d.headlineFields.setValue(article.headline)
-    d.leadFields.setValue(article.lead)
+    article.coverage.foreach(d.coverageFields.setValue)
+    article.headline.foreach(d.headlineFields.setValue)
+    article.lead.foreach(d.leadFields.setValue)
+    article.firstKeyword.foreach(d.firstKeywordFields.setValue)
     d.paragraphsFields.setValue(article.analyzedText.length)
     val textTokens = new ArrayBuffer[Iterable[(Int, String, Iterable[(Float,Iterable[Iterable[String]])])]]
     var text = ""

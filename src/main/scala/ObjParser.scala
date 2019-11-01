@@ -1,6 +1,5 @@
 import org.json4s._
 import org.json4s.native.JsonParser._
-import org.json4s.JsonDSL._
 
 object ObjParser {
   
@@ -20,7 +19,7 @@ object ObjParser {
       try { x.asInstanceOf[A] } catch { case _: ClassCastException => parser.fail(s"unexpected $x") }
     }
 
-    def peekOption = if (stack isEmpty) None else Some(stack.peek)
+    def peekOption = if (stack.isEmpty) None else Some(stack.peek)
   }
   
   def parseObject(p: Parser, initialToken: Option[Token] = None): JValue = {

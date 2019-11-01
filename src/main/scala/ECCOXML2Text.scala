@@ -1,8 +1,8 @@
 import java.io._
 import java.util.concurrent.{ArrayBlockingQueue, ThreadPoolExecutor, TimeUnit}
 
-import com.bizo.mighty.csv.CSVWriter
 import com.typesafe.scalalogging.LazyLogging
+import javax.xml.stream.XMLEventReader
 import org.rogach.scallop.ScallopConf
 
 import scala.collection.Searching
@@ -12,7 +12,9 @@ import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.io.Source
 import scala.util.{Failure, Success}
 import scala.xml.parsing.XhtmlEntities
-import scala.xml.pull._
+import XMLEventReaderSupport._
+import com.github.tototoshi.csv.CSVWriter
+
 import scala.xml.{MetaData, Utility}
 
 object ECCOXML2Text extends LazyLogging {
@@ -23,10 +25,10 @@ object ECCOXML2Text extends LazyLogging {
       else Stream.empty)
 
   /** helper function to turn XML attrs back into text */
-  def attrsToString(attrs:MetaData) = {
-    attrs.length match {
+  def attrsToString(attrs:Map[String,String]) = {
+    attrs.size match {
       case 0 => ""
-      case _ => attrs.map( (m:MetaData) => " " + m.key + "='" + m.value +"'" ).reduceLeft(_+_)
+      case _ => attrs.toSeq.map(m => " " + m._1 + "='" + m._2 +"'").reduceLeft(_+_)
     }
   }
   
@@ -69,7 +71,7 @@ object ECCOXML2Text extends LazyLogging {
           if (word.startY < lsy) lsy = word.startY
           if (word.endY > ley) ley = word.endY
         }
-        lmw.write(Seq(""+page,""+lsx,""+lsy,""+lex,""+ley,currentLine.map(_.word).mkString(" ")))
+        lmw.writeRow(Seq(""+page,""+lsx,""+lsy,""+lex,""+ley,currentLine.map(_.word).mkString(" ")))
       }
       var ret: Option[String] = None
       if (lastLine != null) { // we have two lines, check for a paragraph change between them.
@@ -135,7 +137,7 @@ object ECCOXML2Text extends LazyLogging {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
-      case EvElemStart(_,_,_,_) => return null
+      case EvElemStart(_,_,_) => return null
       case EvText(text) => content.append(text)
       case er: EvEntityRef => content.append(decodeEntity(er.entity))
       case EvComment(comment) if comment == " unknown entity apos; " => content.append('\'')
@@ -157,7 +159,7 @@ object ECCOXML2Text extends LazyLogging {
     //val curHeight = curEndY - curStartY
     var ret: Option[String] = None 
     if (state.currentLine.nonEmpty) {
-      val pos = Searching.search(state.currentLine).search(Word(curMidX,-1,-1,-1,-1,"")).insertionPoint - 1
+      val pos = state.currentLine.search(Word(curMidX,-1,-1,-1,-1,"")).insertionPoint - 1
       val Word(_,_,_,_, lastEndY, _) = state.currentLine(if (pos == -1) 0 else pos)
       if (curStartY > lastEndY || curMidX < state.currentLine.last.midX) // new line or new paragraph
         ret = state.testParagraphBreakAtEndOfLine(guessParagraphs, emitLineBoxes)
@@ -198,7 +200,7 @@ object ECCOXML2Text extends LazyLogging {
     } while (first == '<' && (second=='?' || second=='!'))
     fis.unread(second)
     fis.unread(first)
-    implicit val xml = new XMLEventReader(Source.fromInputStream(fis,encoding))
+    implicit val xml = getXMLEventReader(fis,encoding)
     var currentSection: String = null
     val content = new StringBuilder()
     var sw: PrintWriter = null
@@ -211,24 +213,24 @@ object ECCOXML2Text extends LazyLogging {
     var partNum = 0
     val state = new State()
     state.smw = new PrintWriter(new File(prefix.substring(0,prefix.length-1)+"-payload.csv"))
-    if (emitLineBoxes) state.lmw = CSVWriter(prefix.substring(0,prefix.length-1)+"-lineboxes.csv")
+    if (emitLineBoxes) state.lmw = CSVWriter.open(prefix.substring(0,prefix.length-1)+"-lineboxes.csv")
     while (xml.hasNext) xml.next match {
-      case EvElemStart(_,"text",_,_) =>
+      case EvElemStart(_,"text",_) =>
         while (xml.hasNext && !break) xml.next match {
-          case EvElemStart(_,"page",attrs,_) =>
-            if (currentSection!=attrs("type").head.text) {
+          case EvElemStart(_,"page",attrs) =>
+            if (currentSection!=attrs("type")) {
               if (sw != null) sw.close()
               if (gw!=null) gw.close()
               if (hw!=null) hw.close()
-              currentSection = attrs("type").head.text
+              currentSection = attrs("type")
               partNum += 1
               sw = new PrintWriter(new File(prefix+partNum+"_"+currentSection.replaceAllLiterally("bodyPage","body")+".txt"))
               gw = null
               hw = null
               state.currentLine.clear()
             }
-          case EvElemStart(_,"sectionHeader",attrs,_) =>
-            val htype = attrs.get("type").map(_.head.text).getOrElse("")
+          case EvElemStart(_,"sectionHeader",attrs) =>
+            val htype = attrs.get("type").getOrElse("")
             if (!omitStructure) {
               val hl = htype match {
                 case "other" => "### "
@@ -239,20 +241,20 @@ object ECCOXML2Text extends LazyLogging {
               state.offset += hl.length
             }
             val heading = readContents
-            if (hw == null) hw = CSVWriter(prefix + partNum + "_" + currentSection.replaceAllLiterally("bodyPage", "body") + "-headings.csv")
-            hw.write(Seq("" + state.page, htype, heading))
+            if (hw == null) hw = CSVWriter.open(prefix + partNum + "_" + currentSection.replaceAllLiterally("bodyPage", "body") + "-headings.csv")
+            hw.writeRow(Seq("" + state.page, htype, heading))
             if (!omitHeadings) {
               state.offset += heading.length + 2
               content.append(heading)
               content.append("\n\n")
             }
-          case EvElemStart(_,"graphicCaption",attrs,_) =>
-            val htype = attrs.get("type").map(_.head.text).getOrElse("").toLowerCase
+          case EvElemStart(_,"graphicCaption",attrs) =>
+            val htype = attrs.get("type").getOrElse("").toLowerCase
             val caption = readContents
-            if (gw == null) gw = CSVWriter(prefix+partNum+"_"+currentSection.replaceAllLiterally("bodyPage","body")+"-graphics.csv")
-            gw.write(Seq(""+state.page,htype,attrs.get("colorimage").map(_.head.text).getOrElse(""),caption))
-          case EvElemStart(_,"wd",attrs,_) =>
-            val pos = attrs("pos").head.text.split(",")
+            if (gw == null) gw = CSVWriter.open(prefix+partNum+"_"+currentSection.replaceAllLiterally("bodyPage","body")+"-graphics.csv")
+            gw.writeRow(Seq(""+state.page,htype,attrs.getOrElse("colorimage", ""),caption))
+          case EvElemStart(_,"wd",attrs) =>
+            val pos = attrs("pos").split(",")
             readNextWordPossiblyEmittingAParagraph(pos.map(_.toInt), state, guessParagraphs, emitLineBoxes) match {
             case Some(paragraph) => 
               content.append(paragraph)
@@ -307,7 +309,7 @@ object ECCOXML2Text extends LazyLogging {
           case EvElemEnd(_,"text") => break = true
           case _ =>
         }
-      case EvElemStart(_,"documentID",attrs,_) =>
+      case EvElemStart(_,"documentID",attrs) =>
         metadata.append(indent + "<documentID"+ attrsToString(attrs) + ">\n")
         val documentID = readContents
         metadata.append(indent + "  " + documentID + "\n")
@@ -315,7 +317,7 @@ object ECCOXML2Text extends LazyLogging {
         val idw = new PrintWriter(new File(prefix.substring(0,prefix.length-1)+"-id.txt"))
         idw.append(documentID)
         idw.close()
-      case EvElemStart(_,"PSMID",attrs,_) =>
+      case EvElemStart(_,"PSMID",attrs) =>
         metadata.append(indent + "<PSMID"+ attrsToString(attrs) + ">\n")
         val documentID = readContents
         metadata.append(indent + "  " + documentID + "\n")
@@ -323,7 +325,7 @@ object ECCOXML2Text extends LazyLogging {
         val idw = new PrintWriter(new File(prefix.substring(0,prefix.length-1)+"-id.txt"))
         idw.append(documentID)
         idw.close()
-      case EvElemStart(_, label, attrs, _) =>
+      case EvElemStart(_, label, attrs) =>
         metadata.append(indent + "<" + label + attrsToString(attrs) + ">\n")
         indent += "  "
       case EvText(text) => if (!text.trim.isEmpty) {

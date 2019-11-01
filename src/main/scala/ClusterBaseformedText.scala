@@ -14,7 +14,7 @@ import cc.mallet.pipe.Target2Label
 import cc.mallet.pipe.FeatureSequence2FeatureVector
 import cc.mallet.pipe.PrintInputAndTarget
 import cc.mallet.pipe.SerialPipes
-import scala.collection.JavaConversions._
+import scala.jdk.CollectionConverters._
 import cc.mallet.types.InstanceList
 import cc.mallet.types.Instance
 import cc.mallet.topics.ParallelTopicModel
@@ -39,7 +39,7 @@ object ClusterBaseformedText {
     pipeList += stopWordFilter
     pipeList += new TokenSequenceRemoveStopPatterns(Array("\\d+"))
     pipeList += new TokenSequence2FeatureSequenceWithBigrams()
-    val instances = new InstanceList(new SerialPipes(pipeList))
+    val instances = new InstanceList(new SerialPipes(pipeList.asJavaCollection))
     for (line <- Source.fromFile("ajantasa-content.txt").getLines.map(_.replaceAll("\\\\n"," "))) {
       val idContent = line.split("\\|")
       val id = idContent.head
@@ -50,7 +50,7 @@ object ClusterBaseformedText {
     val numIterations = 2000
     val model = new ParallelTopicModel(numTopics, 1.0, 0.01)
     model.addInstances(instances)
-    model.setNumThreads(Runtime.getRuntime().availableProcessors())
+    model.setNumThreads(Runtime.getRuntime.availableProcessors())
     model.setNumIterations(numIterations)
     model.estimate()
     
@@ -62,7 +62,7 @@ object ClusterBaseformedText {
     val numKeywords = 5
     for (i <- 0 until numTopics) {
       val topic = "<http://ldf.fi/finlex/topic_"+i+">"
-      val kws = topicSortedWords.get(i).take(numKeywords).map(o => (dataAlphabet.lookupObject(o.getID),o.getWeight))
+      val kws = topicSortedWords.get(i).asScala.take(numKeywords).map(o => (dataAlphabet.lookupObject(o.getID),o.getWeight))
       for ((kw,j) <- kws.zipWithIndex) {
         val kwi = "<http://ldf.fi/finlex/topic_"+i+"_keyword_"+j+">"
         w.println(topic+" <"+DCTerms.subject+"> "+kwi+" .")

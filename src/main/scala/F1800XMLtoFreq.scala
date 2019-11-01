@@ -1,16 +1,8 @@
-import com.bizo.mighty.csv.CSVReader
-import java.net.URLEncoder
-import scala.io.Source
-import scala.xml.pull._
-import org.apache.jena.riot.RDFFormat
-import org.apache.jena.riot.RDFDataMgr
-import java.io.FileOutputStream
-import com.bizo.mighty.csv.CSVDictReader
-import scala.xml.parsing.XhtmlEntities
-import scala.collection.mutable.Stack
+import java.io.{BufferedWriter, FileInputStream, FileWriter}
+
+import XMLEventReaderSupport._
+
 import scala.collection.mutable.HashSet
-import java.io.BufferedWriter
-import java.io.FileWriter
 
 object F1800XMLToFreq {
 
@@ -18,12 +10,13 @@ object F1800XMLToFreq {
     val ngrams = new HashSet[String]
     for (file <- new java.io.File("texts/").listFiles) {
       println("Processing: "+file)
-      val xml = new XMLEventReader(Source.fromFile(file,"ISO-8859-1"))
+      val fis = new FileInputStream(file)
+      val xml = getXMLEventReader(fis,"ISO-8859-1")
       var break = false
       while (xml.hasNext) xml.next match {
-        case EvElemStart(_,"text",_,_) => 
+        case EvElemStart(_,"text",_) =>
           while (!break) xml.next match {
-             case EvElemStart(_,"foreign", _, _) =>
+             case EvElemStart(_,"foreign", _) =>
                while (!break) {
                  xml.next match {
                    case EvElemEnd(_,"foreign") => break = true
@@ -37,6 +30,7 @@ object F1800XMLToFreq {
           }
         case _ =>
       }
+      fis.close()
     }
     val file = new java.io.File("tokens.txt")
     val bw = new BufferedWriter(new FileWriter(file))

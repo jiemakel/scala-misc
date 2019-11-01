@@ -2,7 +2,7 @@ import java.io.{File, FileInputStream, InputStreamReader}
 import java.util.concurrent.atomic.AtomicLong
 import java.util.function.{BiPredicate, LongFunction}
 
-import com.bizo.mighty.csv.CSVReader
+import com.github.tototoshi.csv.CSVReader
 import com.koloboke.collect.map.hash.HashLongObjMaps
 import fi.seco.lucene.{MorphologicalAnalysisTokenStream, MorphologicalAnalyzer, WordToAnalysis}
 import org.apache.lucene.document.{Field, StoredField}
@@ -75,9 +75,9 @@ object STTArticleIndexer extends OctavoIndexer {
   implicit val formats = DefaultFormats
 
   private def index(file: File): Unit = {
-    val wr = CSVReader(file.getPath)
+    val wr = CSVReader.open(file.getPath)
     logger.info("Processing "+file)
-    wr.next()
+    wr.readNext()
     for (r <- wr) {
       val id = Try(r(0).toLong).getOrElse(-1L)
       val fname = id+".xml"
@@ -190,7 +190,7 @@ object STTArticleIndexer extends OctavoIndexer {
   def main(args: Array[String]): Unit = {
     val opts = new HSOpts(args)
     opts.subjects()
-    for (r<-CSVReader(opts.subjects()))
+    for (r<-CSVReader.open(opts.subjects()))
       subjects.computeIfAbsent(r.head.toLong,new LongFunction[ArrayBuffer[String]] {
         override def apply(value: Long) = new ArrayBuffer[String]
       }) += r.last

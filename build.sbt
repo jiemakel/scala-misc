@@ -1,23 +1,26 @@
 name := """scala-misc"""
 
-version := "1.1"
+version := "1.2"
 
-scalaVersion := "2.12.8"
+scalaVersion := "2.13.1"
+
+javacOptions ++= Seq("-source","9","-target","9")
+scalacOptions += "-target:9"
 
 libraryDependencies ++= Seq(
-  "com.typesafe.play" %% "play-json" % "2.6.0-M6",
+  "com.typesafe.play" %% "play-json" % "2.7.4",
   "fi.seco" %% "lucene-morphologicalanalyzer" % "1.2.1" exclude("commons-logging", "commons-logging"),
   "fi.seco" % "lexicalanalysis-resources-fi-complete" % "1.5.16",
-  "fi.hsci" %% "lucene-normalisinganalyzer" % "1.0.0",
-  "org.scala-lang.modules" %% "scala-java8-compat" % "0.8.0",
-  "org.json4s" %% "json4s-native" % "3.5.1" ,
+  "fi.hsci" %% "lucene-normalisinganalyzer" % "1.0.2",
+  "org.scala-lang.modules" %% "scala-java8-compat" % "0.9.0",
+  "org.scala-lang.modules" %% "scala-xml" % "2.0.0-M1",
+  "org.json4s" %% "json4s-native" % "3.7.0-M1",
   "com.fasterxml" % "aalto-xml" % "1.0.0",
   "org.apache.jena" % "jena-core" % "3.11.0" exclude("org.slf4j","slf4j-log4j12") exclude("log4j","log4j") exclude("commons-logging", "commons-logging"),
   "org.apache.jena" % "jena-arq" % "3.11.0" exclude("org.slf4j","slf4j-log4j12") exclude("log4j","log4j") exclude("commons-logging", "commons-logging"),
-  "com.github.nscala-time" %% "nscala-time" % "2.16.0",
-  "com.bizo" %% "mighty-csv" % "0.2",
-  "org.scalanlp" %% "breeze" % "0.13",
-  "com.typesafe.scala-logging" %% "scala-logging" % "3.5.0",
+  "com.github.nscala-time" %% "nscala-time" % "2.22.0",
+  "org.scalanlp" %% "breeze" % "1.0",
+  "com.typesafe.scala-logging" %% "scala-logging" % "3.9.2",
   "ch.qos.logback" % "logback-classic" % "1.1.3",
   "org.slf4j" % "log4j-over-slf4j" % "1.7.12",
   "cc.mallet" % "mallet" % "2.0.8" exclude("commons-logging", "commons-logging"),
@@ -34,17 +37,19 @@ libraryDependencies ++= Seq(
   "org.apache.commons" % "commons-math3" % "3.6.1",
   "com.google.guava" % "guava" % "21.0",
   "com.breinify" % "brein-time-utilities" % "1.6.4" exclude("org.slf4j","slf4j-log4j12") exclude("log4j","log4j") exclude("commons-logging", "commons-logging"),
-  "org.rogach" %% "scallop" % "2.1.1",
+  "org.rogach" %% "scallop" % "3.3.1",
   "org.jsoup" % "jsoup" % "1.10.2",
   "com.optimaize.languagedetector" % "language-detector" % "0.6" exclude("com.intellij","annotations"),
-  "org.jetbrains.xodus" % "xodus-environment" % "1.3.0" exclude("org.jetbrains","annotations")
+  "org.jetbrains.xodus" % "xodus-environment" % "1.3.0" exclude("org.jetbrains","annotations"),
+  "com.github.tototoshi" %% "scala-csv" % "1.3.6",
+  "junit" % "junit" % "4.12" % "test"
 )
 
 resolvers ++= Seq(
   Resolver.mavenLocal,
-  "Oracle" at "http://download.oracle.com/maven/",
+  "Oracle" at "https://download.oracle.com/maven/",
   "boundless" at "https://repo.boundlessgeo.com/main/",
-  "geotoolkit" at "http://maven.geotoolkit.org/"
+  "geotoolkit" at "https://maven.geotoolkit.org/"
 )
 
 fork in run := true
