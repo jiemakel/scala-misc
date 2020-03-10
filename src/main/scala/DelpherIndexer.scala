@@ -3,7 +3,6 @@ import java.text.BreakIterator
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
-import javax.xml.stream.XMLEventReader
 import org.apache.lucene.document.{Field, NumericDocValuesField}
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.search.{Sort, SortField}
@@ -79,7 +78,7 @@ object DelpherIndexer extends OctavoIndexer {
 
   import XMLEventReaderSupport._
 
-  private def readContents(implicit xml: XMLEventReader): String = {
+  private def readContents(implicit xml: Iterator[EvEvent]): String = {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {

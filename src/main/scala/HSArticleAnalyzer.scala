@@ -78,7 +78,7 @@ object HSArticleAnalyzer extends ParallelProcessor {
   private val langs = Seq("fi","sv","en")
   
   def analyze(outputFile: File, article: String): Unit = {
-    val contentDocument = Jsoup.parse("<article>"+article.replaceAllLiterally("&", "&amp;")+"</article>")
+    val contentDocument = Jsoup.parse("<article>"+article.replaceAllLiterally("&", "&amp;").replaceAllLiterally("&shy;","")+"</article>")
     val paragraphs = contentDocument.select("p").asScala.map(_.text)
     /*val contentXML = new XMLEventReader(Source.fromString("<article>"+article.replaceAllLiterally("&", "&amp;")+"</article>"))
     val stringContent = new StringBuilder

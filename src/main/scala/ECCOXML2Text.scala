@@ -133,7 +133,7 @@ object ECCOXML2Text extends LazyLogging {
     }
   }
   
-  private def readContents(implicit xml: XMLEventReader): String = {
+  private def readContents(implicit xml: Iterator[EvEvent]): String = {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
@@ -151,7 +151,7 @@ object ECCOXML2Text extends LazyLogging {
     content.toString
   }
   
-  private def readNextWordPossiblyEmittingAParagraph(pos: Seq[Int], state: State, guessParagraphs: Boolean, emitLineBoxes: Boolean)(implicit xml: XMLEventReader): Option[String] = {
+  private def readNextWordPossiblyEmittingAParagraph(pos: Seq[Int], state: State, guessParagraphs: Boolean, emitLineBoxes: Boolean)(implicit xml: Iterator[EvEvent]): Option[String] = {
     val word = readContents
     val (curStartX,curEndX) = if (pos(0)<pos(2)) (pos(0),pos(2)) else (pos(2),pos(0))
     val curMidX = (curStartX + curEndX) / 2

@@ -84,7 +84,7 @@ object STTArticleAnalyzer extends ParallelProcessor {
         '〈' + entity + '〉'
     }
   }
-  private def readContents(element: String)(implicit xml: XMLEventReader): String = {
+  private def readContents(element: String)(implicit xml: Iterator[EvEvent]): String = {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {

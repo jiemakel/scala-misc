@@ -92,7 +92,7 @@ object EEBOConverter extends ParallelProcessor {
     val pcontent = new StringBuilder()
   }
 
-  private def process(opts: ProcessOpts)(implicit xml: XMLEventReader, pt: PageTracker): String = {
+  private def process(opts: ProcessOpts)(implicit xml: Iterator[EvEvent], pt: PageTracker): String = {
     val scontent = new StringBuilder()
     val content = new StringBuilder()
     implicit val contents = Array(pt.pcontent, scontent, content)

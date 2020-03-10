@@ -5,7 +5,6 @@ import ECCOXML2Text.attrsToString
 import XMLEventReaderSupport._
 import com.github.tototoshi.csv.CSVWriter
 import com.typesafe.scalalogging.LazyLogging
-import javax.xml.stream.XMLEventReader
 import org.rogach.scallop.ScallopConf
 
 import scala.xml.Utility
@@ -422,7 +421,7 @@ object SKVR2Text extends LazyLogging {
     $string =~ s/&#879;//g;
    */
 
-  private def readContents(implicit xml: XMLEventReader): String = {
+  private def readContents(implicit xml: Iterator[EvEvent]): String = {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {

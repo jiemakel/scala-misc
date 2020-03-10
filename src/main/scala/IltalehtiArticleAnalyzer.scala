@@ -8,10 +8,10 @@ import org.json4s.JsonDSL._
 import org.json4s._
 import org.json4s.native.JsonParser._
 
-import scala.jdk.CollectionConverters._
 import scala.compat.java8.StreamConverters._
+import scala.jdk.CollectionConverters._
 
-object YLEArticleAnalyzer extends ParallelProcessor {
+object IltalehtiArticleAnalyzer extends ParallelProcessor {
   
   val la = new CombinedLexicalAnalysisService()
   
@@ -23,34 +23,52 @@ object YLEArticleAnalyzer extends ParallelProcessor {
       { case r: HFSTLexicalAnalysisService.WordToResults => JObject(JField("word",r.getWord) :: JField("analysis", JArray(r.getAnalysis.asScala.toList.map(Extraction.decompose))) :: Nil) }))
 
   val fiLocale = new Locale("fi")
-  
+
+  def analyze(str: String): collection.Seq[HFSTLexicalAnalysisService.WordToResults] =  {
+    val ret = la.analyze(str, fiLocale, Collections.EMPTY_LIST.asInstanceOf[util.List[String]], false, true, false, 0, 1).asScala
+    var inQuote = false
+    for (wta <- ret) {
+      if (wta.getAnalysis.get(0).getGlobalTags.containsKey("FIRST_IN_SENTENCE"))
+        inQuote = wta.getWord == "-"
+      if (inQuote) wta.getAnalysis.forEach(_.addGlobalTag("IS_QUOTATION","TRUE"))
+    }
+    ret
+  }
+
   def main(args: Array[String]): Unit = {
     val dest = args.last
     feedAndProcessFedTasksInParallel(() =>
       args.dropRight(1).toIndexedSeq.flatMap(n => getFileTree(new File(n))).parStream.filter(_.getName.endsWith(".json")).forEach(file => {
+        logger.info("Parsing "+file)
         parse(new InputStreamReader(new FileInputStream(file)), (p: Parser) => {
-          var token = p.nextToken
-          while (token != FieldStart("data")) token = p.nextToken
-          token = p.nextToken // OpenArr
+          var token = p.nextToken // OpenArr
           token = p.nextToken // OpenObj/CloseArr
           while (token != CloseArr) {
-            //assert(token == OpenObj, token)
+            assert(token == OpenObj, token)
             val obj = ObjParser.parseObject(p, Some(token))
-            val id = (obj \ "id").asInstanceOf[JString].values
-            if ((obj \ "language").asInstanceOf[JString].values == "fi")
-              addTask(file + "/" + id, () => {
-                val json = org.json4s.native.JsonMethods.pretty(org.json4s.native.JsonMethods.render(obj transform {
-                  case o: JObject => 
-                    val text =  o \ "text"
-                    text match {
-                      case string: JString => o merge JObject(JField("analyzedText", JArray(la.analyze(string.values, fiLocale, Collections.EMPTY_LIST.asInstanceOf[util.List[String]], false, true, false, 0, 1).asScala.map(Extraction.decompose).toList)))
-                      case _ => o
-                    }
-                }))
-                val writer = new PrintWriter(new File(dest+"/"+id+".analysis.json"))
-                writer.write(json)
-                writer.close()
-              })
+            val id = (obj \ "article_id").asInstanceOf[JString].values
+            addTask(file + "/" + id, () => {
+              val json = org.json4s.native.JsonMethods.pretty(org.json4s.native.JsonMethods.render(obj transform {
+                case o: JObject =>
+                  var o2 = o \ "body" match {
+                    case string: JString => o merge JObject(JField("analyzedBody", JArray(analyze(string.values).map(Extraction.decompose).toList)))
+                    case _ => o
+                  }
+                  o2 = o2 \ "lead" match {
+                    case string: JString => o2 merge JObject(JField("analyzedLead", JArray(analyze(string.values).map(Extraction.decompose).toList)))
+                    case _ => o2
+                  }
+                  o2 \ "title" match {
+                    case string: JString => o2 merge JObject(JField("analyzedTitle", JArray(analyze(string.values).map(Extraction.decompose).toList)))
+                    case _ => o2
+                  }
+              }))
+              val dir = dest+"/"+id.charAt(0)+"/"+id.charAt(1)+"/"
+              new File(dir).mkdirs()
+              val writer = new PrintWriter(new File(dir+id+".analysis.json"))
+              writer.write(json)
+              writer.close()
+            })
             token = p.nextToken // OpenObj/CloseArr
           }})
         logger.info("File "+file+" processed.")

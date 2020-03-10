@@ -3,8 +3,7 @@ import java.text.BreakIterator
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
-import javax.xml.stream.{XMLEventReader, XMLInputFactory}
-import javax.xml.stream.events.{Characters, Comment, EndElement, EntityReference, StartElement}
+import javax.xml.stream.events._
 import jetbrains.exodus.bindings.{IntegerBinding, StringBinding}
 import jetbrains.exodus.env._
 import jetbrains.exodus.util.LightOutputStream
@@ -134,8 +133,10 @@ object BritishNewspaperIndexer extends OctavoIndexer {
   val tld = new ThreadLocal[Reuse] {
     override def initialValue() = new Reuse()
   }
-  
-  private def readContents(implicit xml: XMLEventReader): String = {
+
+  import XMLEventReaderSupport._
+
+  private def readContents(implicit xml: Iterator[EvEvent]): String = {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
@@ -215,7 +216,7 @@ object BritishNewspaperIndexer extends OctavoIndexer {
     }
   }
   
-  private def readNextWordPossiblyEmittingAParagraph(attrs: Map[String,String], state: State, guessParagraphs: Boolean)(implicit xml: XMLEventReader): Option[Iterable[Iterable[Word]]] = {
+  private def readNextWordPossiblyEmittingAParagraph(attrs: Map[String,String], state: State, guessParagraphs: Boolean)(implicit xml: Iterator[EvEvent]): Option[Iterable[Iterable[Word]]] = {
     val word = readContents
     val posa = attrs("pos").split(",")
     val curStartX = posa(0).toInt
@@ -304,9 +305,8 @@ object BritishNewspaperIndexer extends OctavoIndexer {
       piw.addDocument(d.pd)
     }
   }
-  import XMLEventReaderSupport._
 
-  private def getXMLEventReaderWithCorrectEncoding(file: File): XMLEventReader = {
+  private def getXMLEventReaderWithCorrectEncoding(file: File): Iterator[EvEvent] = {
     val fis = new PushbackInputStream(new FileInputStream(file),2)
     var second = 0
     var first = fis.read()

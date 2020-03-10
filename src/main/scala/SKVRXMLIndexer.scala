@@ -5,10 +5,10 @@ import java.util.regex.Pattern
 import XMLEventReaderSupport._
 import com.github.tototoshi.csv.CSVReader
 import fi.hsci.lucene.NormalisationFilter
-import javax.xml.stream.XMLEventReader
-import org.apache.lucene.analysis.LowerCaseFilter
+import org.apache.lucene.analysis.{LowerCaseFilter, TokenStream}
 import org.apache.lucene.analysis.pattern.{PatternReplaceFilter, PatternTokenizer}
-import org.apache.lucene.document.{NumericDocValuesField, SortedDocValuesField}
+import org.apache.lucene.analysis.tokenattributes.{CharTermAttribute, PositionIncrementAttribute}
+import org.apache.lucene.document.{NumericDocValuesField, SortedDocValuesField, StoredField}
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.search.{Sort, SortField}
 import org.apache.lucene.util.BytesRef
@@ -21,7 +21,7 @@ import scala.xml.parsing.XhtmlEntities
 
 object SKVRXMLIndexer extends OctavoIndexer {
 
-  private def readContents(elem: String)(implicit xml: XMLEventReader): String = {
+  private def readContents(elem: String)(implicit xml: Iterator[EvEvent]): String = {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
@@ -68,15 +68,18 @@ object SKVRXMLIndexer extends OctavoIndexer {
     val regionFields = new StringSDVFieldPair("region").r(dd, send)
     val placeFields = new StringSDVFieldPair("place").r(dd, send)
     val yearFields = new IntPointNDVFieldPair("year").r(dd, send)
-    val contentField = new ContentField("content",createAnalyser((_) => new PatternTokenizer(Pattern.compile(
-      "(#[0-9]*|\\[[\\p{Punct}\\p{InGeneral_Punctuation}°$€¨ˇ&&[^#\\[\\]']]*\\]|[\\p{Punct}\\p{InGeneral_Punctuation}°$€¨ˇ&&[^\\[\\]']])*" + // #footnotes or any punctuation (at the end of the previous word)
-        "((^|\\n)[0-9]+[\\p{Z}_\\n]*|[\\p{Z}_\\n]+|$)" + // either numbers + whitespace at the start of a line, or just whitespace, or the end of the line (to clean punctuation at the end of the line)
-        "(\\[[\\p{Punct}\\p{InGeneral_Punctuation}°$€¨ˇ&&[^#\\[\\]']]*\\]|[\\p{Punct}\\p{InGeneral_Punctuation}°$€¨ˇ&&[^#\\[\\]']])*" // any punctuation at the beginning of the starting word
+    val contentField = new ContentField("content",createAnalyser(_ => new PatternTokenizer(Pattern.compile(
+      """(#[0-9]*|\[[\p{Punct}\p{InGeneral_Punctuation}°$€¨ˇ&&[^#\[\]']]*\]|[\p{Punct}\p{InGeneral_Punctuation}°$€¨ˇ&&[^\[\]']])*""" + // #footnotes or any punctuation (at the end of the previous word)
+        """((^|\n)[0-9]+[\p{Z}_\n]*|[\p{Z}_\n]+|$)""" + // either numbers + whitespace at the start of a line, or just whitespace, or the end of the line (to clean punctuation at the end of the line)
+        """(\[[\p{Punct}\p{InGeneral_Punctuation}°$€"¨ˇ&&[^#\[\]']]*\]|[\p{Punct}\p{InGeneral_Punctuation}°$€"¨ˇ&&[^#\[\]']])*""" // any punctuation at the beginning of the starting word
     ),-1),
-      (_,ins) => new PatternReplaceFilter(ins,Pattern.compile("[\\[\\]']"),"",true),
+      (_,ins) => new PatternReplaceFilter(ins,Pattern.compile("""[\[\]'^°@\*$€"¨ˇ]"""),"",true),
       (_,ins) => new LowerCaseFilter(ins),
       (_,ins) => new NormalisationFilter(ins,true)
     )).r(dd,send)
+    val normalizedContentField = new StoredField("normalizedContent","")
+    dd.addRequired(normalizedContentField)
+    send.addRequired(normalizedContentField)
     val notesFields = new TextSDVFieldPair("notes").o(dd, send)
     val lineIDField = new NumericDocValuesField("lineID", 0)
     send.addRequired(lineIDField)
@@ -96,6 +99,22 @@ object SKVRXMLIndexer extends OctavoIndexer {
 
   val termVectorFields = Seq("content")
 
+  private def tokenStreamToString(ts: TokenStream, includeOriginal: Boolean): String = {
+    val oa = ts.getAttribute(classOf[PositionIncrementAttribute])
+    val ta = ts.getAttribute(classOf[CharTermAttribute])
+    ts.reset()
+    val sb = new StringBuilder()
+    while (ts.incrementToken()) if (includeOriginal || oa.getPositionIncrement>0) {
+      sb.append(ta.toString)
+      sb.append(' ')
+    }
+    ts.end()
+    ts.close()
+    if (sb.nonEmpty)
+      sb.setLength(sb.length-1)
+    sb.toString
+  }
+
   private def index(file: File): Unit = {
     logger.info("Processing: " + file)
     val s = new FileInputStream(file)
@@ -103,7 +122,7 @@ object SKVRXMLIndexer extends OctavoIndexer {
     val verses = new ArrayBuffer[String]
     val r = tld.get
     val c = new StringBuilder()
-    while (xml.hasNext) xml.next match {
+    while (xml.hasNext) xml.next() match {
       case EvElemStart(_, "ITEM", iattrs) =>
         r.clearMultiDocumentFields()
         verses.clear()
@@ -112,10 +131,24 @@ object SKVRXMLIndexer extends OctavoIndexer {
         val year = iattrs("y").toInt
         val placeId = iattrs("p").toInt
         val collectorId = iattrs("k").toInt
-        while (xml.hasNext && !break) xml.next match {
+        while (xml.hasNext && !break) xml.next() match {
+          case EvElemStart(_,"COL",_) => readContents("COL") // collector
+          case EvElemStart(_,"INF",_) => readContents("INF") // informant
+          case EvElemStart(_,"LOC",_) => readContents("LOC") // location
+          case EvElemStart(_,"SGN",_) => readContents("SGN") // signum
+          case EvElemStart(_,"TMP",_) => readContents("TMP") // time
+          case EvElemStart(_,"OSA",_) => readContents("OSA") // part
+          case EvElemStart(_,"ID",_) => readContents("ID") // id
+          case EvElemStart(_,"CPT",_) => readContents("CPT") // TODO: caption
           case EvElemStart(_, "V", _) => verses.append(readContents("V"))
+          case EvElemStart(_, "L", _) => verses.append(readContents("L")) // TODO: not verses
+          case EvElemStart(_, "K", _) => verses.append(readContents("K")) // TODO: not verses
           case EvElemStart(_, "REFS", _) => r.notesFields.setValue(readContents("REFS"))
           case EvElemEnd(_, "ITEM") => break = true
+          case EvText(t) if t.trim.isEmpty =>
+          case EvElemStart(_,"META",_) | EvElemEnd(_,"META") =>
+          case EvElemStart(_,"TEXT",_) | EvElemEnd(_,"TEXT") =>
+          case e => println("Unknown element",e)
           case _ =>
         }
         r.skvrIDFields.setValue(id)
@@ -133,6 +166,8 @@ object SKVRXMLIndexer extends OctavoIndexer {
         for (line <- verses) {
           r.lineIDField.setLongValue(sentences.incrementAndGet)
           r.contentField.setValue(line)
+          r.normalizedContentField.setStringValue(tokenStreamToString(r.contentField.tokenStream,false))
+          println(line,tokenStreamToString(r.contentField.tokenStream,true).replaceAllLiterally(" ","|"))
           r.contentLengthFields.setValue(line.length)
           r.contentTokensFields.setValue(getNumberOfTokens(line))
           seniw.addDocument(r.send)
@@ -141,10 +176,14 @@ object SKVRXMLIndexer extends OctavoIndexer {
         }
         val dcontentsS = dcontents.toString
         r.contentField.setValue(dcontentsS)
+        r.normalizedContentField.setStringValue(tokenStreamToString(r.contentField.tokenStream, false))
         r.contentLengthFields.setValue(dcontentsS.length)
         r.contentTokensFields.setValue(getNumberOfTokens(dcontentsS))
         diw.addDocument(r.dd)
-      case _ =>
+      case EvText(t) if t.trim.isEmpty =>
+      case EvElemStart(_, "KOKONAISUUS", _) | EvElemEnd(_, "KOKONAISUUS") =>
+      case EvDocumentStart(_) | EvDTD() | EvDocumentEnd() | EvProcessingInstruction() =>
+      case e => println("Unknown element",e)
     }
     logger.info("Processed: " + file)
   }
@@ -170,17 +209,17 @@ object SKVRXMLIndexer extends OctavoIndexer {
       verify()
     }
     for (row <- CSVReader.open(opts.placeCsv()))
-      places.put(row(0).toInt, (row(1), row(2)))
+      places.put(row.head.toInt, (row(1), row(2)))
     for (row <- CSVReader.open(opts.collectorCsv()))
-      collectors.put(row(0).toInt, row(1))
+      collectors.put(row.head.toInt, row(1))
     for (row <- CSVReader.open(opts.themeCsv()))
-      themes.put(row(0).toInt, row(1))
+      themes.put(row.head.toInt, row(1))
     for (row <- CSVReader.open(opts.themePoemsCsv()))
-      poemThemes.getOrElseUpdate(row(3), new ArrayBuffer[Int]) += row(0).toInt
+      poemThemes.getOrElseUpdate(row(3), new ArrayBuffer[Int]) += row.head.toInt
     diw = iw(opts.index() + "/dindex", ds, opts.indexMemoryMb() / 2)
     seniw = iw(opts.index() + "/senindex", sens, opts.indexMemoryMb() / 2)
     feedAndProcessFedTasksInParallel(() => {
-      opts.directories().toStream.flatMap(p => getFileTree(new File(p)))
+      opts.directories().to(LazyList).flatMap(p => getFileTree(new File(p)))
         .filter(f => f.getName.endsWith(".xml") && "tyyppiluettelo.xml" != f.getName).foreach(file => addTask(file.getName, () => index(file)))
     })
     waitForTasks(

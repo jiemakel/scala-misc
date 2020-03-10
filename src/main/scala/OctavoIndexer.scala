@@ -102,19 +102,45 @@ class OctavoIndexer extends ParallelProcessor {
     val tokenStream = new ReusableCachedTokenStream(fanalyzer.tokenStream(field,""))
     f.setTokenStream(tokenStream)
     def numberOfTokens: Int = OctavoIndexer.this.getNumberOfTokens(tokenStream)
-    def setValue(v: String) {
+    def setValue(v: String, t: TokenStream): Unit = {
+      f.setTokenStream(t)
       f.setStringValue(v)
+      //tokenStream.fill(t)
+    }
+    def setValue(v: String) {
       tokenStream.fill(fanalyzer.tokenStream(field,v))
+      f.setStringValue(v)
     }
     def r(docs: FluidDocument*): this.type = {
       for (d<-docs)
         d.addRequired(f)
       this
     }
+    var odocs: Seq[FluidDocument] = Seq.empty
     def o(docs: FluidDocument*): this.type = {
-      for (d<-docs)
+      if (docs.nonEmpty) {
+        if (odocs.nonEmpty) throw new IllegalArgumentException("Setting optional documents when already set!")
+        odocs = docs
+      }
+      for (d<-odocs)
         d.addOptional(f)
       this
+    }
+  }
+
+  class SDVContentFields(field: String, fanalyzer: Analyzer = analyzer) extends FieldPair(new Field(field,"",notStoredContentFieldType), new SortedDocValuesField(field, new BytesRef())) {
+    val tokenStream = new ReusableCachedTokenStream(fanalyzer.tokenStream(field,""))
+    indexField.setTokenStream(tokenStream)
+    def numberOfTokens: Int = OctavoIndexer.this.getNumberOfTokens(tokenStream)
+    def setValue(v: String, t: TokenStream): Unit = {
+      indexField.setTokenStream(t)
+      storedField.setStringValue(v)
+      o()
+    }
+    def setValue(v: String): Unit = {
+      storedField.setStringValue(v)
+      tokenStream.fill(fanalyzer.tokenStream(field,v))
+      o()
     }
   }
 
@@ -124,7 +150,28 @@ class OctavoIndexer extends ParallelProcessor {
   class TextSDVFieldPair(field: String) extends FieldPair(new Field(field, "", normsOmittingNotStoredTextField), new SortedDocValuesField(field, new BytesRef())) {
     val tokenStream = new ReusableCachedTokenStream(analyzer.tokenStream(field,""))
     indexField.setTokenStream(tokenStream)
-    def setValue(v: String) {
+    def setValue(v: String, t: TokenStream): Unit = {
+      indexField.setTokenStream(t)
+      storedField.setStringValue(v)
+      o()
+    }
+    def setValue(v: String): Unit = {
+      tokenStream.fill(analyzer.tokenStream(field,v))
+      indexField.setTokenStream(tokenStream)
+      storedField.setBytesValue(new BytesRef(v))
+      o()
+    }
+  }
+
+  class TextSDVTVFieldPair(field: String) extends FieldPair(new Field(field, "", notStoredTextFieldTypeWithTermVectors), new SortedDocValuesField(field, new BytesRef())) {
+    val tokenStream = new ReusableCachedTokenStream(analyzer.tokenStream(field,""))
+    indexField.setTokenStream(tokenStream)
+    def setValue(v: String, t: TokenStream): Unit = {
+      indexField.setTokenStream(t)
+      storedField.setBytesValue(new BytesRef(v))
+      o()
+    }
+    def setValue(v: String): Unit = {
       tokenStream.fill(analyzer.tokenStream(field,v))
       indexField.setTokenStream(tokenStream)
       storedField.setBytesValue(new BytesRef(v))
@@ -133,8 +180,16 @@ class OctavoIndexer extends ParallelProcessor {
   }
   
   class TextSSDVFieldPair(field: String) extends FieldPair(new Field(field, "", normsOmittingNotStoredTextField), new SortedSetDocValuesField(field, new BytesRef())) {
-    def setValue(v: String) {
-      indexField.setStringValue(v)
+    val tokenStream = new ReusableCachedTokenStream(analyzer.tokenStream(field,""))
+    indexField.setTokenStream(tokenStream)
+    def setValue(v: String, t: TokenStream): Unit = {
+      indexField.setTokenStream(t)
+      storedField.setBytesValue(new BytesRef(v))
+      o()
+    }
+    def setValue(v: String): Unit = {
+      tokenStream.fill(analyzer.tokenStream(field,v))
+      indexField.setTokenStream(tokenStream)
       storedField.setBytesValue(new BytesRef(v))
       o()
     }
@@ -277,17 +332,26 @@ class OctavoIndexer extends ParallelProcessor {
     if (clear) d.listAll().foreach(d.deleteFile)
     new IndexWriter(d, iwc(sort, bufferSizeInMB))
   }
-  
 
   val contentFieldType = new FieldType(TextField.TYPE_STORED)
   contentFieldType.setOmitNorms(true)
   contentFieldType.setStoreTermVectors(true)
   contentFieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS)
-  
+
+  val notStoredContentFieldType = new FieldType(TextField.TYPE_NOT_STORED)
+  notStoredContentFieldType.setOmitNorms(true)
+  notStoredContentFieldType.setStoreTermVectors(true)
+  notStoredContentFieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS)
+
+  val notStoredTextFieldTypeWithTermVectors = new FieldType(TextField.TYPE_NOT_STORED)
+  notStoredTextFieldTypeWithTermVectors.setOmitNorms(true)
+  notStoredTextFieldTypeWithTermVectors.setStoreTermVectors(true)
+
   val normsOmittingStoredTextField = new FieldType(TextField.TYPE_STORED)
   normsOmittingStoredTextField.setOmitNorms(true)
   
   val notStoredStringFieldWithTermVectors = new FieldType(StringField.TYPE_NOT_STORED)
+  notStoredStringFieldWithTermVectors.setOmitNorms(true)
   notStoredStringFieldWithTermVectors.setStoreTermVectors(true)
   
   def merge(path: String, sort: Sort, bufferSizeInMB: Double, finalCodec: Codec): Unit = {

@@ -29,7 +29,7 @@ object METSALTOMaterialityExtractor extends LazyLogging {
     }
   }
 
-  def readContents(implicit xml: XMLEventReader): String = {
+  def readContents(implicit xml: Iterator[EvEvent]): String = {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {

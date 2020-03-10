@@ -6,18 +6,17 @@ import java.util.zip.GZIPInputStream
 import XMLEventReaderSupport._
 import com.github.tototoshi.csv.CSVWriter
 import com.typesafe.scalalogging.LazyLogging
-import javax.xml.stream.XMLEventReader
 
 import scala.collection.mutable.{HashMap, HashSet}
 import scala.concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.concurrent.duration._
+import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.io.Source
 import scala.util.{Failure, Success}
 
 object VIAFXML2CSV extends LazyLogging {
   
-  def readContents(implicit xml: XMLEventReader): String = {
+  def readContents(implicit xml: Iterator[EvEvent]): String = {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
@@ -32,7 +31,7 @@ object VIAFXML2CSV extends LazyLogging {
     return content.toString
   }
   
-  def readAggregate(endTag: String, values: HashMap[String,String])(implicit xml: XMLEventReader): Unit = {
+  def readAggregate(endTag: String, values: HashMap[String,String])(implicit xml: Iterator[EvEvent]): Unit = {
     var break = false
     while (xml.hasNext && !break) xml.next match {
       case EvElemStart(_,"data",attrs) =>
@@ -44,7 +43,7 @@ object VIAFXML2CSV extends LazyLogging {
     }
   }
   
-  def readAlternate(endTag: String)(implicit xml: XMLEventReader): Option[String] = {
+  def readAlternate(endTag: String)(implicit xml: Iterator[EvEvent]): Option[String] = {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {

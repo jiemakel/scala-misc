@@ -25,7 +25,7 @@ import javax.xml.stream.XMLEventReader
 
 object EEBOIndexer extends OctavoIndexer {
 
-  private def readContents(implicit xml: XMLEventReader): String = {
+  private def readContents(implicit xml: Iterator[EvEvent]): String = {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
