@@ -138,7 +138,7 @@ object ECCOXML2Text extends LazyLogging {
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
       case EvElemStart(_,_,_) => return null
-      case EvText(text) => content.append(text)
+      case EvText(text,_) => content.append(text)
       case er: EvEntityRef => content.append(decodeEntity(er.entity))
       case EvComment(comment) if comment == " unknown entity apos; " => content.append('\'')
       case EvComment(comment) if comment.startsWith(" unknown entity") =>
@@ -328,7 +328,7 @@ object ECCOXML2Text extends LazyLogging {
       case EvElemStart(_, label, attrs) =>
         metadata.append(indent + "<" + label + attrsToString(attrs) + ">\n")
         indent += "  "
-      case EvText(text) => if (!text.trim.isEmpty) {
+      case EvText(text,_)  => if (!text.trim.isEmpty) {
           if (!lastWasText) metadata.append(indent)
           if (text.length==1 && Utility.Escapes.escMap.contains(text(0))) metadata.append(Utility.Escapes.escMap(text(0)))
           else metadata.append(text)

@@ -230,7 +230,7 @@ object EEBOConverter extends ParallelProcessor {
           if (listDepth == 0) {
             if (content.isEmpty || content.last != '\n') append("\n\n") else if (content.length<2 || content.charAt(content.length - 2) != '\n') append("\n")
           } else if (content.isEmpty || content.last != '\n') append("\n")
-        case EvText(text) =>
+        case EvText(text,_)  =>
           val text2 = if (inTable) text.replaceAllLiterally("\n","") else if (lastAddedNewLine && text.head=='\n') text.tail else text
           if (opts.rehyphenate)
             append(text2.replaceAllLiterally("|","-\n").replaceAllLiterally("∣","-\n"))
@@ -271,7 +271,7 @@ object EEBOConverter extends ParallelProcessor {
           case EvElemStart(_, label, attrs) =>
             metadata.append(indent + "<" + label + attrsToString(attrs) + ">\n")
             indent += "  "
-          case EvText(text) => if (!text.trim.isEmpty) {
+          case EvText(text,_)  => if (!text.trim.isEmpty) {
             if (!lastWasText) metadata.append(indent)
             if (text.length==1 && Utility.Escapes.escMap.contains(text(0))) metadata.append(Utility.Escapes.escMap(text(0)))
             else metadata.append(text)

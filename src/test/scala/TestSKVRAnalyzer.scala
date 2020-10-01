@@ -25,7 +25,7 @@ class TestSKVRAnalyzer {
   @Test
   def testAnalyzer: Unit = {
     testAnalyzer(
-      "15 Tuop_ol' vuaksuva#16† *n[uori]* ,[!],J[ougavoine],[!] €Juokahaińe€. \"Oi šie, ^mua̯mo^, kandai̭̯ańi, Ken °miuv_virren °kiittänöö,\n@Testaan@ *kaikkea* ki'vaa_mitä_ ¨#17¨ voi olla. Läks_on nogi#1 ˇnuorasestaˇ, joka\noli\n35 jotain",
+      "∞15 Tuop_ol' vuaksuva#16† *n[uori]* ,[!],J[ougavoine],[!] €Juokahaińe€. \"Oi šie, ^mua̯mo^, kandai̭̯ańi, Ken °miuv_virren °kiit|tä|nöö,\n@Testaan@ *kaikkea* ki'vaa_mitä_ ¨#17¨ voi olla. Läks_on nogi#1 ˇnuorasestaˇ, joka\noli\n35 jotain∞",
       "tuop ol vuaksuva nuori jougavoine juokahaine juokahaińe oi sie šie muamo mua̯mo kandaiani kandai̭̯ańi ken miuv virren kiittänöö testaan kaikkea kivaa mitä voi olla läks on nogi nuorasesta joka oli jotain"
     )
   }
@@ -33,7 +33,7 @@ class TestSKVRAnalyzer {
   @Test
   def testAnalyzer2: Unit = {
     testAnalyzer(
-    "\"Vesi miun.\n(Pakka^i^ńi\n*V[aka] seb°üä°^i^l'i",
+    "\"Vesi miun.\n£(Pakka^i^ńi£\n*V[aka] seb°üä°^i^l'i",
 "vesi miun pakkaini pakkaińi vaka sebyäili sebüäili"
     )
   }

@@ -1,38 +1,60 @@
 import java.io.{InputStream, StringReader}
 
-import javax.xml.stream.events._
-import javax.xml.stream.{XMLEventReader, XMLInputFactory}
+import javax.xml.stream.{XMLInputFactory, XMLStreamConstants, XMLStreamReader}
 
-import scala.jdk.CollectionConverters._
 
 object XMLEventReaderSupport {
-  abstract class EvEvent
-  case class EvDocumentStart(encoding: String) extends EvEvent
-  case class EvDocumentEnd() extends EvEvent
-  case class EvDTD() extends EvEvent
-  case class EvProcessingInstruction() extends EvEvent
-  case class EvElemStart(pre: String, name: String, attrs: Map[String,String]) extends EvEvent
-  case class EvElemEnd(pre: String, name: String) extends EvEvent
-  case class EvText(text: String) extends EvEvent
-  case class EvEntityRef(entity: String) extends EvEvent
-  case class EvComment(comment: String) extends EvEvent
-  private def toEvEvent(e: XMLEvent): EvEvent = e match {
-    case startElement: StartElement => EvElemStart(startElement.getName.getPrefix,startElement.getName.getLocalPart,startElement.getAttributes.asScala.map(a => (if (a.getName.getPrefix!="") a.getName.getPrefix+":" else "") + a.getName.getLocalPart -> a.getValue).toMap)
-    case endElement: EndElement => EvElemEnd(endElement.getName.getPrefix, endElement.getName.getLocalPart)
-    case text: Characters => EvText(text.getData)
-    case comment: Comment => EvComment(comment.getText)
-    case entityRef: EntityReference => EvEntityRef(entityRef.getName)
-    case startDocument: StartDocument => EvDocumentStart(startDocument.getCharacterEncodingScheme)
-    case _: EndDocument => EvDocumentEnd()
-    case _: DTD => EvDTD()
-    case _: ProcessingInstruction => EvProcessingInstruction()
-  }
-  private val xmlf = XMLInputFactory.newInstance()
-  private def toEvEventIterator(r: XMLEventReader) = new Iterator[EvEvent] {
-    override def hasNext = r.hasNext
 
-    override def next() = toEvEvent(r.nextEvent)
+  abstract class EvEvent
+
+  case class EvDocumentStart(encoding: String) extends EvEvent
+
+  case class EvDTD() extends EvEvent
+
+  case class EvProcessingInstruction() extends EvEvent
+
+  case class EvElemStart(pre: (String,String), name: String, attrs: Map[String, String]) extends EvEvent
+
+  case class EvElemEnd(pre: (String,String), name: String) extends EvEvent
+
+  object TextType extends Enumeration {
+    val Characters, IgnoreableWhitespace, CData = Value
   }
-  def getXMLEventReader(is: InputStream, encoding: String = "UTF-8") = toEvEventIterator(xmlf.createXMLEventReader(is, encoding))
-  def getXMLEventReader(string: String) = toEvEventIterator(xmlf.createXMLEventReader(new StringReader(string)))
+
+  case class EvText(text: String, textType: TextType.Value) extends EvEvent
+
+  case class EvEntityRef(entity: String) extends EvEvent
+
+  case class EvComment(comment: String) extends EvEvent
+
+  private val xmlf = XMLInputFactory.newInstance()
+  xmlf.setProperty(XMLInputFactory.IS_REPLACING_ENTITY_REFERENCES, false)
+
+  private def toEvEventIterator(e: XMLStreamReader) = new Iterator[EvEvent] {
+    override def hasNext = e.hasNext
+
+    override def next() = {
+      val ret = e.getEventType match {
+        case XMLStreamConstants.START_ELEMENT => EvElemStart((e.getPrefix, e.getNamespaceURI), e.getLocalName, 0.until(e.getAttributeCount).map(i => (if (e.getAttributePrefix(i) != "") e.getAttributePrefix(i) + ':' + e.getAttributeLocalName(i) else e.getAttributeLocalName(i)) -> e.getAttributeValue(i)).toMap.withDefaultValue(null))
+        case XMLStreamConstants.END_ELEMENT => EvElemEnd((e.getPrefix, e.getNamespaceURI), e.getLocalName)
+        case XMLStreamConstants.CHARACTERS => EvText(e.getText, TextType.Characters)
+        case XMLStreamConstants.COMMENT => EvComment(e.getText)
+        case XMLStreamConstants.ENTITY_REFERENCE => EvEntityRef(e.getLocalName)
+        case XMLStreamConstants.START_DOCUMENT => EvDocumentStart(e.getCharacterEncodingScheme)
+        case XMLStreamConstants.DTD => EvDTD()
+        case XMLStreamConstants.PROCESSING_INSTRUCTION => EvProcessingInstruction()
+        case XMLStreamConstants.SPACE => EvText(e.getText, TextType.IgnoreableWhitespace)
+        case XMLStreamConstants.CDATA => EvText(e.getText, TextType.CData)
+        case XMLStreamConstants.ENTITY_DECLARATION => throw new UnsupportedOperationException("An XMLStreamReader should not emit entity declaration events.")
+        case XMLStreamConstants.NOTATION_DECLARATION => throw new UnsupportedOperationException("An XMLStreamReader should not emit notation declaration events.")
+        case XMLStreamConstants.ATTRIBUTE => throw new UnsupportedOperationException("An XMLStreamReader should not emit attribute events separately.")
+        case XMLStreamConstants.NAMESPACE => throw new UnsupportedOperationException("An XMLStreamReader should not emit namespace events separately.")
+        case o => throw new UnsupportedOperationException("Don't know how to handle event "+o+". Check XMLStreamConstants for what that number means.")
+      }
+      e.next() // NOTE: EndDocument will never be reported
+      ret
+    }
+  }
+  def getXMLEventReader(is: InputStream, encoding: String = "UTF-8") = toEvEventIterator(xmlf.createXMLStreamReader(is, encoding))
+  def getXMLEventReader(string: String) = toEvEventIterator(xmlf.createXMLStreamReader(new StringReader(string)))
 }

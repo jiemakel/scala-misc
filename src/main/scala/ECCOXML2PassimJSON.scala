@@ -64,7 +64,7 @@ object ECCOXML2PassimJSON extends LazyLogging {
             var break2 = false
             val content = new StringBuilder()
             while (xml.hasNext && !break2) xml.next match {
-              case EvText(text) => content.append(text)
+              case EvText(text,_) => content.append(text)
               case er: EvEntityRef =>
                 content.append('&')
                 content.append(er.entity)
@@ -78,7 +78,7 @@ object ECCOXML2PassimJSON extends LazyLogging {
           case EvElemStart(_,"wd",_) =>
             var break2 = false
             while (xml.hasNext && !break2) xml.next match {
-              case EvText(text) => sw.append(text.replaceAllLiterally("\\","\\\\").replaceAllLiterally("\"","\\\""))
+              case EvText(text,_) => sw.append(text.replaceAllLiterally("\\","\\\\").replaceAllLiterally("\"","\\\""))
               case er: EvEntityRef =>
                 sw.append('&')
                 sw.append(er.entity)

@@ -426,7 +426,7 @@ object SKVR2Text extends LazyLogging {
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
       case EvElemStart(_,_,_) =>
-      case EvText(text) => content.append(text)
+      case EvText(text,_)  => content.append(text)
       case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
         case Some(chr) => content.append(chr)
         case _ => content.append(er.entity)
@@ -465,7 +465,7 @@ object SKVR2Text extends LazyLogging {
             case EvElemStart(_, "V", _) => tsw.append(readContents)
             case EvElemStart(_, label, attrs) =>
               msw.append("<" + label + attrsToString(attrs) + ">\n")
-            case EvText(text) =>
+            case EvText(text,_)  =>
               if (text.length==1 && Utility.Escapes.escMap.contains(text(0))) msw.append(Utility.Escapes.escMap(text(0)))
               else msw.append(text)
             case er: EvEntityRef =>

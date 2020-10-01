@@ -30,7 +30,7 @@ object EEBOIndexer extends OctavoIndexer {
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
       case EvElemStart(_,_,_) => return null
-      case EvText(text) => content.append(text)
+      case EvText(text,_)  => content.append(text)
       case EvEntityRef(entity) => XhtmlEntities.entMap.get(entity) match {
         case Some(chr) => content.append(chr)
         case _ => content.append(entity)

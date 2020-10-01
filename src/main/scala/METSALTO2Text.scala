@@ -164,7 +164,7 @@ object METSALTO2Text extends ParallelProcessor {
             case EvElemStart(_, label, sattrs) =>
               metadata+= indent + "<" + label + attrsToString(sattrs) + ">\n"
               indent += "  "
-            case EvText(text) => if (text.trim!="") metadata += indent + text.trim + "\n"
+            case EvText(text,_)  => if (text.trim!="") metadata += indent + text.trim + "\n"
             case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
               case Some(chr) => metadata += chr
               case _ => metadata += er.entity

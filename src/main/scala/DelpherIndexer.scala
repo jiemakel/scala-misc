@@ -83,7 +83,7 @@ object DelpherIndexer extends OctavoIndexer {
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
       case EvElemStart(_,_,_) => return null
-      case EvText(text) => content.append(text)
+      case EvText(text,_) => content.append(text)
       case EvEntityRef(entity) => XhtmlEntities.entMap.get(entity) match {
         case Some(chr) => content.append(chr)
         case _ =>
@@ -146,17 +146,17 @@ object DelpherIndexer extends OctavoIndexer {
     try {
       var break = false
       while (xml.hasNext && !break) xml.next match {
-        case EvElemStart("didl", "Item",attrs) =>
+        case EvElemStart(("didl",_), "Item",attrs) =>
           d.issueIDFields.setValue(attrs("dc:identifier"))
-        case EvElemStart("dc","title",_) =>
+        case EvElemStart(("dc",_),"title",_) =>
           d.newspaperFields.setValue(readContents)
-        case EvElemStart("dc","identifier",attrs) if attrs.get("xsi:type").contains("dcx:PPN") =>
+        case EvElemStart(("dc",_),"identifier",attrs) if attrs.get("xsi:type").contains("dcx:PPN") =>
           d.newspaperIDFields.setValue(readContents)
-        case EvElemStart("dc","date",_) =>
+        case EvElemStart(("dc",_),"date",_) =>
           val dateS = readContents.replaceAllLiterally("-","")
           val sdate = dateS.toInt
           d.dateFields.setValue(sdate)
-        case EvElemEnd("didl","Item") => break = true
+        case EvElemEnd(("didl",_),"Item") => break = true
         case _ =>
       }
       while (xml.hasNext) xml.next() // stupid XMLEventReader.stop() deadlocks and leaves threads hanging

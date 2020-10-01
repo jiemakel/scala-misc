@@ -89,7 +89,7 @@ object STTArticleAnalyzer extends ParallelProcessor {
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
       case EvElemStart(_,_,_) =>
-      case EvText(text) => content.append(text)
+      case EvText(text,_)  => content.append(text)
       case er: EvEntityRef => content.append(decodeEntity(er.entity))
       case EvComment(comment) if comment == " unknown entity apos; " => content.append('\'')
       case EvComment(comment) if comment.startsWith(" unknown entity") =>
@@ -150,7 +150,7 @@ object STTArticleAnalyzer extends ParallelProcessor {
         while (xml.hasNext && !break) xml.next match {
           case EvElemStart(_, elem, attrs) => content.append("<" + elem + attrsToString(attrs) + ">")
           case EvElemEnd(_,"body") => break = true
-          case EvText(text) => 
+          case EvText(text,_)  =>
             content.append(text)
           case er: EvEntityRef => 
             content.append(XhtmlEntities.entMap.get(er.entity) match {
@@ -183,7 +183,7 @@ object STTArticleAnalyzer extends ParallelProcessor {
           case EvElemEnd(_, "li") => stringContent.append('\n')
           case EvElemStart(_, "li",_) =>
             stringContent.append(if (inOrderedList) "1." else "* ")
-          case EvText(text) => stringContent.append(text)
+          case EvText(text,_)  => stringContent.append(text)
           case er: EvEntityRef => 
             stringContent.append(XhtmlEntities.entMap.get(er.entity) match {
               case Some(chr) => chr

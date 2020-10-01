@@ -24,7 +24,7 @@ object SKVRTextIndexer extends OctavoIndexer {
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
       case EvElemStart(_,_,_) => return null
-      case EvText(text) => content.append(text)
+      case EvText(text,_)  => content.append(text)
       case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
         case Some(chr) => content.append(chr)
         case _ => content.append(er.entity)

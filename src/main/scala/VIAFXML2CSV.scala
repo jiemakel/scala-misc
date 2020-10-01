@@ -20,7 +20,7 @@ object VIAFXML2CSV extends LazyLogging {
     var break = false
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
-      case EvText(text) => content.append(text)
+      case EvText(text,_)  => content.append(text)
       case er: EvEntityRef =>
         content.append('&')
         content.append(er.entity)

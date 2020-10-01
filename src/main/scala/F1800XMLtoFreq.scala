@@ -24,7 +24,7 @@ object F1800XMLToFreq {
                  }
                }
                break = false
-             case EvText(text) => text.split("\\PL+").filter(!_.isEmpty).foreach { token => ngrams+=token.toLowerCase }
+             case EvText(text,_)  => text.split("\\PL+").filter(!_.isEmpty).foreach { token => ngrams+=token.toLowerCase }
              case EvElemEnd(_,"text") => break = true
              case _ => 
           }

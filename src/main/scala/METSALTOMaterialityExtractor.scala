@@ -34,7 +34,7 @@ object METSALTOMaterialityExtractor extends LazyLogging {
     val content = new StringBuilder()
     while (xml.hasNext && !break) xml.next match {
       case EvElemStart(_,_,_) => return null
-      case EvText(text) => content.append(text)
+      case EvText(text,_)  => content.append(text)
       case er: EvEntityRef => content.append(decodeEntity(er.entity))
       case EvComment(comment) if comment == " unknown entity apos; " => content.append('\'')
       case EvComment(comment) if comment.startsWith(" unknown entity") =>
@@ -86,6 +86,7 @@ object METSALTOMaterialityExtractor extends LazyLogging {
     val textBlocks: IntervalTree = treeBuilder.build()
     var issn: String = "?"
     var date: String = "?"
+    var lastModified: String = "?"
     var binding: String = "?"
     var words = 0l
     var characters = 0l
@@ -105,6 +106,7 @@ object METSALTOMaterialityExtractor extends LazyLogging {
       case EvElemStart(_, "identifier", _) => issn = readContents
       case EvElemStart(_, "bindingIdentifier", _) => binding = readContents
       case EvElemStart(_, "published", _) => date = readContents
+      case EvElemStart(_, "lastModified", _) => lastModified = readContents
       case EvElemStart(_, "preProcessingStep",_) =>
         var break = false
         preSoftware = "?"
@@ -213,7 +215,7 @@ object METSALTOMaterialityExtractor extends LazyLogging {
       pw9.println(binding  + "," + issn + "," + date)
     }
     pw7.synchronized {
-      pw7.println(binding  + "," + page + "," + preSoftware + "," + preVersion + "," + ocrSoftware + "," + ocrVersion)
+      pw7.println(binding  + "," + page + "," + lastModified + "," + preSoftware + "," + preVersion + "," + ocrSoftware + "," + ocrVersion)
     }
     pw1.synchronized {
       pw1.println(binding  + "," + page + "," + words + "," + characters)
@@ -379,7 +381,7 @@ object METSALTOMaterialityExtractor extends LazyLogging {
     pw6 = new PrintWriter(new FileWriter(prefix+"npsizes3.csv"))
     pw6.println("issueId,page,width,height")
     pw7 = new PrintWriter(new FileWriter(prefix+"npsoftware.csv"))
-    pw7.println("issueId,page,presoftware,preversion,ocrsoftware,ocrversion")
+    pw7.println("issueId,page,lastModified,presoftware,preversion,ocrsoftware,ocrversion")
     pw8 = new PrintWriter(new FileWriter(prefix+"npboxes.csv"))
     pw8.println("issueId,page,xmin,ymin,xmax,ymax,words,chars")
     pw9 = new PrintWriter(new FileWriter(prefix+"npissues.csv"))

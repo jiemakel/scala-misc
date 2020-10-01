@@ -35,7 +35,7 @@ object ECCOXMLOverlap extends LazyLogging {
         case EvElemStart(_,"sectionHeader",_) | EvElemStart(_,"wd",_) =>
           var break2 = false
           while (xml.hasNext && !break2) xml.next match {
-            case EvText(text) => content.append(text)
+            case EvText(text,_)  => content.append(text)
             case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
               case Some(chr) => content.append(chr)
               case _ => content.append(er.entity)
@@ -52,7 +52,7 @@ object ECCOXMLOverlap extends LazyLogging {
       while (xml.hasNext) xml.next match {
         case EvElemStart(_,"TEXT",_) =>
           while (xml.hasNext) xml.next match {
-            case EvText(text) => content.append(text)
+            case EvText(text,_)  => content.append(text)
             case er: EvEntityRef => XhtmlEntities.entMap.get(er.entity) match {
               case Some(chr) => content.append(chr)
               case _ => content.append(er.entity)
